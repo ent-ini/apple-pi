@@ -25,7 +25,7 @@ No chat feed. No fake IDE. No Electron wrapper.
 </div>
 
 <p align="center">
-  <img src="docs/assets/session-workspace.png" alt="apple pi session browser and terminal tabs" width="100%">
+  <img src="docs/assets/apple-pi-preview.png" alt="apple pi desktop preview" width="100%">
 </p>
 
 ---
@@ -51,11 +51,6 @@ Remote SSH mode can browse, start, and resume sessions on the remote host. It in
 ## Make it yours
 
 Tune the opacity of the window, sidebars, and terminal surface. Pick an accent color. Adjust the terminal font. Keep the titlebar transparent, or do not.
-
-<p align="center">
-  <img src="docs/assets/terminal-session-crop.png" alt="apple pi terminal and remote settings" width="49%">
-  <img src="docs/assets/appearance-settings-crop.png" alt="apple pi appearance settings" width="49%">
-</p>
 
 A clean terminal cockpit floating over your desktop is a legitimate aesthetic. The app will not fight you on it.
 
