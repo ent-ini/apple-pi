@@ -228,7 +228,7 @@ import Testing
         isEphemeral: false,
         initialPrompt: "hello from Pi"
     )
-    let host = PiHostConfiguration(
+    var host = PiHostConfiguration(
         mode: .remoteSSH,
         agentDirectory: "~/.pi/agent",
         remoteHost: "pi.example.com",
@@ -236,19 +236,106 @@ import Testing
         remoteUser: "ada",
         remotePiExecutable: "~/bin/pi"
     )
+    host.remoteAuthMethod = .publicKey
+    host.remoteIdentityFile = ""
 
     let launch = PiCommandBuilder().terminalLaunch(for: request, host: host)
     let remoteCommand = launch.arguments.last ?? ""
+    let joinedArgs = launch.arguments.joined(separator: "\n")
 
     #expect(launch.executable == "/usr/bin/ssh")
-    #expect(launch.arguments.prefix(4) == ["-tt", "-p", "2222", "ada@pi.example.com"])
+    #expect(launch.arguments.first == "-tt")
+    // -p and the port must be adjacent and the user@host must follow.
+    #expect(launch.arguments.contains("-p"))
+    #expect(launch.arguments.contains("2222"))
+    #expect(launch.arguments.contains("ada@pi.example.com"))
+    // No local home directory may leak into ssh arguments.
+    #expect(!joinedArgs.contains(NSHomeDirectory()))
     #expect(!remoteCommand.contains(NSHomeDirectory()))
+    // Remote-side command still uses $HOME everywhere, not the local home.
     #expect(remoteCommand.contains("export PATH=\"$HOME/.local/bin:"))
     #expect(remoteCommand.contains("cd $HOME/'code/My Project'"))
     #expect(remoteCommand.contains("$HOME/bin/pi"))
     #expect(remoteCommand.contains("--session $HOME/.pi/agent/sessions/--home-user-code--/session.jsonl"))
     #expect(remoteCommand.contains("--name 'pairing check'"))
     #expect(remoteCommand.contains("'hello from Pi'"))
+}
+
+@Test func remotePiLaunchWithIdentityFilePassesExplicitIAndIdentitiesOnly() {
+    let request = PiLaunchRequest(
+        workingDirectory: nil,
+        sessionPath: nil,
+        forkPath: nil,
+        sessionName: nil,
+        isEphemeral: true,
+        initialPrompt: nil
+    )
+    var host = PiHostConfiguration(
+        mode: .remoteSSH,
+        agentDirectory: "~/.pi/agent",
+        remoteHost: "pi.example.com",
+        remotePort: 22,
+        remoteUser: "ada",
+        remotePiExecutable: "pi"
+    )
+    host.remoteAuthMethod = .publicKey
+    host.remoteIdentityFile = "~/.ssh/work_ed25519"
+
+    let launch = PiCommandBuilder().terminalLaunch(for: request, host: host)
+    let joined = launch.arguments.joined(separator: " ")
+
+    #expect(launch.arguments.contains("-i"))
+    #expect(launch.arguments.contains(NSString(string: "~/.ssh/work_ed25519").expandingTildeInPath))
+    #expect(joined.contains("IdentitiesOnly=yes"))
+    // Password auth flags must NOT appear in public-key mode.
+    #expect(!joined.contains("PreferredAuthentications=password"))
+}
+
+@Test func remotePiLaunchWithPasswordAuthIncludesAskpassEnv() {
+    let request = PiLaunchRequest(
+        workingDirectory: nil,
+        sessionPath: nil,
+        forkPath: nil,
+        sessionName: nil,
+        isEphemeral: true,
+        initialPrompt: nil
+    )
+    var host = PiHostConfiguration(
+        mode: .remoteSSH,
+        agentDirectory: "~/.pi/agent",
+        remoteHost: "pi.example.com",
+        remotePort: 22,
+        remoteUser: "ada",
+        remotePiExecutable: "pi"
+    )
+    host.remoteAuthMethod = .password
+    host.remoteIdentityFile = ""
+
+    let launch = PiCommandBuilder().terminalLaunch(for: request, host: host)
+    let joined = launch.arguments.joined(separator: " ")
+    let environment = Dictionary(
+        uniqueKeysWithValues: launch.environment.map { line -> (String, String) in
+            let parts = line.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            return (String(parts[0]), parts.count == 2 ? String(parts[1]) : "")
+        }
+    )
+
+    // The ssh flags we set when password auth is selected.
+    #expect(joined.contains("PreferredAuthentications=password"))
+    #expect(joined.contains("PubkeyAuthentication=no"))
+    #expect(joined.contains("NumberOfPasswordPrompts=1"))
+    // IdentitiesOnly must NOT be in password mode even if a key was set.
+    #expect(!joined.contains("IdentitiesOnly=yes"))
+    // The askpass helper must be wired through the environment. In a swift
+    // run invocation the helper binary is not bundled, so the env var may
+    // be absent; if present, it must point at an executable that exists on
+    // disk and carry a credential file path.
+    if let askpass = environment["SSH_ASKPASS"] {
+        #expect(FileManager.default.isExecutableFile(atPath: askpass))
+        #expect(environment["SSH_ASKPASS_REQUIRE"] == "force")
+        #expect(environment["DISPLAY"] == ":0")
+        #expect(environment["APPLE_PI_ASKPASS_FILE"]?.isEmpty == false)
+    }
 }
 
 @Test func catalogUsesSessionHeaderCwdForProjectDirectory() async throws {
