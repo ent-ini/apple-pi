@@ -55,8 +55,9 @@ struct PiCommandBuilder {
     private func remoteLaunch(for request: PiLaunchRequest, host: PiHostConfiguration) -> TerminalProcessRequest {
         let remoteCommand = remoteShellCommand(for: request, host: host)
         var arguments = ["-tt"]
-        if host.remotePort > 0, host.remotePort != 22 {
-            arguments.append(contentsOf: ["-p", String(host.remotePort)])
+        arguments.append(contentsOf: RemoteSSHSupport.commonArguments(for: host))
+        if host.hasExplicitIdentityFile {
+            arguments.append(contentsOf: ["-i", host.remoteIdentityFile.expandingTilde])
         }
         arguments.append(host.remoteAddress)
         arguments.append(remoteCommand)
@@ -64,7 +65,7 @@ struct PiCommandBuilder {
         return TerminalProcessRequest(
             executable: "/usr/bin/ssh",
             arguments: arguments,
-            environment: terminalEnvironment(),
+            environment: terminalEnvironment(remoteHost: host),
             workingDirectory: nil,
             execName: "ssh"
         )
@@ -99,7 +100,7 @@ struct PiCommandBuilder {
         return "\(pathPrefix) && cd \(remoteShellPathWord(workingDirectory)) && \(piCommand)"
     }
 
-    private func terminalEnvironment() -> [String] {
+    private func terminalEnvironment(remoteHost: PiHostConfiguration? = nil) -> [String] {
         var environment = ProcessInfo.processInfo.environment
         environment["TERM"] = "xterm-256color"
         environment["COLORTERM"] = "truecolor"
@@ -107,6 +108,17 @@ struct PiCommandBuilder {
         environment["PATH"] = mergedPath(environment["PATH"])
         environment["HOME"] = environment["HOME"] ?? NSHomeDirectory()
         environment["SHELL"] = environment["SHELL"] ?? "/bin/zsh"
+        if let remoteHost,
+           remoteHost.mode == .remoteSSH,
+           remoteHost.remoteAuthMethod == .password,
+           let askpass = RemoteSSHSupport.bundledAskpassPath() {
+            environment["SSH_ASKPASS"] = askpass
+            environment["SSH_ASKPASS_REQUIRE"] = "force"
+            environment["DISPLAY"] = environment["DISPLAY"] ?? ":0"
+            if let path = try? RemoteCredentialStore.credentialPath(for: remoteHost) {
+                environment["APPLE_PI_ASKPASS_FILE"] = path
+            }
+        }
         return environment.map { "\($0.key)=\($0.value)" }.sorted()
     }
 

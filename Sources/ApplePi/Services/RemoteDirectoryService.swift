@@ -19,17 +19,23 @@ struct RemoteDirectoryService: Sendable {
             throw RemoteDirectoryError.missingHost
         }
 
-        var arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8"]
-        if host.remotePort > 0, host.remotePort != 22 {
-            arguments.append(contentsOf: ["-p", String(host.remotePort)])
+        var arguments = ["-o", "ConnectTimeout=8"]
+        arguments.append(contentsOf: RemoteSSHSupport.commonArguments(for: host))
+        if host.hasExplicitIdentityFile {
+            arguments.append(contentsOf: ["-i", host.remoteIdentityFile.expandingTilde])
         }
         arguments.append(host.remoteAddress)
         arguments.append(remoteDirectoryScript(path: path?.nilIfBlank ?? "~"))
 
+        let environment = RemoteSSHSupport.remoteEnvironment(
+            for: host,
+            askpassExecutable: RemoteSSHSupport.bundledAskpassPath()
+        )
+
         let result = try ProcessRunner.run(
             executable: "/usr/bin/ssh",
             arguments: arguments,
-            environment: RemoteSSHSupport.processEnvironment(),
+            environment: environment,
             timeout: 12
         )
         if result.timedOut {

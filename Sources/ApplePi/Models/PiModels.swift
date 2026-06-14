@@ -22,6 +22,9 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
     var remotePort: Int = 22
     var remoteUser: String = ""
     var remotePiExecutable: String = "pi"
+    var remoteAuthMethod: RemoteAuthMethod = .publicKey
+    var remoteIdentityFile: String = ""
+    var remoteSSHConfigAlias: String = ""
 
     var sessionRoot: String {
         "\(agentDirectory.expandingTilde)/sessions"
@@ -32,6 +35,39 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
         let trimmedUser = remoteUser.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedUser.isEmpty else { return trimmedHost }
         return "\(trimmedUser)@\(trimmedHost)"
+    }
+
+    /// True when the user selected an `IdentityFile` (or a config alias that
+    /// resolves to one) and we should pass it to ssh with `-i`.
+    var hasExplicitIdentityFile: Bool {
+        !remoteIdentityFile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+/// How Apple Pi authenticates the SSH connection to the remote host.
+///
+/// The raw `ssh` binary handles public-key auth automatically through the
+/// system agent and the user's `~/.ssh/config`. Apple Pi adds:
+///   * an explicit `-i` flag plus `IdentitiesOnly=yes` when the user picks a
+///     key from the picker, so we don't fall through to other keys in the
+///     agent; and
+///   * `PreferredAuthentications=password` plus an `SSH_ASKPASS` helper when
+///     the user opts into password auth.
+enum RemoteAuthMethod: String, Codable, CaseIterable, Identifiable, Sendable {
+    case publicKey
+    case password
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .publicKey: "Public Key"
+        case .password: "Password"
+        }
+    }
+
+    var requiresKeychainEntry: Bool {
+        self == .password
     }
 }
 

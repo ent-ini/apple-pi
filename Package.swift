@@ -12,6 +12,10 @@ let package = Package(
         .executable(
             name: "ApplePi",
             targets: ["ApplePi"]
+        ),
+        .executable(
+            name: "ApplePiAskpass",
+            targets: ["ApplePiAskpass"]
         )
     ],
     dependencies: [
@@ -27,6 +31,10 @@ let package = Package(
             resources: [
                 .copy("Resources")
             ]
+        ),
+        .executableTarget(
+            name: "ApplePiAskpass",
+            path: "Sources/ApplePiAskpass"
         ),
         .testTarget(
             name: "ApplePiTests",

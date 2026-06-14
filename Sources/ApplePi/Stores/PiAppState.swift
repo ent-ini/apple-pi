@@ -419,6 +419,71 @@ final class PiAppState: ObservableObject {
         }
     }
 
+    // MARK: - SSH host helpers
+
+    /// Parses the user's `~/.ssh/config` and returns the selectable host
+    /// aliases. Cheap to call repeatedly — the file is small.
+    func loadSSHConfigEntries() -> [SSHConfigEntry] {
+        SSHConfigParser.parseUserConfig()
+    }
+
+    /// Lists the keys Apple Pi can offer in the identity-file picker.
+    func loadSSHKeys() -> [SSHKeyStore.Key] {
+        SSHKeyStore.discoverKeys()
+    }
+
+    /// Applies a parsed `~/.ssh/config` entry to the current host settings.
+    /// Fields the user has customised manually are not overwritten.
+    func applySSHConfigEntry(_ entry: SSHConfigEntry) {
+        host.remoteSSHConfigAlias = entry.hostPatterns.joined(separator: ",")
+        if let hostName = entry.hostName?.nilIfBlank {
+            host.remoteHost = hostName
+        } else if host.remoteHost.isEmpty, let first = entry.hostPatterns.first(where: { !$0.hasSuffix("*") && !$0.hasPrefix("*") }) {
+            host.remoteHost = first
+        }
+        if let user = entry.user?.nilIfBlank {
+            host.remoteUser = user
+        }
+        if let port = entry.port {
+            host.remotePort = port
+        }
+        if let identityFile = entry.identityFile?.nilIfBlank {
+            host.remoteIdentityFile = identityFile
+            host.remoteAuthMethod = .publicKey
+        }
+    }
+
+    /// Clears the alias selection so the host fields can be edited freely.
+    func clearSSHConfigAlias() {
+        host.remoteSSHConfigAlias = ""
+    }
+
+    /// Persists the supplied password for the current host. Returns an error
+    /// message on failure, nil on success.
+    @discardableResult
+    func saveRemotePassword(_ password: String) -> String? {
+        do {
+            try RemoteCredentialStore.savePassword(password, for: host)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    @discardableResult
+    func clearRemotePassword() -> String? {
+        do {
+            try RemoteCredentialStore.deletePassword(for: host)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    func hasRemotePasswordStored() -> Bool {
+        RemoteCredentialStore.hasPassword(for: host)
+    }
+
     private func scheduleCatalogRefresh(after delay: Duration = .seconds(1)) {
         Task { [weak self] in
             try? await Task.sleep(for: delay)

@@ -119,13 +119,15 @@ if [[ ! -f "${NOTIFY_EXTENSION_SOURCE}" ]]; then
 fi
 
 swift build -c "${CONFIGURATION}" --product "${PRODUCT_NAME}"
+swift build -c "${CONFIGURATION}" --product "ApplePiAskpass"
 
 rm -rf "${BUNDLE_DIR}"
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 cp ".build/${CONFIGURATION}/${PRODUCT_NAME}" "${EXECUTABLE_PATH}"
+cp ".build/${CONFIGURATION}/ApplePiAskpass" "${RESOURCES_DIR}/ApplePiAskpass"
 cp "${ICON_SOURCE}" "${RESOURCES_DIR}/AppIcon.icns"
 cp "${NOTIFY_EXTENSION_SOURCE}" "${RESOURCES_DIR}/ApplePiNotifyExtension.mjs"
-chmod +x "${EXECUTABLE_PATH}"
+chmod +x "${EXECUTABLE_PATH}" "${RESOURCES_DIR}/ApplePiAskpass"
 
 cat > "${INFO_PLIST}" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -176,6 +178,7 @@ printf "APPL????" > "${CONTENTS_DIR}/PkgInfo"
 
 /usr/bin/plutil -lint "${INFO_PLIST}" >/dev/null
 /usr/bin/xattr -cr "${BUNDLE_DIR}" 2>/dev/null || true
+/usr/bin/codesign --force --sign "${SIGN_IDENTITY}" "${RESOURCES_DIR}/ApplePiAskpass"
 /usr/bin/codesign --force --deep --options runtime --sign "${SIGN_IDENTITY}" "${BUNDLE_DIR}"
 /usr/bin/codesign --verify --deep --strict --verbose=2 "${BUNDLE_DIR}"
 

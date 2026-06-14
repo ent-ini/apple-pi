@@ -53,17 +53,23 @@ final class PiSessionCatalogService {
             return PiCatalogSnapshot(projects: [], sessions: [])
         }
 
-        var arguments = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=8"]
-        if host.remotePort > 0, host.remotePort != 22 {
-            arguments.append(contentsOf: ["-p", String(host.remotePort)])
+        var arguments = ["-o", "ConnectTimeout=8"]
+        arguments.append(contentsOf: RemoteSSHSupport.commonArguments(for: host))
+        if host.hasExplicitIdentityFile {
+            arguments.append(contentsOf: ["-i", host.remoteIdentityFile.expandingTilde])
         }
         arguments.append(host.remoteAddress)
         arguments.append(remoteCatalogScript(agentDirectory: host.agentDirectory, projectDirectory: activeProjectDirectory))
 
+        let environment = RemoteSSHSupport.remoteEnvironment(
+            for: host,
+            askpassExecutable: RemoteSSHSupport.bundledAskpassPath()
+        )
+
         let result = try ProcessRunner.run(
             executable: "/usr/bin/ssh",
             arguments: arguments,
-            environment: RemoteSSHSupport.processEnvironment(),
+            environment: environment,
             timeout: 20
         )
         if result.timedOut {

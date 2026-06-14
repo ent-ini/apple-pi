@@ -761,3 +761,215 @@ private func isolatedDefaults() -> UserDefaults {
     defaults.removePersistentDomain(forName: suiteName)
     return defaults
 }
+
+@Test func sshConfigParserExtractsBasicHostBlock() throws {
+    let home = makeTemporaryHomeDirectory()
+    try writeSSHConfig(
+        in: home,
+        contents: """
+        Host pi
+            HostName 10.0.0.5
+            User artemiy
+            Port 2222
+            IdentityFile ~/.ssh/id_ed25519
+        """
+    )
+
+    let entries = SSHConfigParser.parseUserConfig(homeDirectory: home)
+    let entry = try #require(entries.first)
+
+    #expect(entry.hostPatterns == ["pi"])
+    #expect(entry.hostName == "10.0.0.5")
+    #expect(entry.user == "artemiy")
+    #expect(entry.port == 2222)
+    #expect(entry.identityFile?.hasSuffix("/.ssh/id_ed25519") == true)
+}
+
+@Test func sshConfigParserSkipsWildcardDefaultAndCollapsesMultiplePatterns() throws {
+    let home = makeTemporaryHomeDirectory()
+    try writeSSHConfig(
+        in: home,
+        contents: """
+        Host *
+            User root
+
+        Host prod prod.example.com
+            HostName 10.0.0.7
+            User admin
+        """
+    )
+
+    let entries = SSHConfigParser.parseUserConfig(homeDirectory: home)
+    #expect(entries.count == 1)
+    let entry = try #require(entries.first)
+    #expect(entry.hostPatterns == ["prod", "prod.example.com"])
+    #expect(entry.hostName == "10.0.0.7")
+    #expect(entry.user == "admin")
+}
+
+@Test func sshConfigParserRespectsQuotedValues() throws {
+    let home = makeTemporaryHomeDirectory()
+    try writeSSHConfig(
+        in: home,
+        contents: """
+        Host "weird name"
+            HostName "10.0.0.9"
+            IdentityFile "/Users/test/keys/with space"
+        """
+    )
+
+    let entry = try #require(SSHConfigParser.parseUserConfig(homeDirectory: home).first)
+    #expect(entry.hostPatterns == ["weird name"])
+    #expect(entry.hostName == "10.0.0.9")
+    #expect(entry.identityFile == "/Users/test/keys/with space")
+}
+
+@Test func sshConfigParserParsesIdentitiesOnlyBoolean() throws {
+    let home = makeTemporaryHomeDirectory()
+    try writeSSHConfig(
+        in: home,
+        contents: """
+        Host pi
+            HostName 10.0.0.5
+            IdentitiesOnly yes
+        """
+    )
+
+    let entry = try #require(SSHConfigParser.parseUserConfig(homeDirectory: home).first)
+    #expect(entry.identitiesOnly == true)
+}
+
+@Test func sshKeyStoreSurfacesDefaultKeysAndFiltersArtifacts() throws {
+    let home = makeTemporaryHomeDirectory()
+    let ssh = "\(home)/.ssh"
+    try FileManager.default.createDirectory(atPath: ssh, withIntermediateDirectories: true)
+
+    let privateKey = "-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n"
+    let files: [(name: String, contents: String?)] = [
+        ("id_ed25519", privateKey),
+        ("id_ed25519.pub", "ssh-ed25519 AAAA fake@host\n"),
+        ("id_rsa", privateKey),
+        ("config", "Host *\n"),
+        ("known_hosts", "example.com ssh-ed25519 AAAA\n"),
+        ("custom_key", privateKey),
+        ("custom_key.pub", "ssh-ed25519 AAAA fake\n")
+    ]
+    for file in files {
+        try file.contents?.write(toFile: "\(ssh)/\(file.name)", atomically: true, encoding: .utf8)
+    }
+
+    let keys = SSHKeyStore.discoverKeys(homeDirectory: home)
+    let names = keys.map(\.label)
+
+    #expect(names == ["id_ed25519", "id_rsa", "custom_key"])
+    #expect(keys.first?.isDefault == true)
+    #expect(keys.first(where: { $0.label == "id_ed25519" })?.publicKeyPath?.hasSuffix(".pub") == true)
+}
+
+@Suite(.serialized) struct CredentialStoreTests {
+    @Test func remoteCredentialStoreRoundTripsPasswordPerHost() throws {
+        let override = isolatedApplicationSupportOverride()
+        defer { override.restore() }
+        let host = makeHost(host: "example.com", user: "artemiy", port: 22)
+
+        #expect(RemoteCredentialStore.hasPassword(for: host) == false)
+        try RemoteCredentialStore.savePassword("hunter2", for: host)
+        #expect(RemoteCredentialStore.hasPassword(for: host))
+
+        let path = try RemoteCredentialStore.credentialPath(for: host)
+        #expect(RemoteCredentialStore.readPassword(at: path) == "hunter2")
+
+        // File mode is 0600 so other users on the box cannot read the secret.
+        let attributes = try FileManager.default.attributesOfItem(atPath: path)
+        let permissions = (attributes[.posixPermissions] as? NSNumber)?.uint16Value
+        #expect(permissions == 0o600)
+
+        try RemoteCredentialStore.deletePassword(for: host)
+        #expect(RemoteCredentialStore.hasPassword(for: host) == false)
+    }
+
+    @Test func remoteCredentialStoreIsolatesHostsByConnection() throws {
+        let override = isolatedApplicationSupportOverride()
+        defer { override.restore() }
+        let a = makeHost(host: "a.example.com", user: "artemiy", port: 22)
+        let b = makeHost(host: "b.example.com", user: "artemiy", port: 22)
+
+        try RemoteCredentialStore.savePassword("password-a", for: a)
+        try RemoteCredentialStore.savePassword("password-b", for: b)
+
+        #expect(RemoteCredentialStore.readPassword(at: try RemoteCredentialStore.credentialPath(for: a)) == "password-a")
+        #expect(RemoteCredentialStore.readPassword(at: try RemoteCredentialStore.credentialPath(for: b)) == "password-b")
+
+        try RemoteCredentialStore.deletePassword(for: a)
+        try RemoteCredentialStore.deletePassword(for: b)
+    }
+}
+
+@Test func remoteAuthMethodFlagsAreStable() {
+    #expect(RemoteAuthMethod.publicKey.title == "Public Key")
+    #expect(RemoteAuthMethod.password.title == "Password")
+    #expect(RemoteAuthMethod.password.requiresKeychainEntry)
+    #expect(RemoteAuthMethod.publicKey.requiresKeychainEntry == false)
+}
+
+// MARK: - Test helpers
+
+private func makeTemporaryHomeDirectory() -> String {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("ApplePiTests-\(UUID().uuidString)", isDirectory: true)
+    try? FileManager.default.createDirectory(atPath: directory.path, withIntermediateDirectories: true)
+    return directory.path
+}
+
+private func writeSSHConfig(in home: String, contents: String) throws {
+    let ssh = "\(home)/.ssh"
+    try FileManager.default.createDirectory(atPath: ssh, withIntermediateDirectories: true)
+    try contents.write(toFile: "\(ssh)/config", atomically: true, encoding: .utf8)
+}
+
+private func makeHost(host: String, user: String, port: Int) -> PiHostConfiguration {
+    PiHostConfiguration(
+        mode: .remoteSSH,
+        piExecutable: "pi",
+        agentDirectory: "~/.pi/agent",
+        remoteHost: host,
+        remotePort: port,
+        remoteUser: user,
+        remotePiExecutable: "pi",
+        remoteAuthMethod: .password,
+        remoteIdentityFile: "",
+        remoteSSHConfigAlias: ""
+    )
+}
+
+/// Points `RemoteCredentialStore` at a temporary Application Support folder
+/// so tests never touch the user's real data. The returned object restores
+/// the previous override when `restore()` is called (or the test exits).
+private func isolatedApplicationSupportOverride() -> OverrideHandle {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("ApplePiTests-support-\(UUID().uuidString)", isDirectory: true)
+    try? FileManager.default.createDirectory(atPath: directory.path, withIntermediateDirectories: true)
+    let previous = RemoteCredentialStore.applicationSupportOverride
+    RemoteCredentialStore.applicationSupportOverride = directory.path
+    return OverrideHandle(previous: previous, directory: directory)
+}
+
+private final class OverrideHandle {
+    let previous: String?
+    let directory: URL
+
+    init(previous: String?, directory: URL) {
+        self.previous = previous
+        self.directory = directory
+    }
+
+    func restore() {
+        RemoteCredentialStore.applicationSupportOverride = previous
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    deinit {
+        RemoteCredentialStore.applicationSupportOverride = previous
+        try? FileManager.default.removeItem(at: directory)
+    }
+}

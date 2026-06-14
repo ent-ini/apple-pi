@@ -4,6 +4,10 @@ struct SettingsView: View {
     @EnvironmentObject private var appState: PiAppState
     @State private var showsAdvancedTerminalSettings = false
     @State private var notificationTestStatus: String?
+    @State private var sshConfigEntries: [SSHConfigEntry] = []
+    @State private var sshKeys: [SSHKeyStore.Key] = []
+    @State private var passwordInput: String = ""
+    @State private var passwordStatus: String?
 
     var body: some View {
         Form {
@@ -81,12 +85,31 @@ struct SettingsView: View {
             }
 
             Section("Remote SSH") {
+                sshConfigAliasPicker
                 TextField("Host", text: $appState.host.remoteHost)
                 TextField("User", text: $appState.host.remoteUser)
                 Stepper(value: $appState.host.remotePort, in: 1...65535) {
                     Text("Port \(appState.host.remotePort)")
                 }
                 TextField("Remote Pi executable", text: $appState.host.remotePiExecutable)
+
+                Picker("Authentication", selection: $appState.host.remoteAuthMethod) {
+                    ForEach(RemoteAuthMethod.allCases) { method in
+                        Text(method.title).tag(method)
+                    }
+                }
+                .onChange(of: appState.host.remoteAuthMethod) { _, newValue in
+                    passwordInput = ""
+                    if newValue == .password {
+                        refreshPasswordStatus()
+                    }
+                }
+
+                if appState.host.remoteAuthMethod == .publicKey {
+                    sshIdentityFilePicker
+                } else {
+                    sshPasswordField
+                }
             }
 
             Section("Terminal") {
@@ -274,5 +297,143 @@ struct SettingsView: View {
         case .failed:
             "macOS could not deliver the notification."
         }
+    }
+
+    // MARK: - SSH host UI
+
+    private var sshConfigAliasPicker: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Picker("SSH config alias", selection: sshConfigAliasBinding) {
+                Text("Custom").tag(Optional<String>.none)
+                ForEach(sshConfigEntries) { entry in
+                    Text(entry.subtitle.isEmpty ? entry.displayName : "\(entry.displayName) — \(entry.subtitle)")
+                        .tag(Optional(entry.id))
+                }
+            }
+            .onAppear { reloadSSHCollections() }
+
+            if let alias = appState.host.remoteSSHConfigAlias.nonEmpty {
+                HStack(spacing: 6) {
+                    Text("Editing alias: \(alias)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Detach") { appState.clearSSHConfigAlias() }
+                        .buttonStyle(.link)
+                        .font(.caption)
+                }
+            } else if sshConfigEntries.isEmpty {
+                Text("No entries found in ~/.ssh/config.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var sshIdentityFilePicker: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Picker("Identity file", selection: sshIdentityBinding) {
+                Text("Default (ssh-agent)").tag(Optional<String>.none)
+                ForEach(sshKeys) { key in
+                    Text(key.label).tag(Optional(key.id))
+                }
+            }
+            if appState.host.remoteIdentityFile.isEmpty {
+                Text("Uses the system default — the agent or ~/.ssh/id_*")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var sshPasswordField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            SecureField("Password", text: $passwordInput)
+                .textContentType(.password)
+                .onSubmit { savePassword() }
+            HStack {
+                Button(appState.hasRemotePasswordStored() ? "Update password" : "Save password", action: savePassword)
+                if appState.hasRemotePasswordStored() {
+                    Button("Clear", role: .destructive) { clearPassword() }
+                }
+                Spacer()
+            }
+            if let passwordStatus {
+                Text(passwordStatus)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if appState.hasRemotePasswordStored() {
+                Text("Password is stored locally for this host only.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Stored as a 0600 file in Application Support — never in the Keychain.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var sshConfigAliasBinding: Binding<String?> {
+        Binding(
+            get: { appState.host.remoteSSHConfigAlias.nonEmpty },
+            set: { newValue in
+                if let newValue, let entry = sshConfigEntries.first(where: { $0.id == newValue }) {
+                    appState.applySSHConfigEntry(entry)
+                } else {
+                    appState.clearSSHConfigAlias()
+                }
+            }
+        )
+    }
+
+    private var sshIdentityBinding: Binding<String?> {
+        Binding(
+            get: { appState.host.remoteIdentityFile.nonEmpty },
+            set: { newValue in
+                appState.host.remoteIdentityFile = newValue ?? ""
+            }
+        )
+    }
+
+    private func reloadSSHCollections() {
+        sshConfigEntries = appState.loadSSHConfigEntries()
+        sshKeys = appState.loadSSHKeys()
+        refreshPasswordStatus()
+    }
+
+    private func refreshPasswordStatus() {
+        passwordStatus = appState.hasRemotePasswordStored()
+            ? "A password is stored for this host."
+            : nil
+    }
+
+    private func savePassword() {
+        guard !passwordInput.isEmpty else {
+            passwordStatus = "Password is empty."
+            return
+        }
+        if let error = appState.saveRemotePassword(passwordInput) {
+            passwordStatus = error
+        } else {
+            passwordInput = ""
+            passwordStatus = "Saved."
+        }
+    }
+
+    private func clearPassword() {
+        if let error = appState.clearRemotePassword() {
+            passwordStatus = error
+        } else {
+            passwordStatus = "Cleared."
+        }
+    }
+}
+
+private extension String {
+    /// Returns nil when the string is empty, otherwise the string itself.
+    /// Lets `Picker` selection bindings work with `Optional<String>` without
+    /// scattering `.nilIfBlank` checks.
+    var nonEmpty: String? {
+        isEmpty ? nil : self
     }
 }
