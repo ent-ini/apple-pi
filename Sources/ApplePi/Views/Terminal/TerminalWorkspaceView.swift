@@ -19,16 +19,24 @@ struct TerminalWorkspaceView: View {
                         .minimumScaleFactor(0.62)
                         .padding(24)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    ForEach(workspace.tabs) { tab in
-                        SwiftTermTerminalView(
-                            session: tab,
-                            preferences: appearanceSettings.terminal,
-                            notificationPreferences: appearanceSettings.notifications,
-                            isActive: workspace.selectedTabID == tab.id
-                        )
-                        .opacity(workspace.selectedTabID == tab.id ? 1 : 0)
-                    }
+                } else if let activeTab = workspace.tabs.first(where: { $0.id == workspace.selectedTabID }) {
+                    // Only mount the active terminal as an NSView. Keeping all
+                    // tabs alive via opacity hid their NSViews behind opacity 0
+                    // but still paid the full update cost on every body re-eval
+                    // (which happens on every tab switch), making switching
+                    // noticeably slow with a handful of tabs open. Dismantling
+                    // the inactive ones hands their `TerminalHostView` back so
+                    // SwiftUI re-mounts it under a new container; the underlying
+                    // SwiftTerm process is preserved because the host view
+                    // itself is owned by the `TerminalSession` and outlives any
+                    // single mount cycle.
+                    SwiftTermTerminalView(
+                        session: activeTab,
+                        preferences: appearanceSettings.terminal,
+                        notificationPreferences: appearanceSettings.notifications,
+                        isActive: true
+                    )
+                    .id(activeTab.id)
                 }
             }
             .background(terminalBackground)
@@ -84,22 +92,36 @@ private struct TerminalTabButton: View {
     let onReconnect: () -> Void
 
     var body: some View {
-        Button(action: onSelect) {
-            HStack(spacing: 7) {
-                Circle()
-                    .fill(tab.isRunning ? Color.green : Color.secondary.opacity(0.5))
-                    .frame(width: 7, height: 7)
-                Text(tab.title)
-                    .font(.callout)
-                    .lineLimit(1)
-                    .frame(maxWidth: 180, alignment: .leading)
+        // The whole row is a tappable area for selection; the close button is
+        // an explicit nested control so the right-click context menu lands on
+        // the HStack instead of getting swallowed by a Button (a known
+        // SwiftUI quirk on macOS where Button + .buttonStyle(.plain) +
+        // .contextMenu is unreliable on right-click).
+        HStack(spacing: 7) {
+            Circle()
+                .fill(tab.isRunning ? Color.green : Color.secondary.opacity(0.5))
+                .frame(width: 7, height: 7)
+            Text(tab.title)
+                .font(.callout)
+                .lineLimit(1)
+                .frame(maxWidth: 180, alignment: .leading)
+            Spacer(minLength: 0)
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                    .frame(width: 14, height: 14)
+                    .contentShape(Rectangle())
             }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 6)
-            .background(tabBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .buttonStyle(.plain)
+            .help("Close")
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(tabBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .onTapGesture { onSelect() }
         .contextMenu {
             Button("Reconnect", action: onReconnect)
                 .disabled(!tab.canReconnect)
