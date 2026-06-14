@@ -92,25 +92,42 @@ private struct TerminalTabButton: View {
     let onReconnect: () -> Void
 
     var body: some View {
-        // The whole row is a tappable area for selection; the close button is
-        // an explicit nested control so the right-click context menu lands on
-        // the HStack instead of getting swallowed by a Button (a known
-        // SwiftUI quirk on macOS where Button + .buttonStyle(.plain) +
-        // .contextMenu is unreliable on right-click).
-        HStack(spacing: 7) {
-            Circle()
-                .fill(tab.isRunning ? Color.green : Color.secondary.opacity(0.5))
-                .frame(width: 7, height: 7)
-            Text(tab.title)
-                .font(.callout)
-                .lineLimit(1)
-                .frame(maxWidth: 180, alignment: .leading)
+        // The select affordance and the close button live in sibling
+        // subviews rather than nested in a single Button. Two reasons:
+        //   * Button(action:select) wrapping a Button(action:close) gives
+        //     the outer Button the entire hit area and the inner one
+        //     never sees clicks on macOS.
+        //   * `.onTapGesture` on the outer HStack, paired with
+        //     `.contentShape(RoundedRectangle(...))`, swallows taps before
+        //     the nested close Button can react, so the X appeared dead.
+        // Keeping the two interactions on disjoint HStack children means
+        // the hit-testing is unambiguous: clicks on the title go to
+        // `onSelect`, clicks on the X go to `onClose`.
+        HStack(spacing: 0) {
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(tab.isRunning ? Color.green : Color.secondary.opacity(0.5))
+                    .frame(width: 7, height: 7)
+                Text(tab.title)
+                    .font(.callout)
+                    .lineLimit(1)
+                    .frame(maxWidth: 180, alignment: .leading)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { onSelect() }
+            .contextMenu {
+                Button("Reconnect", action: onReconnect)
+                    .disabled(!tab.canReconnect)
+                Button("Close", action: onClose)
+            }
+
             Spacer(minLength: 0)
+
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))
                     .foregroundStyle(isSelected ? Color.primary : Color.secondary)
-                    .frame(width: 14, height: 14)
+                    .frame(width: 18, height: 18)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -120,13 +137,6 @@ private struct TerminalTabButton: View {
         .padding(.vertical, 6)
         .background(tabBackground)
         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .onTapGesture { onSelect() }
-        .contextMenu {
-            Button("Reconnect", action: onReconnect)
-                .disabled(!tab.canReconnect)
-            Button("Close", action: onClose)
-        }
     }
 
     private var tabBackground: Color {
