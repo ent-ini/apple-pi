@@ -173,19 +173,31 @@ enum SessionEventParser {
     }
 
     private static func parseTimestamp(_ value: String) -> Date? {
-        if let date = withFractionalTimestampFormatter.date(from: value) { return date }
-        return plainTimestampFormatter.date(from: value)
+        timestampParsers.parse(value)
     }
 
-    private static let withFractionalTimestampFormatter: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
+    private static let timestampParsers = TimestampParsers()
+}
 
-    private static let plainTimestampFormatter: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter
-    }()
+private final class TimestampParsers: @unchecked Sendable {
+    private let lock = NSLock()
+    private let withFractional: ISO8601DateFormatter
+    private let plain: ISO8601DateFormatter
+
+    init() {
+        let withFractional = ISO8601DateFormatter()
+        withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        self.withFractional = withFractional
+
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        self.plain = plain
+    }
+
+    func parse(_ value: String) -> Date? {
+        lock.lock()
+        defer { lock.unlock() }
+        if let date = withFractional.date(from: value) { return date }
+        return plain.date(from: value)
+    }
 }
