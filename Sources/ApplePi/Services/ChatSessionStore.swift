@@ -18,25 +18,36 @@ final class ChatSession: ObservableObject, Identifiable {
     /// Path to the on-disk jsonl, if this session is backed by a file. For
     /// brand-new sessions the path is assigned once the file is created.
     let sessionPath: String?
+    private let eventLoader: (() throws -> [SessionEvent])?
 
-    init(key: String, title: String, sessionPath: String? = nil) {
+    init(
+        key: String,
+        title: String,
+        sessionPath: String? = nil,
+        eventLoader: (() throws -> [SessionEvent])? = nil
+    ) {
         self.key = key
         self.title = title
         self.sessionPath = sessionPath
+        self.eventLoader = eventLoader
     }
 
     /// Reload the session from disk. Safe to call multiple times; replaces
     /// the current event list.
     func loadFromDisk() {
-        guard let sessionPath else {
-            statusMessage = "Session is not backed by a file yet."
-            return
-        }
         isLoading = true
         loadError = nil
-        let url = URL(fileURLWithPath: sessionPath)
         do {
-            let parsed = try SessionEventParser.parse(fileURL: url)
+            let parsed: [SessionEvent]
+            if let eventLoader {
+                parsed = try eventLoader()
+            } else if let sessionPath {
+                parsed = try SessionEventParser.parse(fileURL: URL(fileURLWithPath: sessionPath))
+            } else {
+                statusMessage = "Session is not backed by a file yet."
+                isLoading = false
+                return
+            }
             events = parsed
             statusMessage = parsed.isEmpty ? "Session is empty." : "\(parsed.count) events"
         } catch {
@@ -79,14 +90,20 @@ final class ChatSessionStore: ObservableObject {
     func openTab(
         key: String,
         title: String,
-        sessionPath: String? = nil
+        sessionPath: String? = nil,
+        eventLoader: (() throws -> [SessionEvent])? = nil
     ) -> ChatSession {
         if let existing = tabs.first(where: { $0.key == key }) {
             select(existing)
             existing.loadFromDisk()
             return existing
         }
-        let session = ChatSession(key: key, title: title, sessionPath: sessionPath)
+        let session = ChatSession(
+            key: key,
+            title: title,
+            sessionPath: sessionPath,
+            eventLoader: eventLoader
+        )
         tabs.append(session)
         select(session)
         session.loadFromDisk()
@@ -97,9 +114,10 @@ final class ChatSessionStore: ObservableObject {
     func openOrSelectTab(
         key: String,
         title: String,
-        sessionPath: String?
+        sessionPath: String?,
+        eventLoader: (() throws -> [SessionEvent])? = nil
     ) -> ChatSession {
-        openTab(key: key, title: title, sessionPath: sessionPath)
+        openTab(key: key, title: title, sessionPath: sessionPath, eventLoader: eventLoader)
     }
 
     func close(_ tab: ChatSession) {

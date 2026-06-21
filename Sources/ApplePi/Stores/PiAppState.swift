@@ -379,7 +379,8 @@ final class PiAppState: ObservableObject {
         chatWorkspace.openOrSelectTab(
             key: session.filePath,
             title: session.title,
-            sessionPath: session.filePath
+            sessionPath: session.filePath,
+            eventLoader: eventLoader(for: session)
         )
         statusMessage = "Resumed \(session.title)"
     }
@@ -391,10 +392,20 @@ final class PiAppState: ObservableObject {
         chatWorkspace.openTab(
             key: "fork:\(session.filePath)",
             title: "Fork: \(session.title)",
-            sessionPath: session.filePath
+            sessionPath: session.filePath,
+            eventLoader: eventLoader(for: session)
         )
         statusMessage = "Fork started from \(session.title)"
         scheduleCatalogRefresh()
+    }
+
+    private func eventLoader(for session: PiSessionSummary) -> (() throws -> [SessionEvent])? {
+        guard host.mode == .remoteSSH else { return nil }
+        let remoteHost = host
+        let remotePath = session.filePath
+        return {
+            try RemoteSessionEventLoader.load(host: remoteHost, remotePath: remotePath)
+        }
     }
 
     func delete(_ session: PiSessionSummary) {
