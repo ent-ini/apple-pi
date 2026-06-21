@@ -7,7 +7,10 @@ struct SettingsView: View {
     @State private var sshKeys: [SSHKeyStore.Key] = []
     @State private var passwordInput: String = ""
     @State private var passwordStatus: String?
+    @State private var apiTokenInput: String = ""
+    @State private var apiTokenStatus: String?
     @State private var isConfirmingClearPassword = false
+    @State private var isConfirmingClearAPIToken = false
     @State private var isConfirmingHostCommit = false
     @State private var pendingHostCommit: PiHostConfiguration?
     @State private var editingHost: PiHostConfiguration?
@@ -56,6 +59,12 @@ struct SettingsView: View {
             if editingHost != newValue {
                 editingHost = newValue
             }
+            refreshPasswordStatus()
+            refreshAPITokenStatus()
+        }
+        .onChange(of: editingHost) { _, _ in
+            refreshPasswordStatus()
+            refreshAPITokenStatus()
         }
         .onDisappear { commitHostIfChanged(force: true) }
         .confirmationDialog(
@@ -83,6 +92,18 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("The stored password for this host will be deleted and cannot be recovered. You will need to re-enter it to use password auth again.")
+        }
+        .confirmationDialog(
+            "Clear stored API token?",
+            isPresented: $isConfirmingClearAPIToken,
+            titleVisibility: .visible
+        ) {
+            Button("Clear Token", role: .destructive) {
+                clearAPIToken()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The stored bearer token for this remote daemon will be deleted. You will need to paste it again before pi-app can authenticate to pi-appd.")
         }
     }
 
@@ -204,6 +225,21 @@ struct SettingsView: View {
             } else {
                 sshPasswordField
             }
+        }
+
+        Section {
+            TextField("pi-appd URL or IP", text: editingHostBinding(\.remoteDaemonURL))
+                .onChange(of: editingHost?.remoteDaemonURL) { _, _ in
+                    apiTokenInput = ""
+                    refreshAPITokenStatus()
+                }
+            remoteAPITokenField
+        } header: {
+            Text("Remote API (pi-appd)")
+        } footer: {
+            Text("Groundwork for the lightweight Orange daemon transport. Current builds still use SSH for remote access; this URL and token will be used once pi-appd is wired into the client.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
 
         if hasPendingHostChanges {
@@ -415,6 +451,10 @@ struct SettingsView: View {
         }
     }
 
+    private var currentEditingHost: PiHostConfiguration {
+        editingHost ?? appState.host
+    }
+
     private func notificationBinding<Value>(_ keyPath: WritableKeyPath<TerminalNotificationPreferences, Value>) -> Binding<Value> {
         Binding(
             get: { appState.appearance.notifications[keyPath: keyPath] },
@@ -460,8 +500,8 @@ struct SettingsView: View {
                 .textContentType(.password)
                 .onSubmit { savePassword() }
             HStack {
-                Button(appState.hasRemotePasswordStored() ? "Update password" : "Save password", action: savePassword)
-                if appState.hasRemotePasswordStored() {
+                Button(appState.hasRemotePasswordStored(for: currentEditingHost) ? "Update password" : "Save password", action: savePassword)
+                if appState.hasRemotePasswordStored(for: currentEditingHost) {
                     Button("Clear", role: .destructive) {
                         isConfirmingClearPassword = true
                     }
@@ -472,8 +512,38 @@ struct SettingsView: View {
                 Text(passwordStatus)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            } else if appState.hasRemotePasswordStored() {
+            } else if appState.hasRemotePasswordStored(for: currentEditingHost) {
                 Text("Password is stored locally for this host only.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Stored as a 0600 file in Application Support — never in the Keychain.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var remoteAPITokenField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            SecureField("Bearer token", text: $apiTokenInput)
+                .textContentType(.password)
+                .onSubmit { saveAPIToken() }
+            HStack {
+                Button(appState.hasRemoteDaemonTokenStored(for: currentEditingHost) ? "Update token" : "Save token", action: saveAPIToken)
+                if appState.hasRemoteDaemonTokenStored(for: currentEditingHost) {
+                    Button("Clear", role: .destructive) {
+                        isConfirmingClearAPIToken = true
+                    }
+                }
+                Spacer()
+            }
+            if let apiTokenStatus {
+                Text(apiTokenStatus)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if appState.hasRemoteDaemonTokenStored(for: currentEditingHost) {
+                Text("A bearer token is stored locally for this daemon endpoint only.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
@@ -487,13 +557,20 @@ struct SettingsView: View {
     private func reloadSSHCollections() {
         sshConfigEntries = appState.loadSSHConfigEntries()
         sshKeys = appState.loadSSHKeys()
-        refreshPasswordStatus()
         if editingHost == nil { editingHost = appState.host }
+        refreshPasswordStatus()
+        refreshAPITokenStatus()
     }
 
     private func refreshPasswordStatus() {
-        passwordStatus = appState.hasRemotePasswordStored()
+        passwordStatus = appState.hasRemotePasswordStored(for: currentEditingHost)
             ? "A password is stored for this host."
+            : nil
+    }
+
+    private func refreshAPITokenStatus() {
+        apiTokenStatus = appState.hasRemoteDaemonTokenStored(for: currentEditingHost)
+            ? "A token is stored for this daemon endpoint."
             : nil
     }
 
@@ -502,7 +579,7 @@ struct SettingsView: View {
             passwordStatus = "Password is empty."
             return
         }
-        if let error = appState.saveRemotePassword(passwordInput) {
+        if let error = appState.saveRemotePassword(passwordInput, for: currentEditingHost) {
             passwordStatus = error
         } else {
             passwordInput = ""
@@ -511,10 +588,31 @@ struct SettingsView: View {
     }
 
     private func clearPassword() {
-        if let error = appState.clearRemotePassword() {
+        if let error = appState.clearRemotePassword(for: currentEditingHost) {
             passwordStatus = error
         } else {
             passwordStatus = "Cleared."
+        }
+    }
+
+    private func saveAPIToken() {
+        guard !apiTokenInput.isEmpty else {
+            apiTokenStatus = "Token is empty."
+            return
+        }
+        if let error = appState.saveRemoteDaemonToken(apiTokenInput, for: currentEditingHost) {
+            apiTokenStatus = error
+        } else {
+            apiTokenInput = ""
+            apiTokenStatus = "Saved."
+        }
+    }
+
+    private func clearAPIToken() {
+        if let error = appState.clearRemoteDaemonToken(for: currentEditingHost) {
+            apiTokenStatus = error
+        } else {
+            apiTokenStatus = "Cleared."
         }
     }
 }

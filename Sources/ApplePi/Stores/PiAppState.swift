@@ -480,9 +480,9 @@ final class PiAppState: ObservableObject {
     /// Persists the supplied password for the current host. Returns an error
     /// message on failure, nil on success.
     @discardableResult
-    func saveRemotePassword(_ password: String) -> String? {
+    func saveRemotePassword(_ password: String, for targetHost: PiHostConfiguration? = nil) -> String? {
         do {
-            try RemoteCredentialStore.savePassword(password, for: host)
+            try RemoteCredentialStore.savePassword(password, for: targetHost ?? host)
             return nil
         } catch {
             return error.localizedDescription
@@ -490,17 +490,41 @@ final class PiAppState: ObservableObject {
     }
 
     @discardableResult
-    func clearRemotePassword() -> String? {
+    func clearRemotePassword(for targetHost: PiHostConfiguration? = nil) -> String? {
         do {
-            try RemoteCredentialStore.deletePassword(for: host)
+            try RemoteCredentialStore.deletePassword(for: targetHost ?? host)
             return nil
         } catch {
             return error.localizedDescription
         }
     }
 
-    func hasRemotePasswordStored() -> Bool {
-        RemoteCredentialStore.hasPassword(for: host)
+    func hasRemotePasswordStored(for targetHost: PiHostConfiguration? = nil) -> Bool {
+        RemoteCredentialStore.hasPassword(for: targetHost ?? host)
+    }
+
+    @discardableResult
+    func saveRemoteDaemonToken(_ token: String, for targetHost: PiHostConfiguration? = nil) -> String? {
+        do {
+            try RemoteDaemonTokenStore.saveToken(token, for: targetHost ?? host)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    @discardableResult
+    func clearRemoteDaemonToken(for targetHost: PiHostConfiguration? = nil) -> String? {
+        do {
+            try RemoteDaemonTokenStore.deleteToken(for: targetHost ?? host)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    func hasRemoteDaemonTokenStored(for targetHost: PiHostConfiguration? = nil) -> Bool {
+        RemoteDaemonTokenStore.hasToken(for: targetHost ?? host)
     }
 
     private func scheduleCatalogRefresh(after delay: Duration = .seconds(1)) {
