@@ -28,6 +28,7 @@ struct WindowAppearanceConfigurator: NSViewRepresentable {
         window.titlebarAppearsTransparent = appearance.useTransparentTitlebar
         window.styleMask.insert(.fullSizeContentView)
         window.toolbarStyle = .unified
+        window.isMovableByWindowBackground = false
     }
 }
 

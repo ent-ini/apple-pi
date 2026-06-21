@@ -86,7 +86,7 @@ struct ContentView: View {
                     )
                 }
 
-                DetailView()
+                DetailView(topInset: proxy.safeAreaInsets.top)
                     .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
             }
             .animation(.snappy(duration: 0.18), value: paneVisibility)
@@ -914,6 +914,7 @@ private struct SessionMetadataBadge: View {
 struct DetailView: View {
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var appState: PiAppState
+    let topInset: CGFloat
 
     var body: some View {
         VStack(spacing: 0) {
@@ -922,6 +923,7 @@ struct DetailView: View {
                 appearance: appState.appearance
             )
         }
+        .padding(.top, topInset)
         .background(
             surfaceTint(for: colorScheme, opacity: appState.appearance.effectiveChatOpacity)
                 .background(.regularMaterial)
