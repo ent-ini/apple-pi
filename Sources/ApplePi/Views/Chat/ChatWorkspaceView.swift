@@ -69,7 +69,7 @@ private struct ChatTabButton: View {
     let onClose: () -> Void
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 8) {
             Button(action: onSelect) {
                 HStack(spacing: 7) {
                     Circle()
@@ -78,9 +78,9 @@ private struct ChatTabButton: View {
                     Text(tab.title)
                         .font(.callout)
                         .lineLimit(1)
+                        .truncationMode(.tail)
                         .frame(maxWidth: 180, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -88,8 +88,6 @@ private struct ChatTabButton: View {
             .contextMenu {
                 Button("Close", action: onClose)
             }
-
-            Spacer(minLength: 0)
 
             Button(action: onClose) {
                 Image(systemName: "xmark")
@@ -105,6 +103,7 @@ private struct ChatTabButton: View {
         .padding(.vertical, 6)
         .background(tabBackground)
         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 
     private var statusColor: Color {
