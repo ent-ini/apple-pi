@@ -2,7 +2,6 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject private var appState: PiAppState
-    @State private var showsAdvancedTerminalSettings = false
     @State private var notificationTestStatus: String?
     @State private var sshConfigEntries: [SSHConfigEntry] = []
     @State private var sshKeys: [SSHKeyStore.Key] = []
@@ -47,11 +46,11 @@ struct SettingsView: View {
                 }
 
                 opacitySlider(
-                    "Terminal surface",
-                    value: appState.appearance.terminalOpacity,
+                    "Chat surface",
+                    value: appState.appearance.chatSurfaceOpacity,
                     range: 0.55...1.0
                 ) { value in
-                    appState.updateAppearance { $0.terminalOpacity = value }
+                    appState.updateAppearance { $0.chatSurfaceOpacity = value }
                 }
 
                 Toggle("Reduce transparency", isOn: Binding(
@@ -71,6 +70,13 @@ struct SettingsView: View {
                 Toggle("Transparent titlebar", isOn: Binding(
                     get: { appState.appearance.useTransparentTitlebar },
                     set: { newValue in appState.updateAppearance { $0.useTransparentTitlebar = newValue } }
+                ))
+
+                TextField("Empty chat message", text: Binding(
+                    get: { appState.appearance.emptyChatMessage },
+                    set: { newValue in
+                        appState.updateAppearance { $0.emptyChatMessage = newValue }
+                    }
                 ))
             }
 
@@ -112,65 +118,8 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Terminal") {
-                terminalPreview
-
-                Picker("Theme", selection: terminalBinding(\.themeName)) {
-                    ForEach(TerminalThemeName.allCases) { theme in
-                        Text(theme.title).tag(theme)
-                    }
-                }
-
-                Picker("Font", selection: terminalBinding(\.fontFamily)) {
-                    ForEach(TerminalFontFamily.allCases) { font in
-                        Text(font.title).tag(font)
-                    }
-                }
-
-                TextField("Empty terminal message", text: Binding(
-                    get: { appState.appearance.emptyTerminalMessage },
-                    set: { newValue in
-                        appState.updateAppearance { $0.emptyTerminalMessage = newValue }
-                    }
-                ))
-
-                Slider(
-                    value: Binding(
-                        get: { appState.appearance.terminal.fontSize },
-                        set: { newValue in
-                            appState.updateAppearance { $0.terminal.fontSize = TerminalFontPreference.clamped(newValue) }
-                        }
-                    ),
-                    in: TerminalFontPreference.minimumSize...TerminalFontPreference.maximumSize,
-                    step: 0.5
-                ) {
-                    Text("Font size")
-                }
-                Text("\(appState.appearance.terminal.fontSize, specifier: "%.1f") pt")
-                    .foregroundStyle(.secondary)
-
-                Picker("Scrollback", selection: terminalBinding(\.scrollbackLines)) {
-                    ForEach(TerminalScrollbackPreference.allCases) { depth in
-                        Text(depth.title).tag(depth)
-                    }
-                }
-
-                Picker("Links", selection: terminalBinding(\.linkMode)) {
-                    ForEach(TerminalLinkMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
-                    }
-                }
-
-                DisclosureGroup("Advanced", isExpanded: $showsAdvancedTerminalSettings) {
-                    Toggle("Option sends Meta", isOn: terminalBinding(\.optionAsMetaKey))
-                    Toggle("Allow mouse reporting", isOn: terminalBinding(\.allowMouseReporting))
-                    Toggle("Use bright colors for bold text", isOn: terminalBinding(\.useBrightColors))
-                    Toggle("Backspace sends Control-H", isOn: terminalBinding(\.backspaceSendsControlH))
-                }
-            }
-
             Section("Notifications") {
-                Toggle("OSC 777 notifications", isOn: notificationBinding(\.isEnabled))
+                Toggle("Pi session notifications", isOn: notificationBinding(\.isEnabled))
 
                 Text(notificationExtensionHelpText)
                     .font(.caption)
@@ -230,38 +179,6 @@ struct SettingsView: View {
         }
     }
 
-    private var terminalPreview: some View {
-        let theme = appState.appearance.terminal.theme
-
-        return VStack(alignment: .leading, spacing: 8) {
-            Text("Pi session")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Color(nsColor: theme.foregroundColor).opacity(0.72))
-            HStack(spacing: 0) {
-                Text("$ ")
-                    .foregroundStyle(Color(nsColor: theme.ansiPalette[2]))
-                Text("pi resume latest")
-                    .foregroundStyle(Color(nsColor: theme.foregroundColor))
-                Text("  ready")
-                    .foregroundStyle(Color(nsColor: theme.ansiPalette[3]))
-            }
-            .font(.system(size: appState.appearance.terminal.fontSize, design: .monospaced))
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: theme.backgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-
-    private func terminalBinding<Value>(_ keyPath: WritableKeyPath<TerminalPreferences, Value>) -> Binding<Value> {
-        Binding(
-            get: { appState.appearance.terminal[keyPath: keyPath] },
-            set: { newValue in
-                appState.updateAppearance { $0.terminal[keyPath: keyPath] = newValue }
-            }
-        )
-    }
-
     private func notificationBinding<Value>(_ keyPath: WritableKeyPath<TerminalNotificationPreferences, Value>) -> Binding<Value> {
         Binding(
             get: { appState.appearance.notifications[keyPath: keyPath] },
@@ -274,11 +191,11 @@ struct SettingsView: View {
 
     private var notificationExtensionHelpText: String {
         if appState.host.mode == .remoteSSH {
-            return "Remote sessions need a Pi notification extension installed on the remote host. The bundled helper is only available to local sessions started from this app."
+            return "Remote sessions need a Pi notification helper installed on the remote host. The bundled helper is only available to local sessions started from this app."
         }
 
         if appState.appearance.notifications.isEnabled {
-            return "Local sessions started from Apple Pi load a bundled Pi notification helper. Your existing Pi agent settings are not changed."
+            return "Local sessions started from pi-app load a bundled Pi notification helper. Your existing Pi agent settings are not changed."
         } else {
             return "The bundled Pi notification helper will not be loaded for new local sessions while notifications are off."
         }
@@ -289,7 +206,7 @@ struct SettingsView: View {
         case .delivered:
             "Test notification sent."
         case .disabled:
-            "Notifications are disabled in Apple Pi."
+            "Notifications are disabled in pi-app."
         case .suppressedInForeground:
             "Foreground notifications are disabled. Put the app in the background or enable foreground notifications."
         case .denied:

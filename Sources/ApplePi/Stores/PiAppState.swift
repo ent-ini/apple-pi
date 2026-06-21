@@ -41,7 +41,7 @@ final class PiAppState: ObservableObject {
     }
     @Published private(set) var availableUpdate: AvailableUpdate?
 
-    let terminalWorkspace = TerminalWorkspaceStore()
+    let chatWorkspace = ChatSessionStore()
 
     private let configurationService: PiConfigurationService
     private let updateCheckService: UpdateCheckService
@@ -80,7 +80,7 @@ final class PiAppState: ObservableObject {
         loadAppearance()
         isLoadingPersistedState = false
 
-        terminalWorkspace.onSessionExit = { [weak self] in
+        chatWorkspace.onSessionExit = { [weak self] in
             self?.scheduleCatalogRefresh()
         }
         refreshConfigurationSummary()
@@ -347,19 +347,12 @@ final class PiAppState: ObservableObject {
     }
 
     private func openNewSession(workingDirectory: String?, sessionName: String?, isTemporary: Bool) {
-        let request = PiLaunchRequest(
-            workingDirectory: workingDirectory?.nilIfBlank ?? fallbackWorkingDirectory,
-            sessionPath: nil,
-            forkPath: nil,
-            sessionName: sessionName?.nilIfBlank,
-            isEphemeral: isTemporary,
-            initialPrompt: nil
-        )
-        terminalWorkspace.openTab(
-            title: request.sessionName ?? (isTemporary ? "Temporary" : "New Pi"),
-            request: request,
-            host: host,
-            notificationsEnabled: appearance.notifications.isEnabled
+        let effectiveName = sessionName?.nilIfBlank ?? (isTemporary ? "Temporary" : "New Pi")
+        let key = "new:\(UUID().uuidString)"
+        chatWorkspace.openTab(
+            key: key,
+            title: effectiveName,
+            sessionPath: nil
         )
         statusMessage = isTemporary ? "Started temporary Pi session" : "Started new Pi session"
     }
@@ -375,22 +368,22 @@ final class PiAppState: ObservableObject {
     }
 
     func resume(_ session: PiSessionSummary) {
-        terminalWorkspace.openOrSelectTab(
+        chatWorkspace.openOrSelectTab(
             key: session.filePath,
             title: session.title,
-            request: .resume(session),
-            host: host,
-            notificationsEnabled: appearance.notifications.isEnabled
+            sessionPath: session.filePath
         )
         statusMessage = "Resumed \(session.title)"
     }
 
     func fork(_ session: PiSessionSummary) {
-        terminalWorkspace.openTab(
+        // Read-only MVP: a fork opens a tab bound to the source session's
+        // file path. The next iteration will copy the jsonl and pass the
+        // fork path to a fresh `pi --fork` invocation.
+        chatWorkspace.openTab(
+            key: "fork:\(session.filePath)",
             title: "Fork: \(session.title)",
-            request: .fork(session),
-            host: host,
-            notificationsEnabled: appearance.notifications.isEnabled
+            sessionPath: session.filePath
         )
         statusMessage = "Fork started from \(session.title)"
         scheduleCatalogRefresh()
@@ -398,12 +391,12 @@ final class PiAppState: ObservableObject {
 
     func delete(_ session: PiSessionSummary) {
         guard host.mode == .local else {
-            statusMessage = "Remote session deletion is not supported from Apple Pi."
+            statusMessage = "Remote session deletion is not supported from pi-app."
             return
         }
 
-        if let openTab = terminalWorkspace.tabs.first(where: { $0.key == session.filePath }) {
-            terminalWorkspace.close(openTab)
+        if let openTab = chatWorkspace.tabs.first(where: { $0.key == session.filePath }) {
+            chatWorkspace.close(openTab)
         }
 
         do {

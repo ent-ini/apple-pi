@@ -6,13 +6,12 @@ struct AppAppearance: Codable, Equatable {
     var sidebarOpacity: Double = 0.52
     var listOpacity: Double = 0.64
     var chromeOpacity: Double = 0.76
-    var terminalOpacity: Double = 0.92
+    var chatSurfaceOpacity: Double = 0.92
     var accentColorName: AccentColorName = .yellow
     var colorScheme: AppColorSchemePreference = .system
     var reduceTransparency: Bool = false
     var useTransparentTitlebar: Bool = true
-    var emptyTerminalMessage: String = "Hi"
-    var terminal: TerminalPreferences = TerminalPreferences()
+    var emptyChatMessage: String = "Hi"
     var notifications: TerminalNotificationPreferences = TerminalNotificationPreferences()
 
     init() {}
@@ -23,13 +22,19 @@ struct AppAppearance: Codable, Equatable {
         sidebarOpacity = try container.decodeIfPresent(Double.self, forKey: .sidebarOpacity) ?? 0.52
         listOpacity = try container.decodeIfPresent(Double.self, forKey: .listOpacity) ?? 0.64
         chromeOpacity = try container.decodeIfPresent(Double.self, forKey: .chromeOpacity) ?? 0.76
-        terminalOpacity = try container.decodeIfPresent(Double.self, forKey: .terminalOpacity) ?? 0.92
+        // Backward compatibility: accept the old `terminalOpacity` key from
+        // the previous app version so users on 0.x settings do not lose
+        // their configured transparency when upgrading to the chat build.
+        chatSurfaceOpacity = try container.decodeIfPresent(Double.self, forKey: .chatSurfaceOpacity)
+            ?? container.decodeIfPresent(Double.self, forKey: .terminalOpacity)
+            ?? 0.92
         accentColorName = try container.decodeIfPresent(AccentColorName.self, forKey: .accentColorName) ?? .yellow
         colorScheme = try container.decodeIfPresent(AppColorSchemePreference.self, forKey: .colorScheme) ?? .system
         reduceTransparency = try container.decodeIfPresent(Bool.self, forKey: .reduceTransparency) ?? false
         useTransparentTitlebar = try container.decodeIfPresent(Bool.self, forKey: .useTransparentTitlebar) ?? true
-        emptyTerminalMessage = try container.decodeIfPresent(String.self, forKey: .emptyTerminalMessage) ?? "Hi"
-        terminal = try container.decodeIfPresent(TerminalPreferences.self, forKey: .terminal) ?? TerminalPreferences()
+        emptyChatMessage = try container.decodeIfPresent(String.self, forKey: .emptyChatMessage)
+            ?? container.decodeIfPresent(String.self, forKey: .emptyTerminalMessage)
+            ?? "Hi"
         notifications = try container.decodeIfPresent(TerminalNotificationPreferences.self, forKey: .notifications) ?? TerminalNotificationPreferences()
     }
 
@@ -37,8 +42,8 @@ struct AppAppearance: Codable, Equatable {
         accentColorName.color
     }
 
-    var resolvedEmptyTerminalMessage: String {
-        let trimmedMessage = emptyTerminalMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+    var resolvedEmptyChatMessage: String {
+        let trimmedMessage = emptyChatMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmedMessage.isEmpty ? "Hi" : trimmedMessage
     }
 
@@ -58,8 +63,8 @@ struct AppAppearance: Codable, Equatable {
         reduceTransparency ? 0.94 : chromeOpacity
     }
 
-    var effectiveTerminalOpacity: Double {
-        reduceTransparency ? 1.0 : terminalOpacity
+    var effectiveChatOpacity: Double {
+        reduceTransparency ? 1.0 : chatSurfaceOpacity
     }
 }
 

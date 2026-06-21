@@ -7,7 +7,7 @@ struct ApplePiApp: App {
     @StateObject private var appState = PiAppState()
 
     var body: some Scene {
-        WindowGroup("Apple Pi", id: "main") {
+        WindowGroup("pi-app", id: "main") {
             ContentView()
                 .environmentObject(appState)
                 .frame(minWidth: 260, minHeight: 180)
@@ -37,7 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        let preferences = TerminalNotificationPreferenceReader.current()
+        let preferences = ChatNotificationPreferenceReader.current()
         guard preferences.isEnabled, preferences.allowsForegroundNotifications else { return [] }
 
         var options: UNNotificationPresentationOptions = []
@@ -51,7 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 }
 
-enum TerminalNotificationPreferenceReader {
+enum ChatNotificationPreferenceReader {
     private static let appearanceDefaultsKey = "ApplePi.appearance"
 
     static func current() -> TerminalNotificationPreferences {

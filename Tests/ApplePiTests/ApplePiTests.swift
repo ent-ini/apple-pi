@@ -8,38 +8,12 @@ import Testing
     #expect("it's".shellQuoted == "'it'\\''s'")
 }
 
-@Test func osc777NotificationPayloadParsesNotifySequenceBodyWithSemicolons() throws {
-    let bytes = ArraySlice("notify;Pi;Ready; for input".utf8)
-    let payload = try #require(OSC777NotificationPayload(bytes: bytes))
-
-    #expect(payload.title == "Pi")
-    #expect(payload.body == "Ready; for input")
-}
-
-@Test func osc777NotificationPayloadRejectsUnknownCommand() {
-    let bytes = ArraySlice("open;Pi;Ready for input".utf8)
-
-    #expect(OSC777NotificationPayload(bytes: bytes) == nil)
-}
-
-@Test func osc777NotificationPayloadRejectsBlankNotificationText() {
-    #expect(OSC777NotificationPayload(bytes: ArraySlice("notify;;Ready for input".utf8)) == nil)
-    #expect(OSC777NotificationPayload(bytes: ArraySlice("notify;Pi;   ".utf8)) == nil)
-}
-
-@Test func osc777NotificationPayloadStripsControlCharacters() throws {
-    let bytes = ArraySlice("notify;Pi\u{001b};Ready\u{0007}".utf8)
-    let payload = try #require(OSC777NotificationPayload(bytes: bytes))
-
-    #expect(payload.title == "Pi")
-    #expect(payload.body == "Ready")
-}
-
-@Test func appearanceDecodingDefaultsOSC777NotificationsForExistingSettings() throws {
+@Test func appearanceDecodingKeepsNotificationsEnabledByDefault() throws {
     let data = #"{"emptyTerminalMessage":"Ready"}"#.data(using: .utf8)!
 
     let appearance = try JSONDecoder().decode(AppAppearance.self, from: data)
 
+    #expect(appearance.emptyChatMessage == "Ready")
     #expect(appearance.notifications.isEnabled)
     #expect(appearance.notifications.presentation == .bannerAndSound)
     #expect(appearance.notifications.allowsForegroundNotifications)
@@ -92,251 +66,6 @@ import Testing
     #expect(update == nil)
 }
 
-@Test func localPiLaunchEnvironmentContainsDeveloperPath() {
-    let request = PiLaunchRequest(
-        workingDirectory: nil,
-        sessionPath: "/tmp/session.jsonl",
-        forkPath: nil,
-        sessionName: nil,
-        isEphemeral: false,
-        initialPrompt: nil
-    )
-    let launch = PiCommandBuilder().terminalLaunch(for: request, host: PiHostConfiguration())
-    let path = launch.environment.first { $0.hasPrefix("PATH=") } ?? ""
-
-    #expect(path.contains("\(NSHomeDirectory())/.local/bin"))
-    #expect(path.contains("/opt/homebrew/bin"))
-    #expect(path.contains("/usr/bin"))
-}
-
-@Test func defaultLocalPiLaunchUsesPathLookup() {
-    let request = PiLaunchRequest(
-        workingDirectory: nil,
-        sessionPath: nil,
-        forkPath: nil,
-        sessionName: nil,
-        isEphemeral: false,
-        initialPrompt: nil
-    )
-
-    let launch = PiCommandBuilder().terminalLaunch(for: request, host: PiHostConfiguration())
-
-    #expect(launch.executable == "/usr/bin/env")
-    #expect(launch.arguments == ["pi"])
-    #expect(launch.execName == nil)
-}
-
-@Test func localPiLaunchLoadsBundledNotificationExtensionWhenEnabled() throws {
-    let resourceDirectory = Foundation.FileManager().temporaryDirectory
-        .appendingPathComponent(UUID().uuidString, isDirectory: true)
-    try Foundation.FileManager().createDirectory(at: resourceDirectory, withIntermediateDirectories: true)
-    let extensionURL = resourceDirectory.appendingPathComponent("ApplePiNotifyExtension.mjs")
-    try "export default function () {}\n".write(to: extensionURL, atomically: true, encoding: .utf8)
-    defer { try? Foundation.FileManager().removeItem(at: resourceDirectory) }
-
-    let request = PiLaunchRequest(
-        workingDirectory: nil,
-        sessionPath: nil,
-        forkPath: nil,
-        sessionName: nil,
-        isEphemeral: false,
-        initialPrompt: nil
-    )
-    let launch = PiCommandBuilder(notificationExtensionResourceURL: resourceDirectory)
-        .terminalLaunch(for: request, host: PiHostConfiguration(), notificationsEnabled: true)
-
-    #expect(launch.arguments == ["pi", "--extension", extensionURL.path])
-}
-
-@Test func localPiLaunchSkipsBundledNotificationExtensionWhenDisabled() throws {
-    let resourceDirectory = Foundation.FileManager().temporaryDirectory
-        .appendingPathComponent(UUID().uuidString, isDirectory: true)
-    try Foundation.FileManager().createDirectory(at: resourceDirectory, withIntermediateDirectories: true)
-    let extensionURL = resourceDirectory.appendingPathComponent("ApplePiNotifyExtension.mjs")
-    try "export default function () {}\n".write(to: extensionURL, atomically: true, encoding: .utf8)
-    defer { try? Foundation.FileManager().removeItem(at: resourceDirectory) }
-
-    let request = PiLaunchRequest(
-        workingDirectory: nil,
-        sessionPath: nil,
-        forkPath: nil,
-        sessionName: nil,
-        isEphemeral: false,
-        initialPrompt: nil
-    )
-    let launch = PiCommandBuilder(notificationExtensionResourceURL: resourceDirectory)
-        .terminalLaunch(for: request, host: PiHostConfiguration(), notificationsEnabled: false)
-
-    #expect(launch.arguments == ["pi"])
-}
-
-@Test func explicitLocalPiExecutableLaunchesDirectly() {
-    let request = PiLaunchRequest(
-        workingDirectory: nil,
-        sessionPath: nil,
-        forkPath: nil,
-        sessionName: nil,
-        isEphemeral: false,
-        initialPrompt: nil
-    )
-    let host = PiHostConfiguration(piExecutable: "/usr/local/bin/pi")
-
-    let launch = PiCommandBuilder().terminalLaunch(for: request, host: host)
-
-    #expect(launch.executable == "/usr/local/bin/pi")
-    #expect(launch.arguments.isEmpty)
-    #expect(launch.execName == "pi")
-}
-
-@Test func localPiLaunchPreservesWorkingDirectory() {
-    let request = PiLaunchRequest(
-        workingDirectory: "~/Code/My Project",
-        sessionPath: nil,
-        forkPath: nil,
-        sessionName: nil,
-        isEphemeral: false,
-        initialPrompt: nil
-    )
-
-    let launch = PiCommandBuilder().terminalLaunch(for: request, host: PiHostConfiguration())
-
-    #expect(launch.workingDirectory == "\(NSHomeDirectory())/Code/My Project")
-}
-
-@Test func localPiForkLaunchUsesForkFlag() {
-    let request = PiLaunchRequest(
-        workingDirectory: "~/Code/My Project",
-        sessionPath: nil,
-        forkPath: "/tmp/source.jsonl",
-        sessionName: nil,
-        isEphemeral: false,
-        initialPrompt: nil
-    )
-
-    let launch = PiCommandBuilder().terminalLaunch(for: request, host: PiHostConfiguration())
-
-    #expect(launch.arguments == ["pi", "--fork", "/tmp/source.jsonl"])
-    #expect(launch.workingDirectory == "\(NSHomeDirectory())/Code/My Project")
-}
-
-@Test func remotePiLaunchDoesNotLeakLocalHomePath() {
-    let request = PiLaunchRequest(
-        workingDirectory: "~/code/My Project",
-        sessionPath: "~/.pi/agent/sessions/--home-user-code--/session.jsonl",
-        forkPath: nil,
-        sessionName: "pairing check",
-        isEphemeral: false,
-        initialPrompt: "hello from Pi"
-    )
-    var host = PiHostConfiguration(
-        mode: .remoteSSH,
-        agentDirectory: "~/.pi/agent",
-        remoteHost: "pi.example.com",
-        remotePort: 2222,
-        remoteUser: "ada",
-        remotePiExecutable: "~/bin/pi"
-    )
-    host.remoteAuthMethod = .publicKey
-    host.remoteIdentityFile = ""
-
-    let launch = PiCommandBuilder().terminalLaunch(for: request, host: host)
-    let remoteCommand = launch.arguments.last ?? ""
-    let joinedArgs = launch.arguments.joined(separator: "\n")
-
-    #expect(launch.executable == "/usr/bin/ssh")
-    #expect(launch.arguments.first == "-tt")
-    // -p and the port must be adjacent and the user@host must follow.
-    #expect(launch.arguments.contains("-p"))
-    #expect(launch.arguments.contains("2222"))
-    #expect(launch.arguments.contains("ada@pi.example.com"))
-    // No local home directory may leak into ssh arguments.
-    #expect(!joinedArgs.contains(NSHomeDirectory()))
-    #expect(!remoteCommand.contains(NSHomeDirectory()))
-    // Remote-side command still uses $HOME everywhere, not the local home.
-    #expect(remoteCommand.contains("export PATH=\"$HOME/.local/bin:"))
-    #expect(remoteCommand.contains("cd $HOME/'code/My Project'"))
-    #expect(remoteCommand.contains("$HOME/bin/pi"))
-    #expect(remoteCommand.contains("--session $HOME/.pi/agent/sessions/--home-user-code--/session.jsonl"))
-    #expect(remoteCommand.contains("--name 'pairing check'"))
-    #expect(remoteCommand.contains("'hello from Pi'"))
-}
-
-@Test func remotePiLaunchWithIdentityFilePassesExplicitIAndIdentitiesOnly() {
-    let request = PiLaunchRequest(
-        workingDirectory: nil,
-        sessionPath: nil,
-        forkPath: nil,
-        sessionName: nil,
-        isEphemeral: true,
-        initialPrompt: nil
-    )
-    var host = PiHostConfiguration(
-        mode: .remoteSSH,
-        agentDirectory: "~/.pi/agent",
-        remoteHost: "pi.example.com",
-        remotePort: 22,
-        remoteUser: "ada",
-        remotePiExecutable: "pi"
-    )
-    host.remoteAuthMethod = .publicKey
-    host.remoteIdentityFile = "~/.ssh/work_ed25519"
-
-    let launch = PiCommandBuilder().terminalLaunch(for: request, host: host)
-    let joined = launch.arguments.joined(separator: " ")
-
-    #expect(launch.arguments.contains("-i"))
-    #expect(launch.arguments.contains(NSString(string: "~/.ssh/work_ed25519").expandingTildeInPath))
-    #expect(joined.contains("IdentitiesOnly=yes"))
-    // Password auth flags must NOT appear in public-key mode.
-    #expect(!joined.contains("PreferredAuthentications=password"))
-}
-
-@Test func remotePiLaunchWithPasswordAuthIncludesAskpassEnv() {
-    let request = PiLaunchRequest(
-        workingDirectory: nil,
-        sessionPath: nil,
-        forkPath: nil,
-        sessionName: nil,
-        isEphemeral: true,
-        initialPrompt: nil
-    )
-    var host = PiHostConfiguration(
-        mode: .remoteSSH,
-        agentDirectory: "~/.pi/agent",
-        remoteHost: "pi.example.com",
-        remotePort: 22,
-        remoteUser: "ada",
-        remotePiExecutable: "pi"
-    )
-    host.remoteAuthMethod = .password
-    host.remoteIdentityFile = ""
-
-    let launch = PiCommandBuilder().terminalLaunch(for: request, host: host)
-    let joined = launch.arguments.joined(separator: " ")
-    let environment = Dictionary(
-        uniqueKeysWithValues: launch.environment.map { line -> (String, String) in
-            let parts = line.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-            return (String(parts[0]), parts.count == 2 ? String(parts[1]) : "")
-        }
-    )
-
-    // The ssh flags we set when password auth is selected.
-    #expect(joined.contains("PreferredAuthentications=password"))
-    #expect(joined.contains("PubkeyAuthentication=no"))
-    #expect(joined.contains("NumberOfPasswordPrompts=1"))
-    // IdentitiesOnly must NOT be in password mode even if a key was set.
-    #expect(!joined.contains("IdentitiesOnly=yes"))
-    // The askpass helper must be wired through the environment. In a swift
-    // run invocation the helper binary is not bundled, so the env var may
-    // be absent; if present, it must point at an executable that exists on
-    // disk and carry a credential file path.
-    if let askpass = environment["SSH_ASKPASS"] {
-        #expect(FileManager.default.isExecutableFile(atPath: askpass))
-        #expect(environment["SSH_ASKPASS_REQUIRE"] == "force")
-        #expect(environment["DISPLAY"] == ":0")
-        #expect(environment["APPLE_PI_ASKPASS_FILE"]?.isEmpty == false)
-    }
-}
 
 @Test func catalogUsesSessionHeaderCwdForProjectDirectory() async throws {
     let temp = try TemporaryPiFixture()
@@ -465,104 +194,6 @@ import Testing
     state.delete(session)
 
     #expect(!Foundation.FileManager().fileExists(atPath: sessionFile.path))
-}
-
-@MainActor
-@Test func appStateStartsNewSessionInRequestedFolder() throws {
-    let temp = try TemporaryPiFixture()
-    let state = PiAppState(
-        defaults: isolatedDefaults(),
-        configurationService: PiConfigurationService(environment: [:]),
-        startsBackgroundWork: false
-    )
-
-    state.openNewSession(in: temp.project.path)
-
-    let tab = try #require(state.terminalWorkspace.tabs.first)
-    #expect(tab.title == "New Pi")
-    #expect(tab.launchRequest.workingDirectory == temp.project.path)
-    #expect(!tab.launchRequest.arguments.contains("--no-session"))
-}
-
-@MainActor
-@Test func appStateStartsNewSessionInHomeWhenNoFolderIsSelected() throws {
-    let state = PiAppState(
-        defaults: isolatedDefaults(),
-        configurationService: PiConfigurationService(environment: [:]),
-        startsBackgroundWork: false
-    )
-
-    state.openNewSessionInCurrentFolder()
-
-    let tab = try #require(state.terminalWorkspace.tabs.first)
-    #expect(tab.launchRequest.workingDirectory == NSHomeDirectory())
-}
-
-@MainActor
-@Test func appStateStartsRemoteSessionInRemoteHomeWhenNoFolderIsSelected() throws {
-    let state = PiAppState(
-        defaults: isolatedDefaults(),
-        configurationService: PiConfigurationService(environment: [:]),
-        catalogLoader: { _, _ in PiCatalogSnapshot(projects: [], sessions: []) },
-        startsBackgroundWork: false
-    )
-    state.host = PiHostConfiguration(
-        mode: .remoteSSH,
-        agentDirectory: "~/.pi/agent",
-        remoteHost: "pi.example.com",
-        remotePort: 22,
-        remoteUser: "ada",
-        remotePiExecutable: "pi"
-    )
-
-    state.openNewSessionInCurrentFolder()
-
-    let tab = try #require(state.terminalWorkspace.tabs.first)
-    #expect(tab.launchRequest.workingDirectory == nil)
-    #expect(tab.launchRequest.arguments.last?.contains("cd $HOME && pi") == true)
-}
-
-@MainActor
-@Test func appStateStartsTemporarySessionWithNoSessionFlag() throws {
-    let temp = try TemporaryPiFixture()
-    let state = PiAppState(
-        defaults: isolatedDefaults(),
-        configurationService: PiConfigurationService(environment: [:]),
-        startsBackgroundWork: false
-    )
-
-    state.openNewSession(in: temp.project.path, isTemporary: true)
-
-    let tab = try #require(state.terminalWorkspace.tabs.first)
-    #expect(tab.title == "Temporary")
-    #expect(tab.launchRequest.workingDirectory == temp.project.path)
-    #expect(tab.launchRequest.arguments.contains("--no-session"))
-}
-
-@MainActor
-@Test func appStateSheetLaunchUsesFolderNameAndTemporaryToggle() throws {
-    let temp = try TemporaryPiFixture()
-    let state = PiAppState(
-        defaults: isolatedDefaults(),
-        configurationService: PiConfigurationService(environment: [:]),
-        startsBackgroundWork: false
-    )
-    state.newSessionWorkingDirectory = temp.project.path
-    state.newSessionName = "Pairing check"
-    state.newSessionIsTemporary = true
-    state.showsNewSessionSheet = true
-
-    state.openNewSession()
-
-    let tab = try #require(state.terminalWorkspace.tabs.first)
-    #expect(tab.title == "Pairing check")
-    #expect(tab.launchRequest.workingDirectory == temp.project.path)
-    #expect(tab.launchRequest.arguments.contains("--no-session"))
-    #expect(tab.launchRequest.arguments.contains("--name"))
-    #expect(tab.launchRequest.arguments.contains("Pairing check"))
-    #expect(!state.showsNewSessionSheet)
-    #expect(state.newSessionName.isEmpty)
-    #expect(!state.newSessionIsTemporary)
 }
 
 @MainActor
@@ -774,7 +405,7 @@ import Testing
     state.delete(session)
 
     #expect(Foundation.FileManager().fileExists(atPath: sessionFile.path))
-    #expect(state.statusMessage == "Remote session deletion is not supported from Apple Pi.")
+    #expect(state.statusMessage == "Remote session deletion is not supported from pi-app.")
 }
 
 @MainActor
@@ -997,6 +628,121 @@ private func isolatedDefaults() -> UserDefaults {
     #expect(RemoteAuthMethod.password.title == "Password")
     #expect(RemoteAuthMethod.password.requiresKeychainEntry)
     #expect(RemoteAuthMethod.publicKey.requiresKeychainEntry == false)
+}
+
+@Test func sessionEventParserReadsUserAndAssistantMessages() {
+    let lines = [
+        #"{"type":"session","id":"s1","cwd":"/tmp/proj"}"#,
+        #"{"type":"message","message":{"role":"user","content":"hello"}}"#,
+        #"{"type":"message","message":{"role":"assistant","content":"hi there","model":"anthropic/claude-3.5"}}"#
+    ]
+
+    let events = SessionEventParser.parse(lines: lines)
+
+    #expect(events.count == 3)
+    if case .message(let user, _) = events[1] {
+        #expect(user.role == .user)
+        #expect(user.content == [.text("hello")])
+    } else {
+        Issue.record("Expected user message at index 1")
+    }
+    if case .message(let assistant, _) = events[2] {
+        #expect(assistant.role == .assistant)
+        #expect(assistant.model == "anthropic/claude-3.5")
+        #expect(assistant.content == [.text("hi there")])
+    } else {
+        Issue.record("Expected assistant message at index 2")
+    }
+}
+
+@Test func sessionEventParserHandlesContentBlocksAndImages() {
+    let lines = [
+        #"{"type":"message","message":{"role":"user","content":[{"type":"text","text":"see "},{"type":"image","source":{"path":"/tmp/cat.png","media_type":"image/png"}}]}}"#
+    ]
+
+    let events = SessionEventParser.parse(lines: lines)
+
+    guard events.count == 1, case .message(let message, _) = events[0] else {
+        Issue.record("Expected one message event")
+        return
+    }
+    #expect(message.content.count == 2)
+    if case .text(let text) = message.content[0] {
+        #expect(text == "see ")
+    } else {
+        Issue.record("Expected first block to be text")
+    }
+    if case .image(let path, let mime) = message.content[1] {
+        #expect(path == "/tmp/cat.png")
+        #expect(mime == "image/png")
+    } else {
+        Issue.record("Expected second block to be image")
+    }
+}
+
+@Test func sessionEventParserSkipsBlankAndMalformedLines() {
+    let lines = [
+        "",
+        "not json at all",
+        #"{"unrelated":"value"}"#,
+        #"{"type":"message","message":{"role":"user","content":"valid"}}"#,
+        ""
+    ]
+
+    let events = SessionEventParser.parse(lines: lines)
+
+    #expect(events.count == 1)
+    if case .message(let message, let lineIndex) = events[0] {
+        #expect(message.content == [.text("valid")])
+        #expect(lineIndex == 3)
+    } else {
+        Issue.record("Expected a single valid message")
+    }
+}
+
+@Test func sessionEventParserCapturesToolCallsAndResults() {
+    let lines = [
+        #"{"type":"tool_use","id":"call-1","name":"read_file","input":{"path":"/tmp/a.txt"}}"#,
+        #"{"type":"tool_result","toolCallId":"call-1","content":"file contents","isError":false}"#
+    ]
+
+    let events = SessionEventParser.parse(lines: lines)
+
+    #expect(events.count == 2)
+    if case .toolCall(let call, _) = events[0] {
+        #expect(call.id == "call-1")
+        if case .function(_, let name, let arguments) = call {
+            #expect(name == "read_file")
+            #expect(arguments.contains("\"path\":\"/tmp/a.txt\""))
+        } else {
+            Issue.record("Expected function-style tool call")
+        }
+    } else {
+        Issue.record("Expected tool call at index 0")
+    }
+    if case .toolResult(let result, _) = events[1] {
+        #expect(result.callId == "call-1")
+        if case .result(_, _, let output, let isError) = result {
+            #expect(output == "file contents")
+            #expect(isError == false)
+        } else {
+            Issue.record("Expected plain tool result")
+        }
+    } else {
+        Issue.record("Expected tool result at index 1")
+    }
+}
+
+@Test func sessionEventDecodeAppendsLineIndexForLiveTail() {
+    let raw = #"{"type":"message","message":{"role":"user","content":"queued"}}"#
+
+    let event = SessionEventParser.decode(line: raw, at: 42)
+
+    guard let event, case .message(_, let lineIndex) = event else {
+        Issue.record("Expected a message with line index")
+        return
+    }
+    #expect(lineIndex == 42)
 }
 
 // MARK: - Test helpers

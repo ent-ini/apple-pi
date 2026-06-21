@@ -18,15 +18,10 @@ let package = Package(
             targets: ["ApplePiAskpass"]
         )
     ],
-    dependencies: [
-        .package(path: "Vendor/SwiftTerm")
-    ],
+    dependencies: [],
     targets: [
         .executableTarget(
             name: "ApplePi",
-            dependencies: [
-                .product(name: "SwiftTerm", package: "SwiftTerm")
-            ],
             path: "Sources/ApplePi",
             resources: [
                 .copy("Resources")

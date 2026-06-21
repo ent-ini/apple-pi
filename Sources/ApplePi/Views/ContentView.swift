@@ -917,13 +917,13 @@ struct DetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            TerminalWorkspaceView(
-                workspace: appState.terminalWorkspace,
-                appearanceSettings: appState.appearance
+            ChatWorkspaceView(
+                workspace: appState.chatWorkspace,
+                appearance: appState.appearance
             )
         }
         .background(
-            surfaceTint(for: colorScheme, opacity: appState.appearance.effectiveTerminalOpacity)
+            surfaceTint(for: colorScheme, opacity: appState.appearance.effectiveChatOpacity)
                 .background(.regularMaterial)
         )
     }
