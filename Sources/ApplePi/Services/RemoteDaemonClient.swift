@@ -5,7 +5,7 @@ struct RemoteDaemonClient {
         let response: CatalogResponse = try await send(
             host: host,
             path: "/sessions",
-            queryItems: activeProjectDirectory.nilIfBlank.map { [URLQueryItem(name: "projectDirectory", value: $0)] } ?? []
+            queryItems: activeProjectDirectory?.nilIfBlank.map { [URLQueryItem(name: "projectDirectory", value: $0)] } ?? []
         )
         return PiCatalogSnapshot(
             projects: response.projects.map { record in
@@ -51,7 +51,7 @@ struct RemoteDaemonClient {
         let response: FileListResponse = try await send(
             host: host,
             path: "/files",
-            queryItems: path.nilIfBlank.map { [URLQueryItem(name: "path", value: $0)] } ?? []
+            queryItems: path?.nilIfBlank.map { [URLQueryItem(name: "path", value: $0)] } ?? []
         )
         return RemoteDirectoryListing(
             path: response.path,
