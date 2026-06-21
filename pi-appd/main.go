@@ -99,6 +99,16 @@ type parsedSession struct {
 	LatestModel        string
 }
 
+type statusRecorder struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (r *statusRecorder) WriteHeader(statusCode int) {
+	r.statusCode = statusCode
+	r.ResponseWriter.WriteHeader(statusCode)
+}
+
 func main() {
 	agentDir := getenvDefault("PI_APPD_AGENT_DIR", "~/.pi/agent")
 	addr := getenvDefault("PI_APPD_ADDR", "127.0.0.1:8787")
@@ -117,7 +127,7 @@ func main() {
 	mux.HandleFunc("/files", srv.handleFiles)
 
 	log.Printf("pi-appd listening on %s (agentDir=%s)", addr, srv.agentDir)
-	if err := http.ListenAndServe(addr, srv.authMiddleware(mux)); err != nil {
+	if err := http.ListenAndServe(addr, srv.loggingMiddleware(srv.authMiddleware(mux))); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -132,6 +142,15 @@ func (s *server) authMiddleware(next http.Handler) http.Handler {
 			}
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *server) loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
+		writer := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
+		next.ServeHTTP(writer, r)
+		log.Printf("%s %s -> %d (%s) from %s", r.Method, r.URL.RequestURI(), writer.statusCode, time.Since(started).Round(time.Millisecond), r.RemoteAddr)
 	})
 }
 

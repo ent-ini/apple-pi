@@ -162,10 +162,17 @@ cat > "${INFO_PLIST}" <<PLIST
     <string>Apple Pi launches terminal sessions in project folders you choose, including projects in Documents.</string>
     <key>NSDownloadsFolderUsageDescription</key>
     <string>Apple Pi launches terminal sessions in project folders you choose, including projects in Downloads.</string>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSHumanReadableCopyright</key>
-    <string>Copyright © 2026 dodo-reach. All rights reserved.</string>
+    <string>Copyright © 2026 ent-ini. All rights reserved.</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
