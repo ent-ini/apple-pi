@@ -58,6 +58,27 @@ struct AppAppearance: Codable, Equatable {
         notifications = try container.decodeIfPresent(TerminalNotificationPreferences.self, forKey: .notifications) ?? TerminalNotificationPreferences()
     }
 
+    // We have to write the encoder by hand because `CodingKeys` lists two
+    // legacy cases (`terminalOpacity`, `emptyTerminalMessage`) that do not
+    // correspond to any stored property any more. Without this method
+    // Swift refuses to synthesise `Encodable`.
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(windowOpacity, forKey: .windowOpacity)
+        try container.encode(sidebarOpacity, forKey: .sidebarOpacity)
+        try container.encode(listOpacity, forKey: .listOpacity)
+        try container.encode(chromeOpacity, forKey: .chromeOpacity)
+        try container.encode(chatSurfaceOpacity, forKey: .chatSurfaceOpacity)
+        // terminalOpacity / emptyTerminalMessage are legacy read-only
+        // fields; new encodes always write the renamed properties.
+        try container.encode(accentColorName, forKey: .accentColorName)
+        try container.encode(colorScheme, forKey: .colorScheme)
+        try container.encode(reduceTransparency, forKey: .reduceTransparency)
+        try container.encode(useTransparentTitlebar, forKey: .useTransparentTitlebar)
+        try container.encode(emptyChatMessage, forKey: .emptyChatMessage)
+        try container.encode(notifications, forKey: .notifications)
+    }
+
     var accentColor: Color {
         accentColorName.color
     }
