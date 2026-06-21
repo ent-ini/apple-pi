@@ -97,12 +97,47 @@ struct RemoteDaemonClient {
         }
 
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let raw = try container.decode(String.self)
+            if let date = RemoteDaemonDateParsers.shared.parse(raw) {
+                return date
+            }
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Invalid daemon date: \(raw)"
+            )
+        }
         do {
             return try decoder.decode(Response.self, from: data)
         } catch {
             throw RemoteDaemonError.decodingFailed(error.localizedDescription)
         }
+    }
+}
+
+private final class RemoteDaemonDateParsers: @unchecked Sendable {
+    static let shared = RemoteDaemonDateParsers()
+
+    private let lock = NSLock()
+    private let withFractional: ISO8601DateFormatter
+    private let plain: ISO8601DateFormatter
+
+    private init() {
+        let withFractional = ISO8601DateFormatter()
+        withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        self.withFractional = withFractional
+
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        self.plain = plain
+    }
+
+    func parse(_ raw: String) -> Date? {
+        lock.lock()
+        defer { lock.unlock() }
+        if let date = withFractional.date(from: raw) { return date }
+        return plain.date(from: raw)
     }
 }
 
