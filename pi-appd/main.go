@@ -19,9 +19,9 @@ type server struct {
 	agentDir string
 	token    string
 
-	mu          sync.RWMutex
-	lastRefresh time.Time
-	snapshot    catalogResponse
+	mu           sync.RWMutex
+	lastRefresh  time.Time
+	snapshot     catalogResponse
 	sessionsByID map[string]sessionRecord
 }
 
@@ -220,6 +220,9 @@ func (s *server) handleSessionEvents(w http.ResponseWriter, r *http.Request, rec
 		return
 	}
 	limit := 0
+	if !hasBefore && !hasAfter {
+		limit = 200
+	}
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 		limit, err = strconv.Atoi(raw)
 		if err != nil || limit < 0 {
@@ -322,7 +325,7 @@ func (s *server) handleFiles(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) refreshCatalogIfNeeded() error {
 	s.mu.RLock()
-	fresh := time.Since(s.lastRefresh) < 2*time.Second && len(s.snapshot.Sessions) > 0
+	fresh := time.Since(s.lastRefresh) < 15*time.Second && len(s.snapshot.Sessions) > 0
 	s.mu.RUnlock()
 	if fresh {
 		return nil
@@ -330,7 +333,7 @@ func (s *server) refreshCatalogIfNeeded() error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if time.Since(s.lastRefresh) < 2*time.Second && len(s.snapshot.Sessions) > 0 {
+	if time.Since(s.lastRefresh) < 15*time.Second && len(s.snapshot.Sessions) > 0 {
 		return nil
 	}
 	catalog, byID, err := buildCatalog(s.agentDir)

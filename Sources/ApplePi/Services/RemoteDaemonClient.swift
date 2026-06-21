@@ -53,13 +53,19 @@ struct RemoteDaemonClient {
         )
     }
 
-    func loadSessionEvents(host: PiHostConfiguration, sessionID: String, tokenOverride: String? = nil) async throws -> [SessionEvent] {
+    func loadSessionEvents(
+        host: PiHostConfiguration,
+        sessionID: String,
+        limit: Int = 200,
+        tokenOverride: String? = nil
+    ) async throws -> [SessionEvent] {
         let encodedID = sessionID.addingPercentEncoding(
             withAllowedCharacters: CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))
         ) ?? sessionID
         let response: EventPageResponse = try await send(
             host: host,
             path: "/sessions/\(encodedID)/events",
+            queryItems: [URLQueryItem(name: "limit", value: String(limit))],
             tokenOverride: tokenOverride
         )
         return response.events.compactMap { SessionEventParser.decode(line: $0.raw, at: $0.line) }
