@@ -120,11 +120,17 @@ final class ChatSessionStore: ObservableObject {
     /// Close every open tab. Used when the host changes so the user does
     /// not see stale conversations from the previous host. After this call
     /// `selectedTabID` is `nil` and the workspace is empty.
-    func closeAll() {
+    ///
+    /// - Parameter notify: when `true` (the default) `onSessionExit` fires
+    ///   so observers can schedule a catalog refresh. Pass `false` when
+    ///   the caller is already triggering a refresh itself (e.g.
+    ///   `PiAppState.clearCatalog` immediately calls `refreshCatalog`
+    ///   afterwards).
+    func closeAll(notify: Bool = true) {
         guard !tabs.isEmpty else { return }
         tabs.removeAll()
         selectedTabID = nil
-        onSessionExit?()
+        if notify { onSessionExit?() }
     }
 
     func select(_ tab: ChatSession) {
