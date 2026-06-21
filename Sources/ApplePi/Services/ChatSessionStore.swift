@@ -117,6 +117,16 @@ final class ChatSessionStore: ObservableObject {
         onSessionExit?()
     }
 
+    /// Close every open tab. Used when the host changes so the user does
+    /// not see stale conversations from the previous host. After this call
+    /// `selectedTabID` is `nil` and the workspace is empty.
+    func closeAll() {
+        guard !tabs.isEmpty else { return }
+        tabs.removeAll()
+        selectedTabID = nil
+        onSessionExit?()
+    }
+
     func select(_ tab: ChatSession) {
         selectedTabID = tab.id
     }

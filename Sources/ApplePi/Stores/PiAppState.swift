@@ -9,13 +9,16 @@ final class PiAppState: ObservableObject {
     @Published var host = PiHostConfiguration() {
         didSet {
             guard !isLoadingPersistedState else { return }
-            let isHostScopeChange = host.mode != oldValue.mode
-            if isHostScopeChange {
-                clearCatalog()
-            }
+            // Any change to `host` (mode, hostname, user, port, identity file,
+            // auth method) means the previous catalog and open tabs reference
+            // a different machine. Always reset to a known-empty state and
+            // kick off a fresh catalog load — never reuse the old project
+            // working directory as filter context, since it is meaningless
+            // on the new host.
+            clearCatalog()
             saveHost()
             refreshConfigurationSummary()
-            refreshCatalog(usesActiveProjectContext: !isHostScopeChange)
+            refreshCatalog(usesActiveProjectContext: false)
         }
     }
     @Published private(set) var projects: [PiProject] = []
@@ -205,6 +208,11 @@ final class PiAppState: ObservableObject {
                     guard self.catalogRefreshID == refreshID else { return }
                     self.isLoadingCatalog = false
                     self.statusMessage = error.localizedDescription
+                    // Drop the stale data so the user is not looking at the
+                    // old host's projects while the error banner is up.
+                    self.projects = []
+                    self.sessions = []
+                    self.selection = nil
                 }
             }
         }
@@ -427,23 +435,30 @@ final class PiAppState: ObservableObject {
 
     /// Applies a parsed `~/.ssh/config` entry to the current host settings.
     /// Fields the user has customised manually are not overwritten.
+    ///
+    /// We mutate a local copy and assign once at the end. Each per-field
+    /// write to `host` fires `host.didSet` which in turn schedules a
+    /// catalog refresh; assigning the whole struct keeps the refresh to a
+    /// single round trip.
     func applySSHConfigEntry(_ entry: SSHConfigEntry) {
-        host.remoteSSHConfigAlias = entry.hostPatterns.joined(separator: ",")
+        var next = host
+        next.remoteSSHConfigAlias = entry.hostPatterns.joined(separator: ",")
         if let hostName = entry.hostName?.nilIfBlank {
-            host.remoteHost = hostName
-        } else if host.remoteHost.isEmpty, let first = entry.hostPatterns.first(where: { !$0.hasSuffix("*") && !$0.hasPrefix("*") }) {
-            host.remoteHost = first
+            next.remoteHost = hostName
+        } else if next.remoteHost.isEmpty, let first = entry.hostPatterns.first(where: { !$0.hasSuffix("*") && !$0.hasPrefix("*") }) {
+            next.remoteHost = first
         }
         if let user = entry.user?.nilIfBlank {
-            host.remoteUser = user
+            next.remoteUser = user
         }
         if let port = entry.port {
-            host.remotePort = port
+            next.remotePort = port
         }
         if let identityFile = entry.identityFile?.nilIfBlank {
-            host.remoteIdentityFile = identityFile
-            host.remoteAuthMethod = .publicKey
+            next.remoteIdentityFile = identityFile
+            next.remoteAuthMethod = .publicKey
         }
+        host = next
     }
 
     /// Clears the alias selection so the host fields can be edited freely.
@@ -567,6 +582,18 @@ final class PiAppState: ObservableObject {
         projects = []
         sessions = []
         selection = nil
+        // Open chat tabs reference `sessionPath` values from the previous
+        // host, so close them. Without this the user sees stale
+        // conversations after a host change.
+        chatWorkspace.closeAll(notify: false)
+        // Also wipe the SSH directory browser state — it is per-host and
+        // would otherwise flash stale entries when the user reopens the
+        // "New Session in Folder" sheet.
+        remoteDirectoryEntries = []
+        remoteDirectoryPath = ""
+        remoteDirectoryParent = nil
+        remoteDirectoryStatus = ""
+        newSessionWorkingDirectory = ""
     }
 
     private func loadHost() {
