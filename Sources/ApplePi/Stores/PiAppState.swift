@@ -399,7 +399,7 @@ final class PiAppState: ObservableObject {
         scheduleCatalogRefresh()
     }
 
-    private func eventLoader(for session: PiSessionSummary) -> (() throws -> [SessionEvent])? {
+    private func eventLoader(for session: PiSessionSummary) -> (@Sendable () throws -> [SessionEvent])? {
         guard host.mode == .remoteSSH else { return nil }
         let remoteHost = host
         let remotePath = session.filePath

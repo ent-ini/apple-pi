@@ -69,22 +69,22 @@ private struct ChatTabButton: View {
     let onClose: () -> Void
 
     var body: some View {
-        // The select and close affordances live on disjoint HStack children
-        // for the same reason as the old terminal tab button: nested Button
-        // hit-testing on macOS is fiddly and the close button needs its own
-        // hit area.
         HStack(spacing: 0) {
-            HStack(spacing: 7) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 7, height: 7)
-                Text(tab.title)
-                    .font(.callout)
-                    .lineLimit(1)
-                    .frame(maxWidth: 180, alignment: .leading)
+            Button(action: onSelect) {
+                HStack(spacing: 7) {
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 7, height: 7)
+                    Text(tab.title)
+                        .font(.callout)
+                        .lineLimit(1)
+                        .frame(maxWidth: 180, alignment: .leading)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .contentShape(Rectangle())
-            .onTapGesture { onSelect() }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(.isButton)
             .contextMenu {
                 Button("Close", action: onClose)
             }

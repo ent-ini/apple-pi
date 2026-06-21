@@ -18,13 +18,16 @@ final class ChatSession: ObservableObject, Identifiable {
     /// Path to the on-disk jsonl, if this session is backed by a file. For
     /// brand-new sessions the path is assigned once the file is created.
     let sessionPath: String?
-    private let eventLoader: (() throws -> [SessionEvent])?
+    private let eventLoader: (@Sendable () throws -> [SessionEvent])?
+    private var hasLoadedOnce = false
+    private var lastLoadedModificationDate: Date?
+    private var loadTask: Task<Void, Never>?
 
     init(
         key: String,
         title: String,
         sessionPath: String? = nil,
-        eventLoader: (() throws -> [SessionEvent])? = nil
+        eventLoader: (@Sendable () throws -> [SessionEvent])? = nil
     ) {
         self.key = key
         self.title = title
@@ -34,27 +37,75 @@ final class ChatSession: ObservableObject, Identifiable {
 
     /// Reload the session from disk. Safe to call multiple times; replaces
     /// the current event list.
-    func loadFromDisk() {
+    func loadFromDisk(force: Bool = false) {
+        guard !isLoading else { return }
+
+        let sessionPath = self.sessionPath
+        let eventLoader = self.eventLoader
+        let previousLoadedOnce = hasLoadedOnce
+        let previousModificationDate = lastLoadedModificationDate
+
         isLoading = true
         loadError = nil
-        do {
-            let parsed: [SessionEvent]
-            if let eventLoader {
-                parsed = try eventLoader()
-            } else if let sessionPath {
-                parsed = try SessionEventParser.parse(fileURL: URL(fileURLWithPath: sessionPath))
-            } else {
-                statusMessage = "Session is not backed by a file yet."
-                isLoading = false
-                return
+        loadTask?.cancel()
+        loadTask = Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                let parsed: [SessionEvent]
+                let modificationDate: Date?
+
+                if let eventLoader {
+                    if !force && previousLoadedOnce {
+                        await MainActor.run {
+                            self?.isLoading = false
+                            self?.loadTask = nil
+                        }
+                        return
+                    }
+                    parsed = try eventLoader()
+                    modificationDate = nil
+                } else if let sessionPath {
+                    let fileURL = URL(fileURLWithPath: sessionPath)
+                    let resourceValues = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey])
+                    modificationDate = resourceValues?.contentModificationDate
+                    if !force && previousLoadedOnce && modificationDate == previousModificationDate {
+                        await MainActor.run {
+                            self?.isLoading = false
+                            self?.loadTask = nil
+                        }
+                        return
+                    }
+                    parsed = try SessionEventParser.parse(fileURL: fileURL)
+                } else {
+                    await MainActor.run {
+                        self?.statusMessage = "Session is not backed by a file yet."
+                        self?.isLoading = false
+                        self?.loadTask = nil
+                    }
+                    return
+                }
+
+                await MainActor.run {
+                    self?.events = parsed
+                    self?.statusMessage = parsed.isEmpty ? "Session is empty." : "\(parsed.count) events"
+                    self?.hasLoadedOnce = true
+                    self?.lastLoadedModificationDate = modificationDate
+                    self?.isLoading = false
+                    self?.loadTask = nil
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    self?.isLoading = false
+                    self?.loadTask = nil
+                }
+            } catch {
+                await MainActor.run {
+                    self?.loadError = error.localizedDescription
+                    self?.statusMessage = "Failed to read session: \(error.localizedDescription)"
+                    self?.isLoading = false
+                    self?.loadTask = nil
+                }
             }
-            events = parsed
-            statusMessage = parsed.isEmpty ? "Session is empty." : "\(parsed.count) events"
-        } catch {
-            loadError = error.localizedDescription
-            statusMessage = "Failed to read session: \(error.localizedDescription)"
         }
-        isLoading = false
     }
 
     /// Replace the title (e.g. when the user renames the tab).
@@ -91,7 +142,7 @@ final class ChatSessionStore: ObservableObject {
         key: String,
         title: String,
         sessionPath: String? = nil,
-        eventLoader: (() throws -> [SessionEvent])? = nil
+        eventLoader: (@Sendable () throws -> [SessionEvent])? = nil
     ) -> ChatSession {
         if let existing = tabs.first(where: { $0.key == key }) {
             select(existing)
@@ -115,7 +166,7 @@ final class ChatSessionStore: ObservableObject {
         key: String,
         title: String,
         sessionPath: String?,
-        eventLoader: (() throws -> [SessionEvent])? = nil
+        eventLoader: (@Sendable () throws -> [SessionEvent])? = nil
     ) -> ChatSession {
         openTab(key: key, title: title, sessionPath: sessionPath, eventLoader: eventLoader)
     }
