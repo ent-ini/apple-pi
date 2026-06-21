@@ -286,7 +286,9 @@ struct SettingsView: View {
         guard let pending = pendingHostCommit else { return "" }
         let modeChanged = pending.mode != appState.host.mode
         let hostChanged = pending.remoteHost != appState.host.remoteHost
-        if modeChanged && pending.mode == .remoteSSH {
+        if pending.usesRemoteDaemonTransport {
+            return "Switching to the remote API will close all open chat tabs and reload the session catalog from \(pending.remoteDaemonDisplayAddress.isEmpty ? "the configured daemon" : pending.remoteDaemonDisplayAddress)."
+        } else if modeChanged && pending.mode == .remoteSSH {
             return "Switching to Remote SSH will close all open chat tabs and reload the session catalog from \(pending.remoteHost.isEmpty ? "the new host" : pending.remoteHost). An SSH connection will be opened."
         } else if modeChanged {
             return "Switching to Local Mac will close all open chat tabs and reload the session catalog from your local Pi agent directory."
@@ -304,10 +306,30 @@ struct SettingsView: View {
     }
 
     private func performHostCommit() {
-        if let pending = pendingHostCommit {
-            appState.host = pending
+        guard let pending = pendingHostCommit else { return }
+
+        if pending.hasRemoteDaemonConfigured {
+            guard pending.remoteDaemonBaseURL != nil else {
+                apiTokenStatus = "Remote API URL is invalid."
+                return
+            }
+
+            if !apiTokenInput.isEmpty {
+                if let error = appState.saveRemoteDaemonToken(apiTokenInput, for: pending) {
+                    apiTokenStatus = error
+                    return
+                }
+                apiTokenInput = ""
+                apiTokenStatus = "Saved."
+            } else if !appState.hasRemoteDaemonTokenStored(for: pending) {
+                apiTokenStatus = "Save a bearer token before enabling the remote API URL."
+                return
+            }
         }
+
+        appState.host = pending
         pendingHostCommit = nil
+        refreshAPITokenStatus()
     }
 
     private func commitHostIfChanged(force: Bool) {
@@ -466,7 +488,7 @@ struct SettingsView: View {
     }
 
     private var notificationExtensionHelpText: String {
-        if appState.host.mode == .remoteSSH {
+        if appState.host.usesRemoteDaemonTransport || appState.host.mode == .remoteSSH {
             return "Remote sessions need a Pi notification helper installed on the remote host. The bundled helper is only available to local sessions started from this app."
         }
 

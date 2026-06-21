@@ -15,7 +15,7 @@ struct RemoteDirectoryEntry: Identifiable, Hashable, Sendable {
 
 struct RemoteDirectoryService: Sendable {
     func listDirectories(host: PiHostConfiguration, path: String?) async throws -> RemoteDirectoryListing {
-        if host.hasRemoteDaemonConfigured {
+        if host.usesRemoteDaemonTransport {
             return try await RemoteDaemonClient().listDirectories(host: host, path: path)
         }
 
@@ -91,7 +91,7 @@ struct RemoteDirectoryService: Sendable {
         var errorDescription: String? {
             switch self {
             case .missingHost:
-                return "Remote SSH host is not configured."
+                return "Remote host is not configured."
             case .scanFailed(let message):
                 return message.isEmpty ? "Remote folder scan failed." : message
             }

@@ -780,7 +780,7 @@ private struct SessionListRow: View {
             Button("New Session in Same Folder") {
                 appState.openNewSession(in: session.workingDirectory)
             }
-            if appState.host.mode == .local {
+            if !appState.host.usesRemoteDaemonTransport && appState.host.mode == .local {
                 Divider()
                 Button("Delete Session", role: .destructive) {
                     isConfirmingDelete = true

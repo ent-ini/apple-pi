@@ -118,6 +118,12 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
         remoteDaemonDisplayAddress.nilIfBlank != nil
     }
 
+    /// Remote read APIs should prefer pi-appd whenever it is configured,
+    /// even if the old host mode picker is still left on Local Mac.
+    var usesRemoteDaemonTransport: Bool {
+        hasRemoteDaemonConfigured
+    }
+
     var remoteDaemonBaseURL: URL? {
         let raw = remoteDaemonDisplayAddress
         guard let value = raw.nilIfBlank else { return nil }

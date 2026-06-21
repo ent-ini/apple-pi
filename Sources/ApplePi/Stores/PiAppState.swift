@@ -231,7 +231,7 @@ final class PiAppState: ObservableObject {
     }
 
     private var fallbackWorkingDirectory: String {
-        host.mode == .remoteSSH ? "~" : NSHomeDirectory()
+        host.usesRemoteDaemonTransport || host.mode == .remoteSSH ? "~" : NSHomeDirectory()
     }
 
     private var preferredWorkingDirectory: String {
@@ -280,7 +280,7 @@ final class PiAppState: ObservableObject {
     }
 
     func chooseNewSessionFolder() {
-        guard host.mode == .local else {
+        guard !host.usesRemoteDaemonTransport && host.mode == .local else {
             refreshRemoteDirectory()
             return
         }
@@ -297,7 +297,7 @@ final class PiAppState: ObservableObject {
     }
 
     func refreshRemoteDirectory() {
-        guard host.mode == .remoteSSH else { return }
+        guard host.usesRemoteDaemonTransport || host.mode == .remoteSSH else { return }
         loadRemoteDirectory(newSessionWorkingDirectory.nilIfBlank ?? remoteDirectoryPath.nilIfBlank ?? "~")
     }
 
@@ -318,7 +318,7 @@ final class PiAppState: ObservableObject {
     }
 
     private func prepareRemoteDirectoryBrowserIfNeeded() {
-        guard host.mode == .remoteSSH else { return }
+        guard host.usesRemoteDaemonTransport || host.mode == .remoteSSH else { return }
         let initialPath = newSessionWorkingDirectory.nilIfBlank ?? remoteDirectoryPath.nilIfBlank ?? "~"
         newSessionWorkingDirectory = initialPath
         loadRemoteDirectory(initialPath)
@@ -400,7 +400,7 @@ final class PiAppState: ObservableObject {
     }
 
     private func eventLoader(for session: PiSessionSummary) -> (@Sendable () async throws -> [SessionEvent])? {
-        guard host.mode == .remoteSSH else { return nil }
+        guard host.usesRemoteDaemonTransport || host.mode == .remoteSSH else { return nil }
         let remoteHost = host
         let remoteSession = session
         return {
@@ -409,7 +409,7 @@ final class PiAppState: ObservableObject {
     }
 
     func delete(_ session: PiSessionSummary) {
-        guard host.mode == .local else {
+        guard !host.usesRemoteDaemonTransport && host.mode == .local else {
             statusMessage = "Remote session deletion is not supported from pi-app."
             return
         }
@@ -537,7 +537,7 @@ final class PiAppState: ObservableObject {
     }
 
     func refreshConfigurationSummary() {
-        if host.mode == .remoteSSH {
+        if host.usesRemoteDaemonTransport || host.mode == .remoteSSH {
             configurationSummary = PiConfigurationSummary.remote(
                 host: host,
                 projectDirectory: activeProject?.workingDirectory

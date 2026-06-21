@@ -16,7 +16,7 @@ struct NewSessionSheet: View {
                 Spacer()
             }
 
-            if appState.host.mode == .remoteSSH {
+            if appState.host.usesRemoteDaemonTransport || appState.host.mode == .remoteSSH {
                 VStack(alignment: .leading, spacing: 12) {
                     RemoteFolderBrowser()
                     Divider()
@@ -54,7 +54,7 @@ struct NewSessionSheet: View {
             }
         }
         .padding(24)
-        .frame(width: appState.host.mode == .remoteSSH ? 640 : 520)
+        .frame(width: (appState.host.usesRemoteDaemonTransport || appState.host.mode == .remoteSSH) ? 640 : 520)
     }
 }
 

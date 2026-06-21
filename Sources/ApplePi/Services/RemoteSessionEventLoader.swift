@@ -2,7 +2,7 @@ import Foundation
 
 enum RemoteSessionEventLoader {
     static func load(host: PiHostConfiguration, session: PiSessionSummary) async throws -> [SessionEvent] {
-        if host.hasRemoteDaemonConfigured {
+        if host.usesRemoteDaemonTransport {
             return try await RemoteDaemonClient().loadSessionEvents(host: host, sessionID: session.id)
         }
         return try loadOverSSH(host: host, remotePath: session.filePath)

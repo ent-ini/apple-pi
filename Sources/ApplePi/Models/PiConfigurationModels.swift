@@ -35,7 +35,7 @@ struct PiConfigurationSummary: Equatable, Sendable {
     }
 
     var trustDisplayTitle: String {
-        if isRemote { return "Remote SSH" }
+        if isRemote { return "Remote API" }
         guard hasProjectContext else { return "Global" }
         if settingsCount <= 1 && contextFileCount <= 1 {
             return "Defaults"
@@ -45,7 +45,7 @@ struct PiConfigurationSummary: Equatable, Sendable {
 
     var trustDetail: String {
         if isRemote {
-            return "This session group is on a remote SSH host. Apple Pi starts sessions there, but local file actions and trust checks are unavailable."
+            return "This session group is on a remote host reached through pi-appd. Local file actions and trust checks are unavailable from the Mac client."
         }
         guard hasProjectContext else {
             return "This session group is not tied to a folder. Pi will use global settings and built-in defaults."
