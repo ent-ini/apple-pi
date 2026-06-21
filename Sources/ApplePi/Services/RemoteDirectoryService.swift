@@ -15,47 +15,7 @@ struct RemoteDirectoryEntry: Identifiable, Hashable, Sendable {
 
 struct RemoteDirectoryService: Sendable {
     func listDirectories(host: PiHostConfiguration, path: String?) async throws -> RemoteDirectoryListing {
-        if host.usesRemoteDaemonTransport {
-            return try await RemoteDaemonClient().listDirectories(host: host, path: path)
-        }
-
-        guard !host.remoteAddress.isEmpty else {
-            throw RemoteDirectoryError.missingHost
-        }
-
-        var arguments = ["-o", "ConnectTimeout=8"]
-        arguments.append(contentsOf: RemoteSSHSupport.commonArguments(for: host))
-        if host.hasExplicitIdentityFile {
-            arguments.append(contentsOf: ["-i", host.remoteIdentityFile.expandingTilde])
-        }
-        arguments.append(host.remoteAddress)
-        arguments.append(remoteDirectoryScript(path: path?.nilIfBlank ?? "~"))
-
-        let environment = RemoteSSHSupport.remoteEnvironment(
-            for: host,
-            askpassExecutable: RemoteSSHSupport.bundledAskpassPath()
-        )
-
-        let result = try ProcessRunner.run(
-            executable: "/usr/bin/ssh",
-            arguments: arguments,
-            environment: environment,
-            timeout: 12
-        )
-        if result.timedOut {
-            throw RemoteDirectoryError.scanFailed("Remote folder scan timed out.")
-        }
-        guard result.terminationStatus == 0 else {
-            let message = String(data: result.standardError, encoding: .utf8) ?? "Remote folder scan failed."
-            throw RemoteDirectoryError.scanFailed(message.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-
-        let record = try JSONDecoder().decode(RemoteDirectoryListingRecord.self, from: result.standardOutput)
-        return RemoteDirectoryListing(
-            path: record.path,
-            parent: record.parent,
-            directories: record.directories.map { RemoteDirectoryEntry(name: $0.name, path: $0.path) }
-        )
+        try await RemoteDaemonClient().listDirectories(host: host, path: path)
     }
 
     private func remoteDirectoryScript(path: String) -> String {

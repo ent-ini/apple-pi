@@ -1,11 +1,26 @@
 import Foundation
 
 struct RemoteDaemonClient {
-    func loadCatalog(host: PiHostConfiguration, activeProjectDirectory: String?) async throws -> PiCatalogSnapshot {
+    func testConnection(host: PiHostConfiguration, tokenOverride: String? = nil) async throws -> String {
+        let _: HealthResponse = try await send(
+            host: host,
+            path: "/healthz",
+            tokenOverride: tokenOverride
+        )
+        let catalog: CatalogResponse = try await send(
+            host: host,
+            path: "/sessions",
+            tokenOverride: tokenOverride
+        )
+        return "Connected. \(catalog.projects.count) projects, \(catalog.sessions.count) sessions."
+    }
+
+    func loadCatalog(host: PiHostConfiguration, activeProjectDirectory: String?, tokenOverride: String? = nil) async throws -> PiCatalogSnapshot {
         let response: CatalogResponse = try await send(
             host: host,
             path: "/sessions",
-            queryItems: activeProjectDirectory?.nilIfBlank.map { [URLQueryItem(name: "projectDirectory", value: $0)] } ?? []
+            queryItems: activeProjectDirectory?.nilIfBlank.map { [URLQueryItem(name: "projectDirectory", value: $0)] } ?? [],
+            tokenOverride: tokenOverride
         )
         return PiCatalogSnapshot(
             projects: response.projects.map { record in
@@ -38,20 +53,24 @@ struct RemoteDaemonClient {
         )
     }
 
-    func loadSessionEvents(host: PiHostConfiguration, sessionID: String) async throws -> [SessionEvent] {
-        let encodedID = sessionID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? sessionID
+    func loadSessionEvents(host: PiHostConfiguration, sessionID: String, tokenOverride: String? = nil) async throws -> [SessionEvent] {
+        let encodedID = sessionID.addingPercentEncoding(
+            withAllowedCharacters: CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))
+        ) ?? sessionID
         let response: EventPageResponse = try await send(
             host: host,
-            path: "/sessions/\(encodedID)/events"
+            path: "/sessions/\(encodedID)/events",
+            tokenOverride: tokenOverride
         )
         return response.events.compactMap { SessionEventParser.decode(line: $0.raw, at: $0.line) }
     }
 
-    func listDirectories(host: PiHostConfiguration, path: String?) async throws -> RemoteDirectoryListing {
+    func listDirectories(host: PiHostConfiguration, path: String?, tokenOverride: String? = nil) async throws -> RemoteDirectoryListing {
         let response: FileListResponse = try await send(
             host: host,
             path: "/files",
-            queryItems: path?.nilIfBlank.map { [URLQueryItem(name: "path", value: $0)] } ?? []
+            queryItems: path?.nilIfBlank.map { [URLQueryItem(name: "path", value: $0)] } ?? [],
+            tokenOverride: tokenOverride
         )
         return RemoteDirectoryListing(
             path: response.path,
@@ -65,18 +84,20 @@ struct RemoteDaemonClient {
     private func send<Response: Decodable>(
         host: PiHostConfiguration,
         path: String,
-        queryItems: [URLQueryItem] = []
+        queryItems: [URLQueryItem] = [],
+        tokenOverride: String? = nil
     ) async throws -> Response {
         guard let baseURL = host.remoteDaemonBaseURL else {
             throw RemoteDaemonError.missingBaseURL
         }
-        guard let token = RemoteDaemonTokenStore.readToken(for: host) else {
+        guard let token = tokenOverride?.nilIfBlank ?? RemoteDaemonTokenStore.readToken(for: host) else {
             throw RemoteDaemonError.missingToken
         }
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             throw RemoteDaemonError.invalidBaseURL
         }
-        components.path = path
+        let basePath = components.percentEncodedPath
+        components.percentEncodedPath = joinedPath(basePath: basePath, requestPath: path)
         components.queryItems = queryItems.isEmpty ? nil : queryItems
         guard let url = components.url else {
             throw RemoteDaemonError.invalidBaseURL
@@ -113,6 +134,17 @@ struct RemoteDaemonClient {
         } catch {
             throw RemoteDaemonError.decodingFailed(error.localizedDescription)
         }
+    }
+}
+
+private func joinedPath(basePath: String, requestPath: String) -> String {
+    let left = basePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    let right = requestPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    switch (left.isEmpty, right.isEmpty) {
+    case (true, true): return "/"
+    case (true, false): return "/\(right)"
+    case (false, true): return "/\(left)"
+    case (false, false): return "/\(left)/\(right)"
     }
 }
 
@@ -168,6 +200,10 @@ enum RemoteDaemonError: LocalizedError {
             return "Could not decode remote API response: \(detail)"
         }
     }
+}
+
+private struct HealthResponse: Decodable {
+    let ok: Bool
 }
 
 private struct CatalogResponse: Decodable {

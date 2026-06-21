@@ -56,49 +56,10 @@ final class PiSessionCatalogService {
     }
 
     private func loadRemoteCatalog(host: PiHostConfiguration, activeProjectDirectory: String?) async throws -> PiCatalogSnapshot {
-        guard !host.remoteAddress.isEmpty else {
-            return PiCatalogSnapshot(projects: [], sessions: [])
-        }
-
-        var arguments = ["-o", "ConnectTimeout=8"]
-        arguments.append(contentsOf: RemoteSSHSupport.commonArguments(for: host))
-        if host.hasExplicitIdentityFile {
-            arguments.append(contentsOf: ["-i", host.remoteIdentityFile.expandingTilde])
-        }
-        arguments.append(host.remoteAddress)
-        arguments.append(remoteCatalogScript(agentDirectory: host.agentDirectory, projectDirectory: activeProjectDirectory))
-
-        let environment = RemoteSSHSupport.remoteEnvironment(
-            for: host,
-            askpassExecutable: RemoteSSHSupport.bundledAskpassPath()
+        try await RemoteDaemonClient().loadCatalog(
+            host: host,
+            activeProjectDirectory: activeProjectDirectory
         )
-
-        let result = try ProcessRunner.run(
-            executable: "/usr/bin/ssh",
-            arguments: arguments,
-            environment: environment,
-            timeout: 20
-        )
-        if result.timedOut {
-            throw CatalogError.remoteScanFailed("Remote session scan timed out.")
-        }
-        guard result.terminationStatus == 0 else {
-            let message = String(data: result.standardError, encoding: .utf8) ?? "Remote session scan failed."
-            throw CatalogError.remoteScanFailed(message.trimmingCharacters(in: .whitespacesAndNewlines))
-        }
-
-        let remoteRecords = try JSONDecoder().decode([RemoteSessionRecord].self, from: result.standardOutput)
-        let sessions = remoteRecords.compactMap { record in
-            parseSessionRecord(
-                filePath: record.filePath,
-                projectID: record.projectID,
-                modifiedAt: Date(timeIntervalSince1970: record.modifiedAt),
-                lines: record.lines
-            )
-        }
-        .sorted { $0.modifiedAt > $1.modifiedAt }
-
-        return snapshot(from: sessions)
     }
 
     private func snapshot(from sessions: [PiSessionSummary]) -> PiCatalogSnapshot {

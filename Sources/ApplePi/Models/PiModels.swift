@@ -9,7 +9,7 @@ enum PiHostMode: String, Codable, CaseIterable, Identifiable, Sendable {
     var title: String {
         switch self {
         case .local: "Local Mac"
-        case .remoteSSH: "Remote SSH"
+        case .remoteSSH: "Remote API"
         }
     }
 }

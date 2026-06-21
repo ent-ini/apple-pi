@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct SettingsView: View {
@@ -54,16 +55,17 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .padding(20)
         .frame(width: 560)
-        .onAppear { reloadSSHCollections() }
+        .onAppear {
+            if editingHost == nil { editingHost = appState.host }
+            refreshAPITokenStatus()
+        }
         .onChange(of: appState.host) { _, newValue in
             if editingHost != newValue {
                 editingHost = newValue
             }
-            refreshPasswordStatus()
             refreshAPITokenStatus()
         }
         .onChange(of: editingHost) { _, _ in
-            refreshPasswordStatus()
             refreshAPITokenStatus()
         }
         .onDisappear { commitHostIfChanged(force: true) }
@@ -80,18 +82,6 @@ struct SettingsView: View {
             }
         } message: {
             Text(hostCommitMessage)
-        }
-        .confirmationDialog(
-            "Clear stored password?",
-            isPresented: $isConfirmingClearPassword,
-            titleVisibility: .visible
-        ) {
-            Button("Clear Password", role: .destructive) {
-                clearPassword()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The stored password for this host will be deleted and cannot be recovered. You will need to re-enter it to use password auth again.")
         }
         .confirmationDialog(
             "Clear stored API token?",
@@ -182,7 +172,7 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Host sections (Pi Host + Remote SSH + Apply/Discard bar)
+    // MARK: - Host sections (Pi Host + Remote API + Apply/Discard bar)
 
     @ViewBuilder
     private var hostSections: some View {
@@ -202,31 +192,6 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
         }
 
-        Section("Remote SSH") {
-            editingSshConfigAliasPicker
-            TextField("Host", text: editingHostBinding(\.remoteHost))
-            TextField("User", text: editingHostBinding(\.remoteUser))
-            Stepper(value: editingHostBinding(\.remotePort), in: 1...65535) {
-                Text("Port \(editingHost?.remotePort ?? appState.host.remotePort)")
-            }
-            TextField("Remote Pi executable", text: editingHostBinding(\.remotePiExecutable))
-
-            Picker("Authentication", selection: editingHostBinding(\.remoteAuthMethod)) {
-                ForEach(RemoteAuthMethod.allCases) { method in
-                    Text(method.title).tag(method)
-                }
-            }
-            .onChange(of: editingHost?.remoteAuthMethod) { _, newValue in
-                if newValue == .password { refreshPasswordStatus() }
-            }
-
-            if editingHost?.remoteAuthMethod == .publicKey {
-                editingSshIdentityFilePicker
-            } else {
-                sshPasswordField
-            }
-        }
-
         Section {
             TextField("pi-appd URL or IP", text: editingHostBinding(\.remoteDaemonURL))
                 .onChange(of: editingHost?.remoteDaemonURL) { _, _ in
@@ -234,12 +199,28 @@ struct SettingsView: View {
                     refreshAPITokenStatus()
                 }
             remoteAPITokenField
+            HStack {
+                Button("Test Remote API") {
+                    testRemoteAPI()
+                }
+                Button("Copy curl") {
+                    copyCurlCommand()
+                }
+                Spacer()
+            }
         } header: {
             Text("Remote API (pi-appd)")
         } footer: {
-            Text("When a pi-appd URL and token are configured, remote catalog loading, session opening, and remote folder browsing use HTTP instead of one-shot SSH commands. Leave this blank to keep using SSH only.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("pi-appd is now the only remote transport. Configure URL and token, then use Test Remote API before Apply.")
+                if let curlCommand {
+                    Text(curlCommand)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
 
         if hasPendingHostChanges {
@@ -289,7 +270,7 @@ struct SettingsView: View {
         if pending.usesRemoteDaemonTransport {
             return "Switching to the remote API will close all open chat tabs and reload the session catalog from \(pending.remoteDaemonDisplayAddress.isEmpty ? "the configured daemon" : pending.remoteDaemonDisplayAddress)."
         } else if modeChanged && pending.mode == .remoteSSH {
-            return "Switching to Remote SSH will close all open chat tabs and reload the session catalog from \(pending.remoteHost.isEmpty ? "the new host" : pending.remoteHost). An SSH connection will be opened."
+            return "Switching to Remote API mode without a configured pi-appd URL will fail. Set the daemon URL and token first."
         } else if modeChanged {
             return "Switching to Local Mac will close all open chat tabs and reload the session catalog from your local Pi agent directory."
         } else if hostChanged {
@@ -477,6 +458,13 @@ struct SettingsView: View {
         editingHost ?? appState.host
     }
 
+    private var curlCommand: String? {
+        guard let baseURL = currentEditingHost.remoteDaemonBaseURL else { return nil }
+        let token = apiTokenInput.nilIfBlank ?? RemoteDaemonTokenStore.readToken(for: currentEditingHost)
+        guard let token else { return nil }
+        return "curl -H \"Authorization: Bearer \(token)\" \(baseURL.appending(path: "healthz").absoluteString.shellQuoted)"
+    }
+
     private func notificationBinding<Value>(_ keyPath: WritableKeyPath<TerminalNotificationPreferences, Value>) -> Binding<Value> {
         Binding(
             get: { appState.appearance.notifications[keyPath: keyPath] },
@@ -594,6 +582,33 @@ struct SettingsView: View {
         apiTokenStatus = appState.hasRemoteDaemonTokenStored(for: currentEditingHost)
             ? "A token is stored for this daemon endpoint."
             : nil
+    }
+
+    private func testRemoteAPI() {
+        let host = currentEditingHost
+        let tokenOverride = apiTokenInput.nilIfBlank
+        Task {
+            do {
+                let message = try await RemoteDaemonClient().testConnection(host: host, tokenOverride: tokenOverride)
+                await MainActor.run {
+                    apiTokenStatus = message
+                }
+            } catch {
+                await MainActor.run {
+                    apiTokenStatus = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func copyCurlCommand() {
+        guard let curlCommand else {
+            apiTokenStatus = "Set URL and token first."
+            return
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(curlCommand, forType: .string)
+        apiTokenStatus = "curl command copied."
     }
 
     private func savePassword() {
