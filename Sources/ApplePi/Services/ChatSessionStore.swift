@@ -18,7 +18,7 @@ final class ChatSession: ObservableObject, Identifiable {
     /// Path to the on-disk jsonl, if this session is backed by a file. For
     /// brand-new sessions the path is assigned once the file is created.
     let sessionPath: String?
-    private let eventLoader: (@Sendable () throws -> [SessionEvent])?
+    private let eventLoader: (@Sendable () async throws -> [SessionEvent])?
     private var hasLoadedOnce = false
     private var lastLoadedModificationDate: Date?
     private var loadTask: Task<Void, Never>?
@@ -27,7 +27,7 @@ final class ChatSession: ObservableObject, Identifiable {
         key: String,
         title: String,
         sessionPath: String? = nil,
-        eventLoader: (@Sendable () throws -> [SessionEvent])? = nil
+        eventLoader: (@Sendable () async throws -> [SessionEvent])? = nil
     ) {
         self.key = key
         self.title = title
@@ -50,7 +50,7 @@ final class ChatSession: ObservableObject, Identifiable {
         loadTask?.cancel()
         loadTask = Task { [weak self] in
             let outcome = await Task.detached(priority: .userInitiated) {
-                SessionLoadWorker.load(
+                await SessionLoadWorker.load(
                     sessionPath: sessionPath,
                     eventLoader: eventLoader,
                     force: force,
@@ -118,7 +118,7 @@ final class ChatSessionStore: ObservableObject {
         key: String,
         title: String,
         sessionPath: String? = nil,
-        eventLoader: (@Sendable () throws -> [SessionEvent])? = nil
+        eventLoader: (@Sendable () async throws -> [SessionEvent])? = nil
     ) -> ChatSession {
         if let existing = tabs.first(where: { $0.key == key }) {
             select(existing)
@@ -142,7 +142,7 @@ final class ChatSessionStore: ObservableObject {
         key: String,
         title: String,
         sessionPath: String?,
-        eventLoader: (@Sendable () throws -> [SessionEvent])? = nil
+        eventLoader: (@Sendable () async throws -> [SessionEvent])? = nil
     ) -> ChatSession {
         openTab(key: key, title: title, sessionPath: sessionPath, eventLoader: eventLoader)
     }
@@ -193,11 +193,11 @@ private enum SessionLoadOutcome: Sendable {
 private enum SessionLoadWorker {
     static func load(
         sessionPath: String?,
-        eventLoader: (@Sendable () throws -> [SessionEvent])?,
+        eventLoader: (@Sendable () async throws -> [SessionEvent])?,
         force: Bool,
         previousLoadedOnce: Bool,
         previousModificationDate: Date?
-    ) -> SessionLoadOutcome {
+    ) async -> SessionLoadOutcome {
         do {
             let parsed: [SessionEvent]
             let modificationDate: Date?
@@ -206,7 +206,7 @@ private enum SessionLoadWorker {
                 if !force && previousLoadedOnce {
                     return .skipped
                 }
-                parsed = try eventLoader()
+                parsed = try await eventLoader()
                 modificationDate = nil
             } else if let sessionPath {
                 let fileURL = URL(fileURLWithPath: sessionPath)

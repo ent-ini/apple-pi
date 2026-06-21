@@ -49,6 +49,13 @@ final class PiSessionCatalogService {
     }
 
     private func loadRemoteCatalog(host: PiHostConfiguration, activeProjectDirectory: String?) async throws -> PiCatalogSnapshot {
+        if host.hasRemoteDaemonConfigured {
+            return try await RemoteDaemonClient().loadCatalog(
+                host: host,
+                activeProjectDirectory: activeProjectDirectory
+            )
+        }
+
         guard !host.remoteAddress.isEmpty else {
             return PiCatalogSnapshot(projects: [], sessions: [])
         }

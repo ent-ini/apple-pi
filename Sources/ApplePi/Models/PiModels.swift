@@ -114,6 +114,19 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
         remoteDaemonURL.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    var hasRemoteDaemonConfigured: Bool {
+        remoteDaemonDisplayAddress.nilIfBlank != nil
+    }
+
+    var remoteDaemonBaseURL: URL? {
+        let raw = remoteDaemonDisplayAddress
+        guard let value = raw.nilIfBlank else { return nil }
+        if let direct = URL(string: value), direct.scheme != nil {
+            return direct
+        }
+        return URL(string: "http://\(value)")
+    }
+
     /// True when the user selected an `IdentityFile` (or a config alias that
     /// resolves to one) and we should pass it to ssh with `-i`.
     var hasExplicitIdentityFile: Bool {

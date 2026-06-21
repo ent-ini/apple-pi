@@ -1,7 +1,14 @@
 import Foundation
 
 enum RemoteSessionEventLoader {
-    static func load(host: PiHostConfiguration, remotePath: String) throws -> [SessionEvent] {
+    static func load(host: PiHostConfiguration, session: PiSessionSummary) async throws -> [SessionEvent] {
+        if host.hasRemoteDaemonConfigured {
+            return try await RemoteDaemonClient().loadSessionEvents(host: host, sessionID: session.id)
+        }
+        return try loadOverSSH(host: host, remotePath: session.filePath)
+    }
+
+    private static func loadOverSSH(host: PiHostConfiguration, remotePath: String) throws -> [SessionEvent] {
         guard !host.remoteAddress.isEmpty else {
             throw RemoteSessionLoadError.missingRemoteHost
         }

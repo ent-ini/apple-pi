@@ -37,6 +37,14 @@ enum RemoteDaemonTokenStore {
         return Foundation.FileManager().fileExists(atPath: path)
     }
 
+    static func readToken(for host: PiHostConfiguration) -> String? {
+        guard let path = try? tokenPath(for: host),
+              let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
+    }
+
     static func tokenPath(for host: PiHostConfiguration) throws -> String {
         let support = try supportDirectory()
         let hostHash = sanitizedHostIdentifier(for: host)

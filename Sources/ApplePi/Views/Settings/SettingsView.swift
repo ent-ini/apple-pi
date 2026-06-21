@@ -237,7 +237,7 @@ struct SettingsView: View {
         } header: {
             Text("Remote API (pi-appd)")
         } footer: {
-            Text("Groundwork for the lightweight Orange daemon transport. Current builds still use SSH for remote access; this URL and token will be used once pi-appd is wired into the client.")
+            Text("When a pi-appd URL and token are configured, remote catalog loading, session opening, and remote folder browsing use HTTP instead of one-shot SSH commands. Leave this blank to keep using SSH only.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

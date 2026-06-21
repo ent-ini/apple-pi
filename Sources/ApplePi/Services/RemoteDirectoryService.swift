@@ -15,6 +15,10 @@ struct RemoteDirectoryEntry: Identifiable, Hashable, Sendable {
 
 struct RemoteDirectoryService: Sendable {
     func listDirectories(host: PiHostConfiguration, path: String?) async throws -> RemoteDirectoryListing {
+        if host.hasRemoteDaemonConfigured {
+            return try await RemoteDaemonClient().listDirectories(host: host, path: path)
+        }
+
         guard !host.remoteAddress.isEmpty else {
             throw RemoteDirectoryError.missingHost
         }
