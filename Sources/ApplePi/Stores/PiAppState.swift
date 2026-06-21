@@ -178,7 +178,7 @@ final class PiAppState: ObservableObject {
 
     func sendTestNotification() async -> TerminalNotificationDeliveryResult {
         await NativeNotificationPresenter.shared.present(
-            title: "Apple Pi",
+            title: "pi-app",
             body: "OSC 777 notifications are ready.",
             preferences: appearance.notifications
         )

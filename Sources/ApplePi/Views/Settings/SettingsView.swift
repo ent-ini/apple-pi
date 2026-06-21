@@ -7,117 +7,15 @@ struct SettingsView: View {
     @State private var sshKeys: [SSHKeyStore.Key] = []
     @State private var passwordInput: String = ""
     @State private var passwordStatus: String?
+    @State private var isConfirmingClearPassword = false
+    @State private var isConfirmingHostCommit = false
+    @State private var pendingHostCommit: PiHostConfiguration?
+    @State private var editingHost: PiHostConfiguration?
 
     var body: some View {
         Form {
-            Section("Appearance") {
-                Picker("Mode", selection: Binding(
-                    get: { appState.appearance.colorScheme },
-                    set: { newValue in appState.updateAppearance { $0.colorScheme = newValue } }
-                )) {
-                    ForEach(AppColorSchemePreference.allCases) { scheme in
-                        Text(scheme.title).tag(scheme)
-                    }
-                }
-                .pickerStyle(.segmented)
-
-                opacitySlider(
-                    "Window opacity",
-                    value: appState.appearance.windowOpacity,
-                    range: 0.58...1.0
-                ) { value in
-                    appState.updateAppearance { $0.windowOpacity = value }
-                }
-
-                opacitySlider(
-                    "Project sidebar",
-                    value: appState.appearance.sidebarOpacity,
-                    range: 0.25...0.85
-                ) { value in
-                    appState.updateAppearance { $0.sidebarOpacity = value }
-                }
-
-                opacitySlider(
-                    "Session list",
-                    value: appState.appearance.listOpacity,
-                    range: 0.30...0.90
-                ) { value in
-                    appState.updateAppearance { $0.listOpacity = value }
-                }
-
-                opacitySlider(
-                    "Chat surface",
-                    value: appState.appearance.chatSurfaceOpacity,
-                    range: 0.55...1.0
-                ) { value in
-                    appState.updateAppearance { $0.chatSurfaceOpacity = value }
-                }
-
-                Toggle("Reduce transparency", isOn: Binding(
-                    get: { appState.appearance.reduceTransparency },
-                    set: { newValue in appState.updateAppearance { $0.reduceTransparency = newValue } }
-                ))
-
-                Picker("Accent", selection: Binding(
-                    get: { appState.appearance.accentColorName },
-                    set: { newValue in appState.updateAppearance { $0.accentColorName = newValue } }
-                )) {
-                    ForEach(AccentColorName.allCases) { accent in
-                        Text(accent.title).tag(accent)
-                    }
-                }
-
-                Toggle("Transparent titlebar", isOn: Binding(
-                    get: { appState.appearance.useTransparentTitlebar },
-                    set: { newValue in appState.updateAppearance { $0.useTransparentTitlebar = newValue } }
-                ))
-
-                TextField("Empty chat message", text: Binding(
-                    get: { appState.appearance.emptyChatMessage },
-                    set: { newValue in
-                        appState.updateAppearance { $0.emptyChatMessage = newValue }
-                    }
-                ))
-            }
-
-            Section("Pi Host") {
-                Picker("Mode", selection: $appState.host.mode) {
-                    ForEach(PiHostMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
-                    }
-                }
-                TextField("Local Pi executable", text: $appState.host.piExecutable)
-                TextField("Agent directory", text: $appState.host.agentDirectory)
-            }
-
-            Section("Remote SSH") {
-                sshConfigAliasPicker
-                TextField("Host", text: $appState.host.remoteHost)
-                TextField("User", text: $appState.host.remoteUser)
-                Stepper(value: $appState.host.remotePort, in: 1...65535) {
-                    Text("Port \(appState.host.remotePort)")
-                }
-                TextField("Remote Pi executable", text: $appState.host.remotePiExecutable)
-
-                Picker("Authentication", selection: $appState.host.remoteAuthMethod) {
-                    ForEach(RemoteAuthMethod.allCases) { method in
-                        Text(method.title).tag(method)
-                    }
-                }
-                .onChange(of: appState.host.remoteAuthMethod) { _, newValue in
-                    passwordInput = ""
-                    if newValue == .password {
-                        refreshPasswordStatus()
-                    }
-                }
-
-                if appState.host.remoteAuthMethod == .publicKey {
-                    sshIdentityFilePicker
-                } else {
-                    sshPasswordField
-                }
-            }
-
+            appearanceSection
+            hostSections
             Section("Notifications") {
                 Toggle("Pi session notifications", isOn: notificationBinding(\.isEnabled))
 
@@ -153,7 +51,345 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .padding(20)
         .frame(width: 560)
+        .onAppear { reloadSSHCollections() }
+        .onChange(of: appState.host) { _, newValue in
+            if editingHost != newValue {
+                editingHost = newValue
+            }
+        }
+        .onDisappear { commitHostIfChanged(force: true) }
+        .confirmationDialog(
+            "Apply host changes?",
+            isPresented: $isConfirmingHostCommit,
+            titleVisibility: .visible
+        ) {
+            Button("Apply and reload catalog", role: .destructive) {
+                performHostCommit()
+            }
+            Button("Cancel", role: .cancel) {
+                pendingHostCommit = nil
+            }
+        } message: {
+            Text(hostCommitMessage)
+        }
+        .confirmationDialog(
+            "Clear stored password?",
+            isPresented: $isConfirmingClearPassword,
+            titleVisibility: .visible
+        ) {
+            Button("Clear Password", role: .destructive) {
+                clearPassword()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The stored password for this host will be deleted and cannot be recovered. You will need to re-enter it to use password auth again.")
+        }
     }
+
+    // MARK: - Appearance section
+
+    @ViewBuilder
+    private var appearanceSection: some View {
+        Section("Appearance") {
+            Picker("Mode", selection: Binding(
+                get: { appState.appearance.colorScheme },
+                set: { newValue in appState.updateAppearance { $0.colorScheme = newValue } }
+            )) {
+                ForEach(AppColorSchemePreference.allCases) { scheme in
+                    Text(scheme.title).tag(scheme)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            opacitySlider(
+                "Window opacity",
+                value: appState.appearance.windowOpacity,
+                range: 0.58...1.0
+            ) { value in
+                appState.updateAppearance { $0.windowOpacity = value }
+            }
+
+            opacitySlider(
+                "Project sidebar",
+                value: appState.appearance.sidebarOpacity,
+                range: 0.25...0.85
+            ) { value in
+                appState.updateAppearance { $0.sidebarOpacity = value }
+            }
+
+            opacitySlider(
+                "Session list",
+                value: appState.appearance.listOpacity,
+                range: 0.30...0.90
+            ) { value in
+                appState.updateAppearance { $0.listOpacity = value }
+            }
+
+            opacitySlider(
+                "Chat surface",
+                value: appState.appearance.chatSurfaceOpacity,
+                range: 0.55...1.0
+            ) { value in
+                appState.updateAppearance { $0.chatSurfaceOpacity = value }
+            }
+
+            Toggle("Reduce transparency", isOn: Binding(
+                get: { appState.appearance.reduceTransparency },
+                set: { newValue in appState.updateAppearance { $0.reduceTransparency = newValue } }
+            ))
+
+            Picker("Accent", selection: Binding(
+                get: { appState.appearance.accentColorName },
+                set: { newValue in appState.updateAppearance { $0.accentColorName = newValue } }
+            )) {
+                ForEach(AccentColorName.allCases) { accent in
+                    Text(accent.title).tag(accent)
+                }
+            }
+
+            Toggle("Transparent titlebar", isOn: Binding(
+                get: { appState.appearance.useTransparentTitlebar },
+                set: { newValue in appState.updateAppearance { $0.useTransparentTitlebar = newValue } }
+            ))
+
+            TextField("Empty chat message", text: Binding(
+                get: { appState.appearance.emptyChatMessage },
+                set: { newValue in
+                    appState.updateAppearance { $0.emptyChatMessage = newValue }
+                }
+            ))
+        }
+    }
+
+    // MARK: - Host sections (Pi Host + Remote SSH + Apply/Discard bar)
+
+    @ViewBuilder
+    private var hostSections: some View {
+        Section {
+            Picker("Mode", selection: editingHostBinding(\.mode)) {
+                ForEach(PiHostMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            TextField("Local Pi executable", text: editingHostBinding(\.piExecutable))
+            TextField("Agent directory", text: editingHostBinding(\.agentDirectory))
+        } header: {
+            Text("Pi Host")
+        } footer: {
+            Text("Changes are buffered. Click Apply to commit and reload the catalog; Discard to revert.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+
+        Section("Remote SSH") {
+            editingSshConfigAliasPicker
+            TextField("Host", text: editingHostBinding(\.remoteHost))
+            TextField("User", text: editingHostBinding(\.remoteUser))
+            Stepper(value: editingHostBinding(\.remotePort), in: 1...65535) {
+                Text("Port \(editingHost?.remotePort ?? appState.host.remotePort)")
+            }
+            TextField("Remote Pi executable", text: editingHostBinding(\.remotePiExecutable))
+
+            Picker("Authentication", selection: editingHostBinding(\.remoteAuthMethod)) {
+                ForEach(RemoteAuthMethod.allCases) { method in
+                    Text(method.title).tag(method)
+                }
+            }
+            .onChange(of: editingHost?.remoteAuthMethod) { _, newValue in
+                if newValue == .password { refreshPasswordStatus() }
+            }
+
+            if editingHost?.remoteAuthMethod == .publicKey {
+                editingSshIdentityFilePicker
+            } else {
+                sshPasswordField
+            }
+        }
+
+        if hasPendingHostChanges {
+            Section {
+                HStack {
+                    Spacer()
+                    Button("Discard changes") {
+                        discardHostEdits()
+                    }
+                    .keyboardShortcut(.cancelAction)
+
+                    Button("Apply") {
+                        requestHostCommit()
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+        }
+    }
+
+    // MARK: - Host binding helpers
+
+    private func editingHostBinding<Value>(_ keyPath: WritableKeyPath<PiHostConfiguration, Value>) -> Binding<Value> {
+        Binding(
+            get: {
+                if let editingHost { return editingHost[keyPath: keyPath] }
+                return appState.host[keyPath: keyPath]
+            },
+            set: { newValue in
+                var current = editingHost ?? appState.host
+                current[keyPath: keyPath] = newValue
+                editingHost = current
+            }
+        )
+    }
+
+    private var hasPendingHostChanges: Bool {
+        guard let editingHost else { return false }
+        return editingHost != appState.host
+    }
+
+    private var hostCommitMessage: String {
+        guard let pending = pendingHostCommit else { return "" }
+        let modeChanged = pending.mode != appState.host.mode
+        let hostChanged = pending.remoteHost != appState.host.remoteHost
+        if modeChanged && pending.mode == .remoteSSH {
+            return "Switching to Remote SSH will close all open chat tabs and reload the session catalog from \(pending.remoteHost.isEmpty ? "the new host" : pending.remoteHost). An SSH connection will be opened."
+        } else if modeChanged {
+            return "Switching to Local Mac will close all open chat tabs and reload the session catalog from your local Pi agent directory."
+        } else if hostChanged {
+            return "Updating the remote host to \(pending.remoteHost) will close all open chat tabs and reload the catalog."
+        } else {
+            return "Applying these host settings will close all open chat tabs and reload the session catalog."
+        }
+    }
+
+    private func requestHostCommit() {
+        guard let editingHost else { return }
+        pendingHostCommit = editingHost
+        isConfirmingHostCommit = true
+    }
+
+    private func performHostCommit() {
+        if let pending = pendingHostCommit {
+            appState.host = pending
+        }
+        pendingHostCommit = nil
+    }
+
+    private func commitHostIfChanged(force: Bool) {
+        guard let editingHost, editingHost != appState.host else { return }
+        if force {
+            appState.host = editingHost
+            pendingHostCommit = nil
+        }
+    }
+
+    private func discardHostEdits() {
+        editingHost = appState.host
+        pendingHostCommit = nil
+    }
+
+    // MARK: - SSH pickers (operate on editingHost)
+
+    private var editingSshConfigAliasPicker: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Picker("SSH config alias", selection: editingSshConfigAliasBinding) {
+                Text("Custom").tag(Optional<String>.none)
+                ForEach(sshConfigEntries) { entry in
+                    Text(entry.subtitle.isEmpty ? entry.displayName : "\(entry.displayName) — \(entry.subtitle)")
+                        .tag(Optional(entry.id))
+                }
+            }
+            .onChange(of: editingSshConfigAliasBinding.wrappedValue) { _, newValue in
+                applyAliasToEditingBuffer(newValue)
+            }
+
+            if let alias = editingHost?.remoteSSHConfigAlias.nonEmpty ?? appState.host.remoteSSHConfigAlias.nonEmpty {
+                HStack(spacing: 6) {
+                    Text("Editing alias: \(alias)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Detach") {
+                        detachAliasInEditingBuffer()
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                }
+            } else if sshConfigEntries.isEmpty {
+                Text("No entries found in ~/.ssh/config.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var editingSshIdentityFilePicker: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Picker("Identity file", selection: editingSshIdentityBinding) {
+                Text("Default (ssh-agent)").tag(Optional<String>.none)
+                ForEach(sshKeys) { key in
+                    Text(key.label).tag(Optional(key.id))
+                }
+            }
+            if (editingHost?.remoteIdentityFile ?? appState.host.remoteIdentityFile).isEmpty {
+                Text("Uses the system default — the agent or ~/.ssh/id_*")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var editingSshConfigAliasBinding: Binding<String?> {
+        Binding(
+            get: { editingHost?.remoteSSHConfigAlias.nonEmpty ?? appState.host.remoteSSHConfigAlias.nonEmpty },
+            set: { newValue in
+                var current = editingHost ?? appState.host
+                current.remoteSSHConfigAlias = newValue ?? ""
+                editingHost = current
+            }
+        )
+    }
+
+    private var editingSshIdentityBinding: Binding<String?> {
+        Binding(
+            get: { editingHost?.remoteIdentityFile.nonEmpty ?? appState.host.remoteIdentityFile.nonEmpty },
+            set: { newValue in
+                var current = editingHost ?? appState.host
+                current.remoteIdentityFile = newValue ?? ""
+                // Picking a key does not change the auth method; if the user
+                // wants password auth they will pick the Password picker.
+                editingHost = current
+            }
+        )
+    }
+
+    private func applyAliasToEditingBuffer(_ aliasID: String?) {
+        var current = editingHost ?? appState.host
+        if let aliasID, let entry = sshConfigEntries.first(where: { $0.id == aliasID }) {
+            // Mirror PiAppState.applySSHConfigEntry into the local buffer.
+            current.remoteSSHConfigAlias = entry.hostPatterns.joined(separator: ",")
+            if let hostName = entry.hostName?.nilIfBlank {
+                current.remoteHost = hostName
+            } else if current.remoteHost.isEmpty, let first = entry.hostPatterns.first(where: { !$0.hasSuffix("*") && !$0.hasPrefix("*") }) {
+                current.remoteHost = first
+            }
+            if let user = entry.user?.nilIfBlank { current.remoteUser = user }
+            if let port = entry.port { current.remotePort = port }
+            if let identityFile = entry.identityFile?.nilIfBlank {
+                current.remoteIdentityFile = identityFile
+                current.remoteAuthMethod = .publicKey
+            }
+        } else {
+            current.remoteSSHConfigAlias = ""
+        }
+        editingHost = current
+    }
+
+    private func detachAliasInEditingBuffer() {
+        var current = editingHost ?? appState.host
+        current.remoteSSHConfigAlias = ""
+        editingHost = current
+    }
+
+    // MARK: - Other bindings (unchanged from before)
 
     private func opacitySlider(
         _ title: String,
@@ -216,51 +452,7 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - SSH host UI
-
-    private var sshConfigAliasPicker: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Picker("SSH config alias", selection: sshConfigAliasBinding) {
-                Text("Custom").tag(Optional<String>.none)
-                ForEach(sshConfigEntries) { entry in
-                    Text(entry.subtitle.isEmpty ? entry.displayName : "\(entry.displayName) — \(entry.subtitle)")
-                        .tag(Optional(entry.id))
-                }
-            }
-            .onAppear { reloadSSHCollections() }
-
-            if let alias = appState.host.remoteSSHConfigAlias.nonEmpty {
-                HStack(spacing: 6) {
-                    Text("Editing alias: \(alias)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Button("Detach") { appState.clearSSHConfigAlias() }
-                        .buttonStyle(.link)
-                        .font(.caption)
-                }
-            } else if sshConfigEntries.isEmpty {
-                Text("No entries found in ~/.ssh/config.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var sshIdentityFilePicker: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Picker("Identity file", selection: sshIdentityBinding) {
-                Text("Default (ssh-agent)").tag(Optional<String>.none)
-                ForEach(sshKeys) { key in
-                    Text(key.label).tag(Optional(key.id))
-                }
-            }
-            if appState.host.remoteIdentityFile.isEmpty {
-                Text("Uses the system default — the agent or ~/.ssh/id_*")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
+    // MARK: - SSH password field
 
     private var sshPasswordField: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -270,7 +462,9 @@ struct SettingsView: View {
             HStack {
                 Button(appState.hasRemotePasswordStored() ? "Update password" : "Save password", action: savePassword)
                 if appState.hasRemotePasswordStored() {
-                    Button("Clear", role: .destructive) { clearPassword() }
+                    Button("Clear", role: .destructive) {
+                        isConfirmingClearPassword = true
+                    }
                 }
                 Spacer()
             }
@@ -290,32 +484,11 @@ struct SettingsView: View {
         }
     }
 
-    private var sshConfigAliasBinding: Binding<String?> {
-        Binding(
-            get: { appState.host.remoteSSHConfigAlias.nonEmpty },
-            set: { newValue in
-                if let newValue, let entry = sshConfigEntries.first(where: { $0.id == newValue }) {
-                    appState.applySSHConfigEntry(entry)
-                } else {
-                    appState.clearSSHConfigAlias()
-                }
-            }
-        )
-    }
-
-    private var sshIdentityBinding: Binding<String?> {
-        Binding(
-            get: { appState.host.remoteIdentityFile.nonEmpty },
-            set: { newValue in
-                appState.host.remoteIdentityFile = newValue ?? ""
-            }
-        )
-    }
-
     private func reloadSSHCollections() {
         sshConfigEntries = appState.loadSSHConfigEntries()
         sshKeys = appState.loadSSHKeys()
         refreshPasswordStatus()
+        if editingHost == nil { editingHost = appState.host }
     }
 
     private func refreshPasswordStatus() {

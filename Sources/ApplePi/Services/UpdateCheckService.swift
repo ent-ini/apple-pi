@@ -7,7 +7,7 @@ struct AvailableUpdate: Equatable, Sendable {
 
 struct UpdateCheckService: Sendable {
     static let latestReleaseURL = URL(
-        string: "https://api.github.com/repos/dodo-reach/apple-pi/releases/latest"
+        string: "https://api.github.com/repos/ent-ini/apple-pi/releases/latest"
     )!
 
     private let latestReleaseURL: URL
