@@ -20,7 +20,7 @@ struct ChatSessionView: View {
             HStack(spacing: 6) {
                 Image(systemName: session.loadError == nil ? "info.circle" : "exclamationmark.triangle")
                     .font(.caption)
-                    .foregroundStyle(session.loadError == nil ? .secondary : .red)
+                    .foregroundStyle(session.loadError == nil ? Color.secondary : Color.red)
                 Text(session.loadError ?? session.statusMessage)
                     .font(.caption)
                     .foregroundStyle(.secondary)

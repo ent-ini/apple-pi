@@ -16,6 +16,26 @@ struct AppAppearance: Codable, Equatable {
 
     init() {}
 
+    // Explicit CodingKeys: we keep `terminalOpacity` and
+    // `emptyTerminalMessage` around so a 0.x user's saved settings still
+    // decode after the rename. The current code only writes the new
+    // names, so the legacy keys are only consulted on read.
+    enum CodingKeys: String, CodingKey {
+        case windowOpacity
+        case sidebarOpacity
+        case listOpacity
+        case chromeOpacity
+        case chatSurfaceOpacity
+        case terminalOpacity
+        case accentColorName
+        case colorScheme
+        case reduceTransparency
+        case useTransparentTitlebar
+        case emptyChatMessage
+        case emptyTerminalMessage
+        case notifications
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         windowOpacity = try container.decodeIfPresent(Double.self, forKey: .windowOpacity) ?? 0.94

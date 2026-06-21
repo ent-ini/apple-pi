@@ -168,7 +168,7 @@ final class PiAppState: ObservableObject {
         guard next.notifications.isEnabled else { return }
         Task {
             _ = await NativeNotificationPresenter.shared.prepareAuthorization(
-                for: next.notifications.presentation
+                for: next.notifications
             )
         }
     }
