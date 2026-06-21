@@ -33,7 +33,7 @@ enum RemoteSessionEventLoader {
         guard result.terminationStatus == 0 else {
             let message = String(data: result.standardError, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            throw RemoteSessionLoadError.remoteCommandFailed(message.nilIfBlank)
+            throw RemoteSessionLoadError.remoteCommandFailed(message?.nilIfBlank)
         }
 
         guard let text = String(data: result.standardOutput, encoding: .utf8) else {
