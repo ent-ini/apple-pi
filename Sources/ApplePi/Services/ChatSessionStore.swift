@@ -48,62 +48,38 @@ final class ChatSession: ObservableObject, Identifiable {
         isLoading = true
         loadError = nil
         loadTask?.cancel()
-        loadTask = Task.detached(priority: .userInitiated) { [weak self] in
-            do {
-                let parsed: [SessionEvent]
-                let modificationDate: Date?
+        loadTask = Task { [weak self] in
+            let outcome = await Task.detached(priority: .userInitiated) {
+                SessionLoadWorker.load(
+                    sessionPath: sessionPath,
+                    eventLoader: eventLoader,
+                    force: force,
+                    previousLoadedOnce: previousLoadedOnce,
+                    previousModificationDate: previousModificationDate
+                )
+            }.value
 
-                if let eventLoader {
-                    if !force && previousLoadedOnce {
-                        await MainActor.run {
-                            self?.isLoading = false
-                            self?.loadTask = nil
-                        }
-                        return
-                    }
-                    parsed = try eventLoader()
-                    modificationDate = nil
-                } else if let sessionPath {
-                    let fileURL = URL(fileURLWithPath: sessionPath)
-                    let resourceValues = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey])
-                    modificationDate = resourceValues?.contentModificationDate
-                    if !force && previousLoadedOnce && modificationDate == previousModificationDate {
-                        await MainActor.run {
-                            self?.isLoading = false
-                            self?.loadTask = nil
-                        }
-                        return
-                    }
-                    parsed = try SessionEventParser.parse(fileURL: fileURL)
-                } else {
-                    await MainActor.run {
-                        self?.statusMessage = "Session is not backed by a file yet."
-                        self?.isLoading = false
-                        self?.loadTask = nil
-                    }
-                    return
-                }
-
-                await MainActor.run {
-                    self?.events = parsed
-                    self?.statusMessage = parsed.isEmpty ? "Session is empty." : "\(parsed.count) events"
-                    self?.hasLoadedOnce = true
-                    self?.lastLoadedModificationDate = modificationDate
-                    self?.isLoading = false
-                    self?.loadTask = nil
-                }
-            } catch is CancellationError {
-                await MainActor.run {
-                    self?.isLoading = false
-                    self?.loadTask = nil
-                }
-            } catch {
-                await MainActor.run {
-                    self?.loadError = error.localizedDescription
-                    self?.statusMessage = "Failed to read session: \(error.localizedDescription)"
-                    self?.isLoading = false
-                    self?.loadTask = nil
-                }
+            guard let self else { return }
+            switch outcome {
+            case .skipped:
+                isLoading = false
+                loadTask = nil
+            case .notBackedByFile:
+                statusMessage = "Session is not backed by a file yet."
+                isLoading = false
+                loadTask = nil
+            case .loaded(let parsed, let modificationDate):
+                events = parsed
+                statusMessage = parsed.isEmpty ? "Session is empty." : "\(parsed.count) events"
+                hasLoadedOnce = true
+                lastLoadedModificationDate = modificationDate
+                isLoading = false
+                loadTask = nil
+            case .failed(let message):
+                loadError = message
+                statusMessage = "Failed to read session: \(message)"
+                isLoading = false
+                loadTask = nil
             }
         }
     }
@@ -204,5 +180,49 @@ final class ChatSessionStore: ObservableObject {
 
     func select(_ tab: ChatSession) {
         selectedTabID = tab.id
+    }
+}
+
+private enum SessionLoadOutcome: Sendable {
+    case skipped
+    case notBackedByFile
+    case loaded([SessionEvent], modificationDate: Date?)
+    case failed(String)
+}
+
+private enum SessionLoadWorker {
+    static func load(
+        sessionPath: String?,
+        eventLoader: (@Sendable () throws -> [SessionEvent])?,
+        force: Bool,
+        previousLoadedOnce: Bool,
+        previousModificationDate: Date?
+    ) -> SessionLoadOutcome {
+        do {
+            let parsed: [SessionEvent]
+            let modificationDate: Date?
+
+            if let eventLoader {
+                if !force && previousLoadedOnce {
+                    return .skipped
+                }
+                parsed = try eventLoader()
+                modificationDate = nil
+            } else if let sessionPath {
+                let fileURL = URL(fileURLWithPath: sessionPath)
+                let resourceValues = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey])
+                modificationDate = resourceValues?.contentModificationDate
+                if !force && previousLoadedOnce && modificationDate == previousModificationDate {
+                    return .skipped
+                }
+                parsed = try SessionEventParser.parse(fileURL: fileURL)
+            } else {
+                return .notBackedByFile
+            }
+
+            return .loaded(parsed, modificationDate: modificationDate)
+        } catch {
+            return .failed(error.localizedDescription)
+        }
     }
 }
