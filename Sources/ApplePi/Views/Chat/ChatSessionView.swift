@@ -7,8 +7,7 @@ struct ChatSessionView: View {
     @ObservedObject var session: ChatSession
 
     @State private var draftText = ""
-    @State private var draftHeight: CGFloat = 36
-    @State private var composerNotice: String?
+    @State private var draftHeight: CGFloat = 30
 
     var body: some View {
         VStack(spacing: 0) {
@@ -41,48 +40,24 @@ struct ChatSessionView: View {
     }
 
     private var composerArea: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            let controlHeight = max(draftHeight, 36)
+        let controlHeight = max(draftHeight, 30)
 
-            HStack(alignment: .bottom, spacing: 10) {
-                ZStack(alignment: .topLeading) {
-                    ComposerTextView(
-                        text: $draftText,
-                        dynamicHeight: $draftHeight,
-                        onSubmit: handleSendTapped
-                    )
-                    .frame(height: controlHeight)
-                    .padding(.horizontal, 10)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .stroke(Color.primary.opacity(0.10), lineWidth: 1)
-                    )
+        return HStack(alignment: .bottom, spacing: 10) {
+            ComposerTextView(
+                text: $draftText,
+                dynamicHeight: $draftHeight,
+                onSubmit: handleSendTapped
+            )
+            .frame(height: controlHeight)
 
-                    if draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text("Write a message…")
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 10)
-                            .allowsHitTesting(false)
-                    }
-                }
-
-                Button(action: handleSendTapped) {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(width: 36, height: controlHeight)
-                }
-                .buttonStyle(.borderedProminent)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .disabled(draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Button(action: handleSendTapped) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.tertiary : Color.secondary)
+                    .frame(width: 30, height: controlHeight)
             }
-
-            if let composerNotice {
-                Text(composerNotice)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+            .buttonStyle(.plain)
+            .disabled(draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -90,7 +65,6 @@ struct ChatSessionView: View {
 
     private func handleSendTapped() {
         guard !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        composerNotice = "Send is not wired yet. Next step: POST /send + stream."
     }
 }
 
@@ -110,6 +84,7 @@ private struct ComposerTextView: NSViewRepresentable {
         scrollView.hasVerticalScroller = false
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
+        scrollView.focusRingType = .none
 
         let textView = ComposerNSTextView()
         textView.delegate = context.coordinator
@@ -126,14 +101,16 @@ private struct ComposerTextView: NSViewRepresentable {
         textView.isGrammarCheckingEnabled = false
         textView.isContinuousSpellCheckingEnabled = false
         textView.drawsBackground = false
+        textView.backgroundColor = .clear
         textView.font = .systemFont(ofSize: NSFont.systemFontSize)
         textView.textColor = .labelColor
-        textView.textContainerInset = NSSize(width: 0, height: 5)
+        textView.insertionPointColor = .labelColor
+        textView.textContainerInset = NSSize(width: 0, height: 2)
         textView.textContainer?.lineFragmentPadding = 0
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        textView.minSize = NSSize(width: 0, height: 24)
+        textView.minSize = NSSize(width: 0, height: 20)
         textView.focusRingType = .none
         textView.string = text
 
@@ -181,7 +158,7 @@ private struct ComposerTextView: NSViewRepresentable {
                   let textContainer = textView.textContainer else { return }
             layoutManager.ensureLayout(for: textContainer)
             let usedRect = layoutManager.usedRect(for: textContainer)
-            let next = min(max(usedRect.height + textView.textContainerInset.height * 2, 36), 140)
+            let next = min(max(usedRect.height + textView.textContainerInset.height * 2, 30), 140)
             if abs(dynamicHeight - next) > 0.5 {
                 DispatchQueue.main.async {
                     self.dynamicHeight = next
