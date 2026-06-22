@@ -109,22 +109,20 @@ struct ChatSessionView: View {
         if audioRecorder.isRecording || isTranscribingAudio {
             HStack(spacing: 10) {
                 if audioRecorder.isRecording {
-                    Circle()
-                        .fill(Color.red)
-                        .frame(width: 8, height: 8)
+                    VoiceWaveformView(levels: audioRecorder.levels, tint: appState.appearance.accentColor)
+                        .frame(maxWidth: .infinity, minHeight: 24, maxHeight: 24)
+
+                    Text(formattedDuration(audioRecorder.elapsedTime))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
                 } else {
                     ProgressView()
                         .controlSize(.small)
+                    Text("Transcribing…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
                 }
-
-                VoiceWaveformView(levels: audioRecorder.levels, tint: appState.appearance.accentColor)
-                    .frame(width: 108, height: 24)
-
-                Text(audioRecorder.isRecording ? formattedDuration(audioRecorder.elapsedTime) : "Transcribing…")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-
-                Spacer(minLength: 0)
             }
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: controlHeight, maxHeight: controlHeight)
@@ -437,14 +435,34 @@ private struct VoiceWaveformView: View {
     let tint: Color
 
     var body: some View {
-        HStack(alignment: .center, spacing: 3) {
-            ForEach(Array(levels.enumerated()), id: \.offset) { _, level in
-                RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .fill(tint.opacity(0.92))
-                    .frame(width: 3, height: max(CGFloat(4), CGFloat(24) * level))
+        GeometryReader { geometry in
+            let samples = interpolatedLevels(targetCount: max(12, Int(geometry.size.width / 5)))
+            HStack(alignment: .center, spacing: 2) {
+                ForEach(Array(samples.enumerated()), id: \.offset) { _, level in
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(tint.opacity(0.92))
+                        .frame(width: max(2, (geometry.size.width / CGFloat(max(samples.count, 1))) - 2), height: max(CGFloat(4), geometry.size.height * level))
+                }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .center)
         }
-        .frame(maxHeight: .infinity, alignment: .center)
+    }
+
+    private func interpolatedLevels(targetCount: Int) -> [CGFloat] {
+        guard !levels.isEmpty else { return Array(repeating: 0.12, count: targetCount) }
+        guard targetCount > 0 else { return levels }
+        if levels.count == targetCount { return levels }
+        if levels.count == 1 { return Array(repeating: levels[0], count: targetCount) }
+
+        return (0..<targetCount).map { index in
+            let position = CGFloat(index) * CGFloat(levels.count - 1) / CGFloat(max(targetCount - 1, 1))
+            let lower = Int(position.rounded(.down))
+            let upper = min(lower + 1, levels.count - 1)
+            let fraction = position - CGFloat(lower)
+            let start = levels[lower]
+            let end = levels[upper]
+            return start + ((end - start) * fraction)
+        }
     }
 }
 
