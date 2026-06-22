@@ -102,7 +102,8 @@ struct ChatSessionView: View {
                 )
                 .help(audioRecorder.isRecording ? "Stop recording" : "Record voice note")
 
-                composerIconButton(
+                composerActionButton(
+                    title: "Send",
                     systemName: "arrow.up",
                     enabled: canSend,
                     action: handleSendTapped
@@ -492,7 +493,7 @@ private struct ComposerTextView: NSViewRepresentable {
         @Binding var dynamicHeight: CGFloat
         let onSubmit: () -> Void
         let onPasteAttachments: (NSPasteboard) -> Void
-        weak var textView: NSTextView?
+        weak var textView: ComposerNSTextView?
 
         init(
             text: Binding<String>,
