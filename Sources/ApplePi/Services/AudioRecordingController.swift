@@ -128,7 +128,9 @@ final class AudioRecordingController: NSObject, ObservableObject, AVAudioRecorde
         case .notDetermined:
             return await withCheckedContinuation { continuation in
                 AVCaptureDevice.requestAccess(for: .audio) { granted in
-                    continuation.resume(returning: granted)
+                    DispatchQueue.main.async {
+                        continuation.resume(returning: granted)
+                    }
                 }
             }
         case .denied, .restricted:

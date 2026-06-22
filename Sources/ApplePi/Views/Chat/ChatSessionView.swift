@@ -23,10 +23,6 @@ struct ChatSessionView: View {
         )
     }
 
-    private var canRecord: Bool {
-        !session.isSending && !isTranscribingAudio
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             MessageListView(session: session)
@@ -67,9 +63,11 @@ struct ChatSessionView: View {
 
             HStack(alignment: .bottom, spacing: 10) {
                 composerActionButton(
-                    title: "Files",
-                    systemName: "paperclip",
+                    title: nil,
+                    systemName: "plus",
                     enabled: !audioRecorder.isRecording,
+                    minWidth: 34,
+                    horizontalPadding: 0,
                     action: pickAttachments
                 )
                 .help("Attach files")
@@ -93,9 +91,11 @@ struct ChatSessionView: View {
                 )
 
                 composerActionButton(
-                    title: audioRecorder.isRecording ? "Stop" : "Voice",
+                    title: nil,
                     systemName: audioRecorder.isRecording ? "stop.fill" : "mic.fill",
-                    enabled: canRecord || audioRecorder.isRecording,
+                    enabled: true,
+                    minWidth: 34,
+                    horizontalPadding: 0,
                     foreground: audioRecorder.isRecording ? .white : nil,
                     background: audioRecorder.isRecording ? Color.red.opacity(0.92) : nil,
                     action: handleMicrophoneTapped
@@ -159,19 +159,27 @@ struct ChatSessionView: View {
 
     @ViewBuilder
     private func composerActionButton(
-        title: String,
+        title: String?,
         systemName: String,
         enabled: Bool,
+        minWidth: CGFloat = 62,
+        horizontalPadding: CGFloat = 10,
         foreground: Color? = nil,
         background: Color? = nil,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            Label(title, systemImage: systemName)
+            Group {
+                if let title {
+                    Label(title, systemImage: systemName)
+                } else {
+                    Image(systemName: systemName)
+                }
+            }
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(foreground ?? appState.appearance.accentForegroundColor.opacity(enabled ? 1 : 0.78))
-                .frame(minWidth: 62, minHeight: 34)
-                .padding(.horizontal, 10)
+                .frame(minWidth: minWidth, minHeight: 34)
+                .padding(.horizontal, horizontalPadding)
                 .background(
                     RoundedRectangle(cornerRadius: 11, style: .continuous)
                         .fill(background ?? controlBackground(enabled: enabled))
@@ -206,7 +214,12 @@ struct ChatSessionView: View {
             return
         }
 
-        guard canRecord else { return }
+        if isTranscribingAudio {
+            transcriptionTask?.cancel()
+            transcriptionTask = nil
+            isTranscribingAudio = false
+        }
+
         Task {
             do {
                 try await audioRecorder.startRecording()
