@@ -28,11 +28,14 @@ struct MessageBubble: View {
             ForEach(Array(visibleBlocks.enumerated()), id: \.offset) { _, block in
                 blockView(block)
             }
-            if message.role == .assistant, let model = message.model {
-                Text(model)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 4)
+            if let timestamp = formattedTime {
+                HStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    Text(timestamp)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity)
             }
         }
     }
@@ -111,4 +114,16 @@ struct MessageBubble: View {
             return .primary
         }
     }
+
+    private var formattedTime: String? {
+        guard let timestamp = message.timestamp else { return nil }
+        return Self.timeFormatter.string(from: timestamp)
+    }
+
+    private static let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "HH:mm"
+        return formatter
+    }()
 }

@@ -1,5 +1,8 @@
 import SwiftUI
 
+/// Renders the assistant's `thinking` content as a compact single-line
+/// disclosure row. Collapsed state shows only the word `Thinking`; expanded
+/// state reveals the full text at its natural height.
 struct ThinkingSummaryView: View {
     let thinkingText: String
 
@@ -14,46 +17,29 @@ struct ThinkingSummaryView: View {
             } label: {
                 HStack(spacing: 8) {
                     Text("Thinking")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Text(collapsedText)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    Spacer(minLength: 0)
                     Image(systemName: "chevron.down")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.tertiary)
                         .rotationEffect(.degrees(isExpanded ? 180 : 0))
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color.gray.opacity(0.08))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .help(isExpanded ? "Hide thinking" : "Show thinking")
 
             if isExpanded {
                 Text(thinkingText)
                     .textSelection(.enabled)
                     .font(.callout.monospaced())
                     .foregroundStyle(.secondary)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(Color.gray.opacity(0.10))
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-    }
-
-    private var collapsedText: String {
-        let normalized = thinkingText
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized.isEmpty ? "…" : normalized
     }
 }
 
