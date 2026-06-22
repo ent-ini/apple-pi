@@ -332,8 +332,14 @@ struct ChatSessionView: View {
     }
 
     private func handlePasteAttachments(_ pasteboard: NSPasteboard) {
-        if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL], !urls.isEmpty {
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL], !urls.isEmpty {
             addAttachments(from: urls)
+            return
+        }
+
+        if let rawFileNames = pasteboard.propertyList(forType: NSPasteboard.PasteboardType("NSFilenamesPboardType")) as? [String],
+           !rawFileNames.isEmpty {
+            addAttachments(from: rawFileNames.map(URL.init(fileURLWithPath:)))
             return
         }
 
@@ -620,6 +626,15 @@ private final class ComposerNSTextView: NSTextView {
     var onPasteAttachments: ((NSPasteboard) -> Void)?
 
     override func keyDown(with event: NSEvent) {
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+           event.charactersIgnoringModifiers?.lowercased() == "v" {
+            let pasteboard = NSPasteboard.general
+            if Self.hasAttachmentPayload(in: pasteboard) {
+                onPasteAttachments?(pasteboard)
+                return
+            }
+        }
+
         if event.keyCode == 36 || event.keyCode == 76 {
             if event.modifierFlags.contains(.shift) {
                 insertNewline(nil)
@@ -641,9 +656,19 @@ private final class ComposerNSTextView: NSTextView {
     }
 
     private static func hasAttachmentPayload(in pasteboard: NSPasteboard) -> Bool {
-        if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL], !urls.isEmpty {
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL], !urls.isEmpty {
             return true
         }
-        return pasteboard.canReadObject(forClasses: [NSImage.self], options: nil)
+        if pasteboard.canReadObject(forClasses: [NSImage.self], options: nil) {
+            return true
+        }
+        let supportedTypes: [NSPasteboard.PasteboardType] = [
+            .fileURL,
+            .png,
+            .tiff,
+            .URL,
+            NSPasteboard.PasteboardType("NSFilenamesPboardType")
+        ]
+        return pasteboard.types?.contains(where: { supportedTypes.contains($0) }) == true
     }
 }
