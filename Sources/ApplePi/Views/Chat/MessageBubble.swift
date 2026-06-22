@@ -6,6 +6,7 @@ import SwiftUI
 /// `Text(verbatim:)` so the rendered output matches the source file
 /// exactly; the next iteration swaps in markdown rendering via WKWebView.
 struct MessageBubble: View {
+    @EnvironmentObject private var appState: PiAppState
     let message: Message
 
     var body: some View {
@@ -61,7 +62,7 @@ struct MessageBubble: View {
     private var bubbleBackground: Color {
         switch message.role {
         case .user:
-            return Color.accentColor.opacity(0.18)
+            return appState.appearance.accentColor.opacity(0.18)
         case .assistant:
             return Color.gray.opacity(0.10)
         case .system:

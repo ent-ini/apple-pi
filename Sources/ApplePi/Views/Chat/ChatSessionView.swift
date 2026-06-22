@@ -10,6 +10,10 @@ struct ChatSessionView: View {
     @State private var draftText = ""
     @State private var draftHeight: CGFloat = 30
 
+    private var canSend: Bool {
+        !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             statusBar
@@ -49,9 +53,12 @@ struct ChatSessionView: View {
                 dynamicHeight: $draftHeight,
                 onSubmit: handleSendTapped
             )
-            .frame(height: controlHeight)
-            .padding(.horizontal, 10)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .frame(maxWidth: .infinity, minHeight: controlHeight, maxHeight: controlHeight)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.primary.opacity(0.03))
+                    .allowsHitTesting(false)
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .stroke(Color.primary.opacity(0.12), lineWidth: 1)
@@ -62,23 +69,30 @@ struct ChatSessionView: View {
                 Image(systemName: "arrow.up")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(sendIconStyle)
-                    .frame(width: 30, height: controlHeight)
+                    .frame(width: 30, height: 30)
+                    .background(
+                        Circle()
+                            .fill(sendButtonBackground)
+                    )
             }
             .buttonStyle(.plain)
-            .disabled(draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .allowsHitTesting(canSend)
+            .opacity(canSend ? 1 : 0.82)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
     }
 
     private var sendIconStyle: AnyShapeStyle {
-        draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? AnyShapeStyle(.tertiary)
-            : AnyShapeStyle(appState.appearance.accentColor)
+        AnyShapeStyle(Color.white.opacity(canSend ? 1 : 0.78))
+    }
+
+    private var sendButtonBackground: Color {
+        appState.appearance.accentColor.opacity(canSend ? 1 : 0.24)
     }
 
     private func handleSendTapped() {
-        guard !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard canSend else { return }
     }
 }
 
@@ -92,7 +106,7 @@ private struct ComposerTextView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
+        let scrollView = ComposerScrollView()
         scrollView.drawsBackground = false
         scrollView.backgroundColor = .clear
         scrollView.borderType = .noBorder
@@ -122,16 +136,21 @@ private struct ComposerTextView: NSViewRepresentable {
         textView.font = .systemFont(ofSize: NSFont.systemFontSize)
         textView.textColor = .labelColor
         textView.insertionPointColor = .labelColor
-        textView.textContainerInset = NSSize(width: 0, height: 2)
+        textView.textContainerInset = NSSize(width: 10, height: 6)
         textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.minSize = NSSize(width: 0, height: 20)
         textView.focusRingType = .none
         textView.string = text
+        textView.frame = NSRect(x: 0, y: 0, width: 1, height: max(dynamicHeight, 30))
 
         scrollView.documentView = textView
+        scrollView.composerTextView = textView
         context.coordinator.textView = textView
         Task { @MainActor in
             context.coordinator.recalculateHeight(for: textView)
@@ -143,6 +162,11 @@ private struct ComposerTextView: NSViewRepresentable {
         guard let textView = context.coordinator.textView else { return }
         if textView.string != text {
             textView.string = text
+        }
+        if let composerScrollView = scrollView as? ComposerScrollView {
+            composerScrollView.composerTextView = textView
+            composerScrollView.needsLayout = true
+            composerScrollView.layoutSubtreeIfNeeded()
         }
         Task { @MainActor in
             context.coordinator.recalculateHeight(for: textView)
@@ -164,6 +188,8 @@ private struct ComposerTextView: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView else { return }
             text = textView.string
+            textView.enclosingScrollView?.needsLayout = true
+            textView.enclosingScrollView?.layoutSubtreeIfNeeded()
             Task { @MainActor in
                 self.recalculateHeight(for: textView)
             }
@@ -177,11 +203,30 @@ private struct ComposerTextView: NSViewRepresentable {
             let usedRect = layoutManager.usedRect(for: textContainer)
             let next = min(max(usedRect.height + textView.textContainerInset.height * 2, 30), 140)
             if abs(dynamicHeight - next) > 0.5 {
-                DispatchQueue.main.async {
-                    self.dynamicHeight = next
-                }
+                dynamicHeight = next
             }
         }
+    }
+}
+
+private final class ComposerScrollView: NSScrollView {
+    weak var composerTextView: NSTextView?
+
+    override func layout() {
+        super.layout()
+        guard let textView = composerTextView,
+              let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer else { return }
+
+        let visibleWidth = contentView.bounds.width
+        guard visibleWidth > 0 else { return }
+
+        textContainer.containerSize = NSSize(width: visibleWidth, height: CGFloat.greatestFiniteMagnitude)
+        layoutManager.ensureLayout(for: textContainer)
+
+        let usedRect = layoutManager.usedRect(for: textContainer)
+        let fittedHeight = max(usedRect.height + textView.textContainerInset.height * 2, textView.minSize.height)
+        textView.frame = NSRect(x: 0, y: 0, width: visibleWidth, height: fittedHeight)
     }
 }
 
