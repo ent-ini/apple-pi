@@ -1,5 +1,22 @@
 import SwiftUI
 
+private let messageBubbleMaxWidth: CGFloat = 420
+
+private struct BubbleWidthModifier: ViewModifier {
+    let prefersCompactWidth: Bool
+    let alignment: Alignment
+
+    func body(content: Content) -> some View {
+        if prefersCompactWidth {
+            content
+                .fixedSize(horizontal: true, vertical: false)
+        } else {
+            content
+                .frame(maxWidth: messageBubbleMaxWidth, alignment: alignment)
+        }
+    }
+}
+
 /// One chat bubble. User messages are right-aligned with the accent
 /// background; assistant messages span almost the full width with a
 /// neutral surface so long responses are easy to read.
@@ -10,11 +27,11 @@ struct MessageBubble: View {
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             if message.role == .user {
-                Spacer(minLength: 60)
+                Spacer(minLength: 90)
                 bubbleColumn(alignment: .trailing)
             } else {
                 bubbleColumn(alignment: .leading)
-                Spacer(minLength: 60)
+                Spacer(minLength: 90)
             }
         }
     }
@@ -37,7 +54,10 @@ struct MessageBubble: View {
         case .text(let rawText):
             let text = displayText(for: rawText)
             if !text.isEmpty {
-                bubbleSurface(isLastVisibleBlock: isLastVisibleBlock) {
+                bubbleSurface(
+                    isLastVisibleBlock: isLastVisibleBlock,
+                    prefersCompactWidth: prefersCompactWidth(for: text)
+                ) {
                     Text(text)
                         .textSelection(.enabled)
                         .font(.body)
@@ -46,31 +66,40 @@ struct MessageBubble: View {
         case .thinking:
             EmptyView()
         case .image:
-            bubbleSurface(isLastVisibleBlock: isLastVisibleBlock) {
+            bubbleSurface(isLastVisibleBlock: isLastVisibleBlock, prefersCompactWidth: true) {
                 Text("[image]")
                     .font(.body.monospaced())
             }
         }
     }
 
-    @ViewBuilder
-    private func bubbleSurface<Content: View>(isLastVisibleBlock: Bool, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+    private func bubbleSurface<Content: View>(
+        isLastVisibleBlock: Bool,
+        prefersCompactWidth: Bool,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        let showsTimestamp = isLastVisibleBlock && formattedTime != nil
+
+        return VStack(alignment: .leading, spacing: 0) {
             content()
-            if isLastVisibleBlock, let timestamp = formattedTime {
-                HStack(spacing: 0) {
-                    Spacer(minLength: 12)
-                    Text(timestamp)
-                        .font(.caption2)
-                        .foregroundStyle(timestampColor)
-                }
-            }
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.top, 10)
+        .padding(.bottom, showsTimestamp ? 24 : 10)
         .background(bubbleBackground)
         .foregroundStyle(textColor)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(alignment: .bottomTrailing) {
+            if isLastVisibleBlock, let timestamp = formattedTime {
+                Text(timestamp)
+                    .font(.caption2)
+                    .foregroundStyle(timestampColor)
+                    .padding(.trailing, 10)
+                    .padding(.bottom, 8)
+            }
+        }
+        .modifier(BubbleWidthModifier(prefersCompactWidth: prefersCompactWidth, alignment: bubbleFrameAlignment))
     }
 
     private var visibleBlocks: [ContentBlock] {
@@ -88,7 +117,7 @@ struct MessageBubble: View {
             return nil
         }
         .filter { !$0.isEmpty }
-        .joined(separator: "\n\n")
+        .joined(separator: "\n\n---\n\n")
     }
 
     private func displayText(for rawText: String) -> String {
@@ -114,7 +143,7 @@ struct MessageBubble: View {
     private var textColor: Color {
         switch message.role {
         case .user:
-            return .white
+            return appState.appearance.accentForegroundColor
         case .assistant, .system:
             return .primary
         }
@@ -128,10 +157,19 @@ struct MessageBubble: View {
     private var timestampColor: Color {
         switch message.role {
         case .user:
-            return Color.white.opacity(0.85)
+            return appState.appearance.accentForegroundColor.opacity(0.82)
         case .assistant, .system:
             return .secondary
         }
+    }
+
+    private var bubbleFrameAlignment: Alignment {
+        message.role == .user ? .trailing : .leading
+    }
+
+    private func prefersCompactWidth(for text: String) -> Bool {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalized.count <= 42 && !normalized.contains("\n")
     }
 
     private static let timeFormatter: DateFormatter = {

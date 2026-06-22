@@ -62,16 +62,14 @@ struct MessageListView: View {
 
     private var showsPendingAssistantPlaceholder: Bool {
         guard session.isSending else { return false }
-        guard let lastAssistantEvent = displayedEvents.last(where: {
-            if case .message(let message, _) = $0 {
-                return message.role == .assistant
-            }
-            return false
-        }) else {
+        guard let lastMessageEvent = displayedEvents.last else { return true }
+        guard case .message(let message, let lineIndex) = lastMessageEvent else { return true }
+
+        if message.role == .user, lineIndex == Int.max - 1 {
             return true
         }
-        guard case .message(let message, let lineIndex) = lastAssistantEvent else { return true }
-        guard lineIndex == Int.max else { return false }
+
+        guard message.role == .assistant, lineIndex == Int.max else { return false }
         return !message.content.contains { block in
             switch block {
             case .text(let text):

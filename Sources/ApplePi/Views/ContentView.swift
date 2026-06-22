@@ -751,21 +751,13 @@ private struct SessionListRow: View {
     @State private var isConfirmingDelete = false
 
     var body: some View {
-        HStack(alignment: .center, spacing: 8) {
-            Button(action: onSelect) {
-                content
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            SessionActionButton(
-                title: "Fork",
-                systemImage: "tuningfork",
-                action: onFork
-            )
+        Button(action: onSelect) {
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -808,18 +800,12 @@ private struct SessionListRow: View {
 
     private var content: some View {
         VStack(alignment: .leading, spacing: 7) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(session.title)
-                    .font(.headline.weight(.semibold))
-                    .lineLimit(1)
-                Spacer()
-                Text(session.modifiedAt, style: .date)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+            Text(session.title)
+                .font(.headline.weight(.semibold))
+                .lineLimit(1)
+
             HStack(spacing: 8) {
-                Text(session.subtitle)
+                Text(session.modifiedAt, style: .date)
                     .lineLimit(1)
                 if session.hasMetadata {
                     SessionMetadataStrip(session: session)
@@ -837,27 +823,6 @@ private struct SessionListRow: View {
         } else {
             Color.clear
         }
-    }
-}
-
-private struct SessionActionButton: View {
-    @Environment(\.colorScheme) private var colorScheme
-    let title: String
-    let systemImage: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.caption.weight(.semibold))
-                .frame(width: 22, height: 18)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .background(controlTint(for: colorScheme, opacity: 0.06))
-        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-        .help(title)
     }
 }
 

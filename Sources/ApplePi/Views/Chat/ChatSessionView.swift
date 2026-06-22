@@ -16,31 +16,9 @@ struct ChatSessionView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            statusBar
-            if !session.statusMessage.isEmpty || session.loadError != nil {
-                Divider().opacity(0.25)
-            }
             MessageListView(session: session)
             Divider().opacity(0.25)
             composerArea
-        }
-    }
-
-    @ViewBuilder
-    private var statusBar: some View {
-        if !session.statusMessage.isEmpty || session.loadError != nil {
-            HStack(spacing: 6) {
-                Image(systemName: session.loadError == nil ? "info.circle" : "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(session.loadError == nil ? Color.secondary : Color.red)
-                Text(session.loadError ?? session.statusMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer()
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 6)
         }
     }
 
@@ -84,7 +62,7 @@ struct ChatSessionView: View {
     }
 
     private var sendIconStyle: AnyShapeStyle {
-        AnyShapeStyle(Color.white.opacity(canSend ? 1 : 0.78))
+        AnyShapeStyle(appState.appearance.accentForegroundColor.opacity(canSend ? 1 : 0.78))
     }
 
     private var sendButtonBackground: Color {

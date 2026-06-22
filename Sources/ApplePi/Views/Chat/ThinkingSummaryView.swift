@@ -15,11 +15,10 @@ struct ThinkingSummaryView: View {
                     isExpanded.toggle()
                 }
             } label: {
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     Text("Thinking")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
                     Image(systemName: "chevron.down")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.tertiary)

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -7,7 +8,7 @@ struct AppAppearance: Codable, Equatable {
     var listOpacity: Double = 0.64
     var chromeOpacity: Double = 0.76
     var chatSurfaceOpacity: Double = 0.92
-    var accentColorName: AccentColorName = .yellow
+    var accentColorValue: CodableAccentColor = .yellow
     var colorScheme: AppColorSchemePreference = .system
     var reduceTransparency: Bool = false
     var useTransparentTitlebar: Bool = true
@@ -27,6 +28,7 @@ struct AppAppearance: Codable, Equatable {
         case chromeOpacity
         case chatSurfaceOpacity
         case terminalOpacity
+        case accentColorValue
         case accentColorName
         case colorScheme
         case reduceTransparency
@@ -48,7 +50,9 @@ struct AppAppearance: Codable, Equatable {
         chatSurfaceOpacity = try container.decodeIfPresent(Double.self, forKey: .chatSurfaceOpacity)
             ?? container.decodeIfPresent(Double.self, forKey: .terminalOpacity)
             ?? 0.92
-        accentColorName = try container.decodeIfPresent(AccentColorName.self, forKey: .accentColorName) ?? .yellow
+        accentColorValue = try container.decodeIfPresent(CodableAccentColor.self, forKey: .accentColorValue)
+            ?? (try container.decodeIfPresent(AccentColorName.self, forKey: .accentColorName).map(CodableAccentColor.init))
+            ?? .yellow
         colorScheme = try container.decodeIfPresent(AppColorSchemePreference.self, forKey: .colorScheme) ?? .system
         reduceTransparency = try container.decodeIfPresent(Bool.self, forKey: .reduceTransparency) ?? false
         useTransparentTitlebar = try container.decodeIfPresent(Bool.self, forKey: .useTransparentTitlebar) ?? true
@@ -71,7 +75,7 @@ struct AppAppearance: Codable, Equatable {
         try container.encode(chatSurfaceOpacity, forKey: .chatSurfaceOpacity)
         // terminalOpacity / emptyTerminalMessage are legacy read-only
         // fields; new encodes always write the renamed properties.
-        try container.encode(accentColorName, forKey: .accentColorName)
+        try container.encode(accentColorValue, forKey: .accentColorValue)
         try container.encode(colorScheme, forKey: .colorScheme)
         try container.encode(reduceTransparency, forKey: .reduceTransparency)
         try container.encode(useTransparentTitlebar, forKey: .useTransparentTitlebar)
@@ -80,7 +84,15 @@ struct AppAppearance: Codable, Equatable {
     }
 
     var accentColor: Color {
-        accentColorName.color
+        accentColorValue.color
+    }
+
+    var accentForegroundColor: Color {
+        accentColorValue.isDark ? .white : .black
+    }
+
+    mutating func setAccentColor(_ color: Color) {
+        accentColorValue = CodableAccentColor(color)
     }
 
     var resolvedEmptyChatMessage: String {
@@ -175,21 +187,55 @@ enum AccentColorName: String, Codable, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var title: String {
+    var colorValue: CodableAccentColor {
         switch self {
-        case .yellow: "Yellow"
-        case .blue: "Blue"
-        case .green: "Green"
-        case .graphite: "Graphite"
+        case .yellow: .yellow
+        case .blue: .blue
+        case .green: .green
+        case .graphite: .graphite
         }
+    }
+}
+
+struct CodableAccentColor: Codable, Equatable {
+    var red: Double
+    var green: Double
+    var blue: Double
+    var alpha: Double
+
+    init(red: Double, green: Double, blue: Double, alpha: Double = 1.0) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.alpha = alpha
+    }
+
+    init(_ preset: AccentColorName) {
+        self = preset.colorValue
+    }
+
+    init(_ color: Color) {
+        let nsColor = NSColor(color).usingColorSpace(.sRGB) ?? .systemYellow
+        self.red = Double(nsColor.redComponent)
+        self.green = Double(nsColor.greenComponent)
+        self.blue = Double(nsColor.blueComponent)
+        self.alpha = Double(nsColor.alphaComponent)
     }
 
     var color: Color {
-        switch self {
-        case .yellow: Color(red: 0.98, green: 0.78, blue: 0.23)
-        case .blue: Color(red: 0.42, green: 0.63, blue: 1.0)
-        case .green: Color(red: 0.42, green: 0.82, blue: 0.55)
-        case .graphite: Color(red: 0.66, green: 0.68, blue: 0.72)
-        }
+        Color(red: red, green: green, blue: blue, opacity: alpha)
     }
+
+    var isDark: Bool {
+        relativeLuminance < 0.58
+    }
+
+    private var relativeLuminance: Double {
+        (0.2126 * red) + (0.7152 * green) + (0.0722 * blue)
+    }
+
+    static let yellow = CodableAccentColor(red: 0.98, green: 0.78, blue: 0.23)
+    static let blue = CodableAccentColor(red: 0.42, green: 0.63, blue: 1.0)
+    static let green = CodableAccentColor(red: 0.42, green: 0.82, blue: 0.55)
+    static let graphite = CodableAccentColor(red: 0.66, green: 0.68, blue: 0.72)
 }

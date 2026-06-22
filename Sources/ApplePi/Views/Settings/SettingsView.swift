@@ -149,14 +149,12 @@ struct SettingsView: View {
                 set: { newValue in appState.updateAppearance { $0.reduceTransparency = newValue } }
             ))
 
-            Picker("Accent", selection: Binding(
-                get: { appState.appearance.accentColorName },
-                set: { newValue in appState.updateAppearance { $0.accentColorName = newValue } }
-            )) {
-                ForEach(AccentColorName.allCases) { accent in
-                    Text(accent.title).tag(accent)
+            ColorPicker("Accent", selection: Binding(
+                get: { appState.appearance.accentColor },
+                set: { newValue in
+                    appState.updateAppearance { $0.setAccentColor(newValue) }
                 }
-            }
+            ), supportsOpacity: false)
 
             Toggle("Transparent titlebar", isOn: Binding(
                 get: { appState.appearance.useTransparentTitlebar },
