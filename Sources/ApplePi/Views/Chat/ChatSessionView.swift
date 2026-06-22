@@ -126,13 +126,15 @@ private struct ComposerTextView: NSViewRepresentable {
         textView.textContainer?.lineFragmentPadding = 0
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
-        textView.maxSize = NSSize(width: .greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.minSize = NSSize(width: 0, height: 24)
         textView.string = text
 
         scrollView.documentView = textView
         context.coordinator.textView = textView
-        context.coordinator.recalculateHeight(for: textView)
+        Task { @MainActor in
+            context.coordinator.recalculateHeight(for: textView)
+        }
         return scrollView
     }
 
@@ -141,7 +143,9 @@ private struct ComposerTextView: NSViewRepresentable {
         if textView.string != text {
             textView.string = text
         }
-        context.coordinator.recalculateHeight(for: textView)
+        Task { @MainActor in
+            context.coordinator.recalculateHeight(for: textView)
+        }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
@@ -159,9 +163,12 @@ private struct ComposerTextView: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView else { return }
             text = textView.string
-            recalculateHeight(for: textView)
+            Task { @MainActor in
+                self.recalculateHeight(for: textView)
+            }
         }
 
+        @MainActor
         func recalculateHeight(for textView: NSTextView) {
             guard let layoutManager = textView.layoutManager,
                   let textContainer = textView.textContainer else { return }
