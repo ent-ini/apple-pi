@@ -25,47 +25,52 @@ struct MessageBubble: View {
             if !thinkingText.isEmpty {
                 ThinkingSummaryView(thinkingText: thinkingText)
             }
-            ForEach(Array(visibleBlocks.enumerated()), id: \.offset) { _, block in
-                blockView(block)
-            }
-            if let timestamp = formattedTime {
-                HStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    Text(timestamp)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-                .frame(maxWidth: .infinity)
+            ForEach(Array(visibleBlocks.enumerated()), id: \.offset) { index, block in
+                blockView(block, isLastVisibleBlock: index == visibleBlocks.count - 1)
             }
         }
     }
 
     @ViewBuilder
-    private func blockView(_ block: ContentBlock) -> some View {
+    private func blockView(_ block: ContentBlock, isLastVisibleBlock: Bool) -> some View {
         switch block {
         case .text(let rawText):
             let text = displayText(for: rawText)
             if !text.isEmpty {
-                Text(text)
-                    .textSelection(.enabled)
-                    .font(.body)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(bubbleBackground)
-                    .foregroundStyle(textColor)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                bubbleSurface(isLastVisibleBlock: isLastVisibleBlock) {
+                    Text(text)
+                        .textSelection(.enabled)
+                        .font(.body)
+                }
             }
         case .thinking:
             EmptyView()
         case .image:
-            Text("[image]")
-                .font(.body.monospaced())
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(bubbleBackground)
-                .foregroundStyle(textColor)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            bubbleSurface(isLastVisibleBlock: isLastVisibleBlock) {
+                Text("[image]")
+                    .font(.body.monospaced())
+            }
         }
+    }
+
+    @ViewBuilder
+    private func bubbleSurface<Content: View>(isLastVisibleBlock: Bool, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            content()
+            if isLastVisibleBlock, let timestamp = formattedTime {
+                HStack(spacing: 0) {
+                    Spacer(minLength: 12)
+                    Text(timestamp)
+                        .font(.caption2)
+                        .foregroundStyle(timestampColor)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(bubbleBackground)
+        .foregroundStyle(textColor)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private var visibleBlocks: [ContentBlock] {
@@ -118,6 +123,15 @@ struct MessageBubble: View {
     private var formattedTime: String? {
         guard let timestamp = message.timestamp else { return nil }
         return Self.timeFormatter.string(from: timestamp)
+    }
+
+    private var timestampColor: Color {
+        switch message.role {
+        case .user:
+            return Color.white.opacity(0.85)
+        case .assistant, .system:
+            return .secondary
+        }
     }
 
     private static let timeFormatter: DateFormatter = {
