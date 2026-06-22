@@ -15,7 +15,7 @@ final class AudioRecordingController: NSObject, ObservableObject, AVAudioRecorde
 
     func startRecording() async throws {
         guard !isRecording else { return }
-        let granted = await requestMicrophoneAccess()
+        let granted = await Self.requestMicrophoneAccess()
         guard granted else {
             throw AudioRecordingError.microphonePermissionDenied
         }
@@ -121,16 +121,14 @@ final class AudioRecordingController: NSObject, ObservableObject, AVAudioRecorde
         return CGFloat(0.12 + (normalized * 0.88))
     }
 
-    private func requestMicrophoneAccess() async -> Bool {
+    nonisolated private static func requestMicrophoneAccess() async -> Bool {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
             return true
         case .notDetermined:
             return await withCheckedContinuation { continuation in
                 AVCaptureDevice.requestAccess(for: .audio) { granted in
-                    DispatchQueue.main.async {
-                        continuation.resume(returning: granted)
-                    }
+                    continuation.resume(returning: granted)
                 }
             }
         case .denied, .restricted:
