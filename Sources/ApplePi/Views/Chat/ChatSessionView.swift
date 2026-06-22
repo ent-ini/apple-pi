@@ -42,6 +42,8 @@ struct ChatSessionView: View {
 
     private var composerArea: some View {
         VStack(alignment: .leading, spacing: 6) {
+            let controlHeight = max(draftHeight, 36)
+
             HStack(alignment: .bottom, spacing: 10) {
                 ZStack(alignment: .topLeading) {
                     ComposerTextView(
@@ -49,17 +51,18 @@ struct ChatSessionView: View {
                         dynamicHeight: $draftHeight,
                         onSubmit: handleSendTapped
                     )
-                    .frame(height: draftHeight)
+                    .frame(height: controlHeight)
                     .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.primary.opacity(0.05))
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Color.primary.opacity(0.10), lineWidth: 1)
+                    )
 
                     if draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         Text("Write a message…")
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 16)
-                            .padding(.vertical, 13)
+                            .padding(.vertical, 10)
                             .allowsHitTesting(false)
                     }
                 }
@@ -67,10 +70,10 @@ struct ChatSessionView: View {
                 Button(action: handleSendTapped) {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 13, weight: .semibold))
-                        .frame(width: 32, height: 32)
+                        .frame(width: 36, height: controlHeight)
                 }
                 .buttonStyle(.borderedProminent)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .disabled(draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
@@ -81,8 +84,8 @@ struct ChatSessionView: View {
                     .lineLimit(1)
             }
         }
-        .padding(12)
-        .background(.regularMaterial)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
     }
 
     private func handleSendTapped() {
@@ -111,6 +114,9 @@ private struct ComposerTextView: NSViewRepresentable {
         let textView = ComposerNSTextView()
         textView.delegate = context.coordinator
         textView.onSubmit = onSubmit
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.allowsUndo = true
         textView.isRichText = false
         textView.importsGraphics = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
@@ -122,12 +128,13 @@ private struct ComposerTextView: NSViewRepresentable {
         textView.drawsBackground = false
         textView.font = .systemFont(ofSize: NSFont.systemFontSize)
         textView.textColor = .labelColor
-        textView.textContainerInset = NSSize(width: 0, height: 6)
+        textView.textContainerInset = NSSize(width: 0, height: 5)
         textView.textContainer?.lineFragmentPadding = 0
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.minSize = NSSize(width: 0, height: 24)
+        textView.focusRingType = .none
         textView.string = text
 
         scrollView.documentView = textView
