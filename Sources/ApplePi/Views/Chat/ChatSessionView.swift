@@ -1,13 +1,13 @@
+import AppKit
 import SwiftUI
 
-/// View for a single open Pi session. The chat now has a real composer area:
-/// a message input field plus a dedicated accessory block underneath that we
-/// can keep customizing without touching the rest of the message list layout.
+/// View for a single open Pi session. The composer is intentionally minimal:
+/// one auto-growing input field plus a send icon button on the same row.
 struct ChatSessionView: View {
-    @EnvironmentObject private var appState: PiAppState
     @ObservedObject var session: ChatSession
 
     @State private var draftText = ""
+    @State private var draftHeight: CGFloat = 36
     @State private var composerNotice: String?
 
     var body: some View {
@@ -41,156 +41,154 @@ struct ChatSessionView: View {
     }
 
     private var composerArea: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ZStack(alignment: .topLeading) {
-                TextEditor(text: $draftText)
-                    .font(.body)
-                    .scrollContentBackground(.hidden)
-                    .frame(minHeight: 64, maxHeight: 140)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .bottom, spacing: 10) {
+                ZStack(alignment: .topLeading) {
+                    ComposerTextView(
+                        text: $draftText,
+                        dynamicHeight: $draftHeight,
+                        onSubmit: handleSendTapped
+                    )
+                    .frame(height: draftHeight)
                     .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, 6)
                     .background(Color.primary.opacity(0.05))
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-                if draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text("Write a message…")
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 16)
-                        .allowsHitTesting(false)
-                }
-            }
-
-            HStack(spacing: 10) {
-                if let composerNotice {
-                    Text(composerNotice)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                } else {
-                    Text("Composer UI is ready. Next step: wire Send + live stream through pi-appd.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                    if draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("Write a message…")
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 13)
+                            .allowsHitTesting(false)
+                    }
                 }
 
-                Spacer()
-
-                Button("Send") {
-                    handleSendTapped()
+                Button(action: handleSendTapped) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(width: 32, height: 32)
                 }
                 .buttonStyle(.borderedProminent)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .disabled(draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
-            ChatAccessoryPanel(
-                transportLabel: appState.host.usesRemoteDaemonTransport ? "Remote API" : "Local Mac",
-                workingDirectory: sessionWorkingDirectory,
-                messageCount: sessionMessageCount,
-                latestModel: latestModel,
-                sessionID: sessionIdentifier,
-                hasError: session.loadError != nil,
-                draftLength: draftText.count
-            )
+            if let composerNotice {
+                Text(composerNotice)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
-        .padding(16)
+        .padding(12)
         .background(.regularMaterial)
     }
 
-    private var sessionWorkingDirectory: String? {
-        for event in session.events {
-            if case .meta(let meta, _) = event {
-                return meta.workingDirectory
-            }
-        }
-        return nil
-    }
-
-    private var latestModel: String? {
-        for event in session.events.reversed() {
-            if case .message(let message, _) = event, let model = message.model?.nilIfBlank {
-                return model
-            }
-        }
-        return nil
-    }
-
-    private var sessionMessageCount: Int {
-        session.events.reduce(into: 0) { count, event in
-            if case .message = event {
-                count += 1
-            }
-        }
-    }
-
-    private var sessionIdentifier: String {
-        session.key
-    }
-
     private func handleSendTapped() {
-        composerNotice = "Send backend is not wired yet. UI is ready; next step is POST /send + stream."
+        guard !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        composerNotice = "Send is not wired yet. Next step: POST /send + stream."
     }
 }
 
-private struct ChatAccessoryPanel: View {
-    let transportLabel: String
-    let workingDirectory: String?
-    let messageCount: Int
-    let latestModel: String?
-    let sessionID: String
-    let hasError: Bool
-    let draftLength: Int
+private struct ComposerTextView: NSViewRepresentable {
+    @Binding var text: String
+    @Binding var dynamicHeight: CGFloat
+    let onSubmit: () -> Void
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Accessory area")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text, dynamicHeight: $dynamicHeight, onSubmit: onSubmit)
+    }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    AccessoryChip(title: "Transport", value: transportLabel)
-                    if let workingDirectory, !workingDirectory.isEmpty {
-                        AccessoryChip(title: "Folder", value: workingDirectory)
-                    }
-                    AccessoryChip(title: "Messages", value: "\(messageCount)")
-                    if let latestModel {
-                        AccessoryChip(title: "Model", value: latestModel)
-                    }
-                    AccessoryChip(title: "Draft", value: "\(draftLength) chars")
-                    AccessoryChip(title: "Status", value: hasError ? "Error" : "OK")
-                    AccessoryChip(title: "Session", value: sessionID)
+    func makeNSView(context: Context) -> NSScrollView {
+        let scrollView = NSScrollView()
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+
+        let textView = ComposerNSTextView()
+        textView.delegate = context.coordinator
+        textView.onSubmit = onSubmit
+        textView.isRichText = false
+        textView.importsGraphics = false
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticDataDetectionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isGrammarCheckingEnabled = false
+        textView.isContinuousSpellCheckingEnabled = false
+        textView.drawsBackground = false
+        textView.font = .systemFont(ofSize: NSFont.systemFontSize)
+        textView.textColor = .labelColor
+        textView.textContainerInset = NSSize(width: 0, height: 6)
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.maxSize = NSSize(width: .greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+        textView.minSize = NSSize(width: 0, height: 24)
+        textView.string = text
+
+        scrollView.documentView = textView
+        context.coordinator.textView = textView
+        context.coordinator.recalculateHeight(for: textView)
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = context.coordinator.textView else { return }
+        if textView.string != text {
+            textView.string = text
+        }
+        context.coordinator.recalculateHeight(for: textView)
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        @Binding var text: String
+        @Binding var dynamicHeight: CGFloat
+        let onSubmit: () -> Void
+        weak var textView: NSTextView?
+
+        init(text: Binding<String>, dynamicHeight: Binding<CGFloat>, onSubmit: @escaping () -> Void) {
+            self._text = text
+            self._dynamicHeight = dynamicHeight
+            self.onSubmit = onSubmit
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView else { return }
+            text = textView.string
+            recalculateHeight(for: textView)
+        }
+
+        func recalculateHeight(for textView: NSTextView) {
+            guard let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer else { return }
+            layoutManager.ensureLayout(for: textContainer)
+            let usedRect = layoutManager.usedRect(for: textContainer)
+            let next = min(max(usedRect.height + textView.textContainerInset.height * 2, 36), 140)
+            if abs(dynamicHeight - next) > 0.5 {
+                DispatchQueue.main.async {
+                    self.dynamicHeight = next
                 }
-                .padding(.vertical, 2)
             }
-
-            Text("This block is intentionally easy to customize. You can ask me to replace these chips with buttons, toggles, presets, file controls, model selectors, or any other chat-side tools.")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(12)
-        .background(Color.primary.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
-private struct AccessoryChip: View {
-    let title: String
-    let value: String
+private final class ComposerNSTextView: NSTextView {
+    var onSubmit: (() -> Void)?
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title.uppercased())
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.tertiary)
-            Text(value)
-                .font(.caption)
-                .lineLimit(1)
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36 || event.keyCode == 76 {
+            if event.modifierFlags.contains(.shift) {
+                insertNewline(nil)
+            } else {
+                onSubmit?()
+            }
+            return
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(Color.primary.opacity(0.06))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        super.keyDown(with: event)
     }
 }
