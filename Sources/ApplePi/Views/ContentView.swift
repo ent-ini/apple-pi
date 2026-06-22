@@ -755,8 +755,10 @@ private struct SessionListRow: View {
             Button(action: onSelect) {
                 content
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             SessionActionButton(
                 title: "Fork",

@@ -125,13 +125,18 @@ final class ChatSessionStore: ObservableObject {
             existing.loadFromDisk()
             return existing
         }
+
+        // Single-session UX: opening a different conversation replaces the
+        // previous one instead of accumulating horizontal tabs.
+        closeAll(notify: false)
+
         let session = ChatSession(
             key: key,
             title: title,
             sessionPath: sessionPath,
             eventLoader: eventLoader
         )
-        tabs.append(session)
+        tabs = [session]
         select(session)
         session.loadFromDisk()
         return session
