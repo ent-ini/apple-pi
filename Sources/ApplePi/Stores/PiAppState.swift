@@ -356,11 +356,20 @@ final class PiAppState: ObservableObject {
 
     private func openNewSession(workingDirectory: String?, sessionName: String?, isTemporary: Bool) {
         let effectiveName = sessionName?.nilIfBlank ?? (isTemporary ? "Temporary" : "New Pi")
+        let request = PiLaunchRequest(
+            workingDirectory: workingDirectory,
+            sessionPath: nil,
+            forkPath: nil,
+            sessionName: sessionName?.nilIfBlank,
+            isEphemeral: isTemporary,
+            initialPrompt: nil
+        )
         let key = "new:\(UUID().uuidString)"
         chatWorkspace.openTab(
             key: key,
             title: effectiveName,
-            sessionPath: nil
+            sessionPath: nil,
+            launchRequest: request
         )
         statusMessage = isTemporary ? "Started temporary Pi session" : "Started new Pi session"
     }
@@ -379,6 +388,7 @@ final class PiAppState: ObservableObject {
         chatWorkspace.openOrSelectTab(
             key: session.filePath,
             title: session.title,
+            sessionID: session.id,
             sessionPath: session.filePath,
             eventLoader: eventLoader(for: session)
         )
@@ -386,25 +396,162 @@ final class PiAppState: ObservableObject {
     }
 
     func fork(_ session: PiSessionSummary) {
-        // Read-only MVP: a fork opens a tab bound to the source session's
-        // file path. The next iteration will copy the jsonl and pass the
-        // fork path to a fresh `pi --fork` invocation.
+        let request = PiLaunchRequest.fork(session)
         chatWorkspace.openTab(
-            key: "fork:\(session.filePath)",
+            key: "fork:\(session.filePath):\(UUID().uuidString)",
             title: "Fork: \(session.title)",
-            sessionPath: session.filePath,
-            eventLoader: eventLoader(for: session)
+            sessionPath: nil,
+            launchRequest: request
         )
-        statusMessage = "Fork started from \(session.title)"
-        scheduleCatalogRefresh()
+        statusMessage = "Fork ready from \(session.title)"
     }
 
     private func eventLoader(for session: PiSessionSummary) -> (@Sendable () async throws -> [SessionEvent])? {
+        remoteEventLoader(sessionID: session.id)
+    }
+
+    private func remoteEventLoader(sessionID: String) -> (@Sendable () async throws -> [SessionEvent])? {
         guard host.usesRemoteDaemonTransport || host.mode == .remoteSSH else { return nil }
         let remoteHost = host
-        let remoteSession = session
         return {
-            try await RemoteSessionEventLoader.load(host: remoteHost, session: remoteSession)
+            try await RemoteDaemonClient().loadSessionEvents(host: remoteHost, sessionID: sessionID)
+        }
+    }
+
+    @discardableResult
+    func sendMessage(_ prompt: String, in session: ChatSession) -> Bool {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        guard !session.isSending else {
+            statusMessage = "Pi is already working on this session."
+            return false
+        }
+
+        if let request = session.launchRequest, request.isEphemeral {
+            session.finishSendingWithError("Temporary chat sessions are not supported yet in pi-app.")
+            return false
+        }
+
+        session.beginSending(prompt: trimmed)
+        statusMessage = "Sending to Pi..."
+
+        if host.usesRemoteDaemonTransport || host.mode == .remoteSSH {
+            Task { [weak self, weak session] in
+                guard let self, let session else { return }
+                do {
+                    if let sessionID = session.sessionID?.nilIfBlank {
+                        try await RemoteDaemonClient().streamSend(
+                            host: self.host,
+                            sessionID: sessionID,
+                            prompt: trimmed,
+                            onEvent: { [weak self, weak session] event in
+                                guard let self, let session else { return }
+                                await MainActor.run {
+                                    self.applyTurnStreamEvent(event, to: session)
+                                }
+                            }
+                        )
+                    } else if let launchRequest = session.launchRequest {
+                        try await RemoteDaemonClient().streamNewSession(
+                            host: self.host,
+                            request: launchRequest,
+                            prompt: trimmed,
+                            onEvent: { [weak self, weak session] event in
+                                guard let self, let session else { return }
+                                await MainActor.run {
+                                    self.applyTurnStreamEvent(event, to: session)
+                                }
+                            }
+                        )
+                    } else {
+                        throw RemoteDaemonError.requestFailed(status: 400, body: "Session is missing an ID.")
+                    }
+
+                    await MainActor.run {
+                        session.finishSendingAndReload()
+                        self.statusMessage = "Pi replied"
+                        self.scheduleCatalogRefresh(after: .seconds(0.2))
+                    }
+                } catch {
+                    await MainActor.run {
+                        session.finishSendingWithError(error.localizedDescription)
+                        self.statusMessage = error.localizedDescription
+                    }
+                }
+            }
+            return true
+        }
+
+        let launchRequest = session.launchRequest ?? PiLaunchRequest(
+            workingDirectory: selectedWorkingDirectory,
+            sessionPath: session.sessionPath,
+            forkPath: nil,
+            sessionName: nil,
+            isEphemeral: false,
+            initialPrompt: nil
+        )
+        let sessionRootCandidates = configurationService
+            .resolveSessionRoots(host: host, projectDirectory: launchRequest.workingDirectory)
+            .roots
+            .map { $0.expandingTilde }
+
+        Task { [weak self, weak session] in
+            guard let self, let session else { return }
+            do {
+                try await LocalPiTurnRunner().run(
+                    host: self.host,
+                    request: launchRequest,
+                    prompt: trimmed,
+                    sessionRootCandidates: sessionRootCandidates,
+                    onEvent: { [weak self, weak session] event in
+                        guard let self, let session else { return }
+                        await MainActor.run {
+                            self.applyTurnStreamEvent(event, to: session)
+                        }
+                    }
+                )
+                await MainActor.run {
+                    session.finishSendingAndReload()
+                    self.statusMessage = "Pi replied"
+                    self.scheduleCatalogRefresh(after: .seconds(0.2))
+                }
+            } catch {
+                await MainActor.run {
+                    session.finishSendingWithError(error.localizedDescription)
+                    self.statusMessage = error.localizedDescription
+                }
+            }
+        }
+
+        return true
+    }
+
+    private func applyTurnStreamEvent(_ event: PiTurnStreamEvent, to session: ChatSession) {
+        switch event {
+        case .sessionBound(let binding):
+            let title = binding.title == "Pi" ? session.title : binding.title
+            let eventLoader = binding.sessionID.flatMap { remoteEventLoader(sessionID: $0) }
+            session.bindToSession(
+                key: binding.key,
+                title: title,
+                sessionID: binding.sessionID,
+                sessionPath: binding.sessionPath,
+                eventLoader: eventLoader
+            )
+        case .sessionHeader(let meta):
+            if session.sessionID == nil {
+                session.bindToSession(
+                    sessionID: meta.id,
+                    sessionPath: session.sessionPath,
+                    eventLoader: session.sessionPath == nil ? remoteEventLoader(sessionID: meta.id) : nil
+                )
+            }
+        case .message(let message, let isFinal):
+            if message.role == .assistant {
+                session.applyStreamingMessage(message, isFinal: isFinal)
+            }
+        case .streamError(let message):
+            statusMessage = message
         }
     }
 

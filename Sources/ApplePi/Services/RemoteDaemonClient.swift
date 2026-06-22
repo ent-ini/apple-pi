@@ -59,12 +59,9 @@ struct RemoteDaemonClient {
         limit: Int = 120,
         tokenOverride: String? = nil
     ) async throws -> [SessionEvent] {
-        let encodedID = sessionID.addingPercentEncoding(
-            withAllowedCharacters: CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))
-        ) ?? sessionID
         let response: EventPageResponse = try await send(
             host: host,
-            path: "/sessions/\(encodedID)/events",
+            path: "/sessions/\(encodedPathComponent(sessionID))/events",
             queryItems: [URLQueryItem(name: "limit", value: String(limit))],
             tokenOverride: tokenOverride
         )
@@ -87,32 +84,57 @@ struct RemoteDaemonClient {
         )
     }
 
+    func streamNewSession(
+        host: PiHostConfiguration,
+        request: PiLaunchRequest,
+        prompt: String,
+        onEvent: @escaping @Sendable (PiTurnStreamEvent) async -> Void
+    ) async throws {
+        let body = CreateSessionRequestBody(
+            workingDirectory: request.workingDirectory,
+            sessionName: request.sessionName,
+            isTemporary: request.isEphemeral,
+            prompt: prompt,
+            forkPath: request.forkPath
+        )
+        try await stream(
+            host: host,
+            path: "/sessions",
+            method: "POST",
+            body: body,
+            onEvent: onEvent
+        )
+    }
+
+    func streamSend(
+        host: PiHostConfiguration,
+        sessionID: String,
+        prompt: String,
+        onEvent: @escaping @Sendable (PiTurnStreamEvent) async -> Void
+    ) async throws {
+        let body = SendSessionRequestBody(prompt: prompt)
+        try await stream(
+            host: host,
+            path: "/sessions/\(encodedPathComponent(sessionID))/send",
+            method: "POST",
+            body: body,
+            onEvent: onEvent
+        )
+    }
+
     private func send<Response: Decodable>(
         host: PiHostConfiguration,
         path: String,
         queryItems: [URLQueryItem] = [],
         tokenOverride: String? = nil
     ) async throws -> Response {
-        guard let baseURL = host.remoteDaemonBaseURL else {
-            throw RemoteDaemonError.missingBaseURL
-        }
-        guard let token = tokenOverride?.nilIfBlank ?? RemoteDaemonTokenStore.readToken(for: host) else {
-            throw RemoteDaemonError.missingToken
-        }
-        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
-            throw RemoteDaemonError.invalidBaseURL
-        }
-        let basePath = components.percentEncodedPath
-        components.percentEncodedPath = joinedPath(basePath: basePath, requestPath: path)
-        components.queryItems = queryItems.isEmpty ? nil : queryItems
-        guard let url = components.url else {
-            throw RemoteDaemonError.invalidBaseURL
-        }
-
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.timeoutInterval = 20
+        let request = try makeRequest(
+            host: host,
+            path: path,
+            queryItems: queryItems,
+            tokenOverride: tokenOverride,
+            accept: "application/json"
+        )
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -141,6 +163,100 @@ struct RemoteDaemonClient {
             throw RemoteDaemonError.decodingFailed(error.localizedDescription)
         }
     }
+
+    private func stream<Body: Encodable>(
+        host: PiHostConfiguration,
+        path: String,
+        method: String,
+        body: Body,
+        tokenOverride: String? = nil,
+        onEvent: @escaping @Sendable (PiTurnStreamEvent) async -> Void
+    ) async throws {
+        let request = try makeRequest(
+            host: host,
+            path: path,
+            method: method,
+            tokenOverride: tokenOverride,
+            body: body,
+            accept: "application/x-ndjson"
+        )
+
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw RemoteDaemonError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            var bodyData = Data()
+            for try await byte in bytes {
+                bodyData.append(byte)
+            }
+            let message = String(data: bodyData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw RemoteDaemonError.requestFailed(status: httpResponse.statusCode, body: message)
+        }
+
+        for try await line in bytes.lines {
+            if let event = PiTurnStreamParser.parseLine(line) {
+                await onEvent(event)
+                if case .streamError(let message) = event {
+                    throw RemoteDaemonError.requestFailed(status: 0, body: message)
+                }
+            }
+        }
+    }
+
+    private func makeRequest(
+        host: PiHostConfiguration,
+        path: String,
+        method: String = "GET",
+        queryItems: [URLQueryItem] = [],
+        tokenOverride: String? = nil,
+        accept: String
+    ) throws -> URLRequest {
+        guard let baseURL = host.remoteDaemonBaseURL else {
+            throw RemoteDaemonError.missingBaseURL
+        }
+        guard let token = tokenOverride?.nilIfBlank ?? RemoteDaemonTokenStore.readToken(for: host) else {
+            throw RemoteDaemonError.missingToken
+        }
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            throw RemoteDaemonError.invalidBaseURL
+        }
+        let basePath = components.percentEncodedPath
+        components.percentEncodedPath = joinedPath(basePath: basePath, requestPath: path)
+        components.queryItems = queryItems.isEmpty ? nil : queryItems
+        guard let url = components.url else {
+            throw RemoteDaemonError.invalidBaseURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(accept, forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 300
+        return request
+    }
+
+    private func makeRequest<Body: Encodable>(
+        host: PiHostConfiguration,
+        path: String,
+        method: String,
+        queryItems: [URLQueryItem] = [],
+        tokenOverride: String? = nil,
+        body: Body,
+        accept: String
+    ) throws -> URLRequest {
+        var request = try makeRequest(
+            host: host,
+            path: path,
+            method: method,
+            queryItems: queryItems,
+            tokenOverride: tokenOverride,
+            accept: accept
+        )
+        request.httpBody = try JSONEncoder().encode(body)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        return request
+    }
 }
 
 private func joinedPath(basePath: String, requestPath: String) -> String {
@@ -152,6 +268,12 @@ private func joinedPath(basePath: String, requestPath: String) -> String {
     case (false, true): return "/\(left)"
     case (false, false): return "/\(left)/\(right)"
     }
+}
+
+private func encodedPathComponent(_ value: String) -> String {
+    value.addingPercentEncoding(
+        withAllowedCharacters: CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))
+    ) ?? value
 }
 
 private final class RemoteDaemonDateParsers: @unchecked Sendable {
@@ -198,6 +320,9 @@ enum RemoteDaemonError: LocalizedError {
         case .invalidResponse:
             return "Remote API returned an invalid response."
         case .requestFailed(let status, let body):
+            if status <= 0 {
+                return body?.nilIfBlank ?? "Remote API stream failed."
+            }
             if let body = body?.nilIfBlank {
                 return "Remote API error \(status): \(body)"
             }
@@ -261,4 +386,16 @@ private struct FileItemRecord: Decodable {
     let name: String
     let path: String
     let isDirectory: Bool
+}
+
+private struct CreateSessionRequestBody: Encodable {
+    let workingDirectory: String?
+    let sessionName: String?
+    let isTemporary: Bool
+    let prompt: String
+    let forkPath: String?
+}
+
+private struct SendSessionRequestBody: Encodable {
+    let prompt: String
 }

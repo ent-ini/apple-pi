@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -17,8 +20,9 @@ import (
 )
 
 type server struct {
-	agentDir string
-	token    string
+	agentDir     string
+	token        string
+	piExecutable string
 
 	mu           sync.RWMutex
 	lastRefresh  time.Time
@@ -87,6 +91,37 @@ type fileItemRecord struct {
 	ModifiedAt  *time.Time `json:"modifiedAt,omitempty"`
 }
 
+type createSessionRequest struct {
+	WorkingDirectory string `json:"workingDirectory"`
+	SessionName      string `json:"sessionName"`
+	IsTemporary      bool   `json:"isTemporary"`
+	Prompt           string `json:"prompt"`
+	ForkPath         string `json:"forkPath"`
+}
+
+type sendSessionRequest struct {
+	Prompt string `json:"prompt"`
+}
+
+type sessionBoundRecord struct {
+	Type             string `json:"type"`
+	SessionID        string `json:"sessionId,omitempty"`
+	FilePath         string `json:"filePath,omitempty"`
+	Title            string `json:"title,omitempty"`
+	WorkingDirectory string `json:"workingDirectory,omitempty"`
+}
+
+type streamErrorRecord struct {
+	Type  string `json:"type"`
+	Error string `json:"error"`
+}
+
+type parsedSessionHeader struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+	CWD  string `json:"cwd"`
+}
+
 type parsedSession struct {
 	ID                 string
 	WorkingDirectory   string
@@ -114,10 +149,12 @@ func main() {
 	agentDir := getenvDefault("PI_APPD_AGENT_DIR", "~/.pi/agent")
 	addr := getenvDefault("PI_APPD_ADDR", "127.0.0.1:8787")
 	token := strings.TrimSpace(os.Getenv("PI_APPD_TOKEN"))
+	piExecutable := getenvDefault("PI_APPD_PI_EXECUTABLE", "pi")
 
 	srv := &server{
-		agentDir:   expandHome(agentDir),
-		token:      token,
+		agentDir:     expandHome(agentDir),
+		token:        token,
+		piExecutable: piExecutable,
 		sessionsByID: map[string]sessionRecord{},
 	}
 
@@ -164,13 +201,20 @@ func (s *server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
-	if err := s.refreshCatalogIfNeeded(); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+	switch r.Method {
+	case http.MethodGet:
+		if err := s.refreshCatalogIfNeeded(); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		writeJSON(w, http.StatusOK, s.snapshot)
+	case http.MethodPost:
+		s.handleCreateSession(w, r)
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	writeJSON(w, http.StatusOK, s.snapshot)
 }
 
 func (s *server) handleSessionSubroutes(w http.ResponseWriter, r *http.Request) {
@@ -193,11 +237,27 @@ func (s *server) handleSessionSubroutes(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if len(parts) == 1 {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
 		writeJSON(w, http.StatusOK, record)
 		return
 	}
 	if len(parts) == 2 && parts[1] == "events" {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
 		s.handleSessionEvents(w, r, record)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "send" {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.handleSessionSend(w, r, record)
 		return
 	}
 	writeError(w, http.StatusNotFound, "not found")
@@ -304,6 +364,69 @@ func (s *server) handleSessionEvents(w http.ResponseWriter, r *http.Request, rec
 	writeJSON(w, http.StatusOK, eventsResponse{Events: events, Page: page})
 }
 
+func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
+	var request createSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if request.IsTemporary {
+		writeError(w, http.StatusBadRequest, "temporary sessions are not supported yet")
+		return
+	}
+	prompt := strings.TrimSpace(request.Prompt)
+	if prompt == "" {
+		writeError(w, http.StatusBadRequest, "prompt is required")
+		return
+	}
+	cwd := strings.TrimSpace(request.WorkingDirectory)
+	if cwd == "" {
+		cwd = os.Getenv("HOME")
+	}
+	cwd = expandHome(cwd)
+
+	beforeFiles := scanSessionFiles(filepath.Join(s.agentDir, "sessions"))
+	args := []string{"--mode", "json"}
+	if strings.TrimSpace(request.ForkPath) != "" {
+		args = append(args, "--fork", expandHome(request.ForkPath))
+	} else if strings.TrimSpace(request.SessionName) != "" {
+		args = append(args, "--name", strings.TrimSpace(request.SessionName))
+	}
+	args = append(args, prompt)
+
+	title := firstNonBlank(strings.TrimSpace(request.SessionName), filepath.Base(cwd), "Pi")
+	if err := s.streamPiCommand(w, cwd, args, beforeFiles, nil, title, cwd); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+}
+
+func (s *server) handleSessionSend(w http.ResponseWriter, r *http.Request, record sessionRecord) {
+	var request sendSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	prompt := strings.TrimSpace(request.Prompt)
+	if prompt == "" {
+		writeError(w, http.StatusBadRequest, "prompt is required")
+		return
+	}
+	binding := &sessionBoundRecord{
+		Type:             "session_bound",
+		SessionID:        record.ID,
+		FilePath:         record.FilePath,
+		Title:            record.Title,
+		WorkingDirectory: record.WorkingDirectory,
+	}
+	cwd := firstNonBlank(strings.TrimSpace(record.WorkingDirectory), filepath.Dir(record.FilePath), os.Getenv("HOME"))
+	args := []string{"--mode", "json", "--session", record.FilePath, prompt}
+	if err := s.streamPiCommand(w, cwd, args, nil, binding, record.Title, record.WorkingDirectory); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+}
+
 func (s *server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	requested := strings.TrimSpace(r.URL.Query().Get("path"))
 	if requested == "" {
@@ -345,6 +468,175 @@ func (s *server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		parent = ""
 	}
 	writeJSON(w, http.StatusOK, fileListResponse{Path: path, Parent: parent, Items: items})
+}
+
+func (s *server) streamPiCommand(
+	w http.ResponseWriter,
+	cwd string,
+	args []string,
+	beforeFiles map[string]struct{},
+	binding *sessionBoundRecord,
+	fallbackTitle string,
+	fallbackWorkingDirectory string,
+) error {
+	cmd := exec.Command(s.piExecutable, args...)
+	cmd.Dir = expandHome(cwd)
+	cmd.Env = append(os.Environ(), "PI_CODING_AGENT_DIR="+s.agentDir)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	flusher, _ := w.(http.Flusher)
+	if binding != nil {
+		writeNDJSON(w, binding)
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+
+	stderrDone := make(chan string, 1)
+	go func() {
+		data, _ := io.ReadAll(stderr)
+		stderrDone <- strings.TrimSpace(string(data))
+	}()
+
+	reader := bufio.NewReader(stdout)
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			rawLine := strings.TrimRight(string(line), "\n")
+			if binding == nil {
+				if meta, ok := parseSessionHeaderLine(rawLine); ok {
+					binding = &sessionBoundRecord{
+						Type:             "session_bound",
+						SessionID:        meta.ID,
+						FilePath:         discoverCreatedSessionFile(filepath.Join(s.agentDir, "sessions"), beforeFiles, meta.ID),
+						Title:            fallbackTitle,
+						WorkingDirectory: firstNonBlank(meta.CWD, fallbackWorkingDirectory),
+					}
+					writeNDJSON(w, binding)
+					if flusher != nil {
+						flusher.Flush()
+					}
+				}
+			}
+			_, _ = io.WriteString(w, rawLine)
+			_, _ = io.WriteString(w, "\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			writeNDJSON(w, streamErrorRecord{Type: "stream_error", Error: readErr.Error()})
+			if flusher != nil {
+				flusher.Flush()
+			}
+			break
+		}
+	}
+
+	waitErr := cmd.Wait()
+	stderrText := <-stderrDone
+	if waitErr != nil {
+		message := stderrText
+		if message == "" {
+			message = waitErr.Error()
+		}
+		writeNDJSON(w, streamErrorRecord{Type: "stream_error", Error: message})
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return nil
+	}
+
+	s.invalidateCatalogSnapshot()
+	return nil
+}
+
+func (s *server) invalidateCatalogSnapshot() {
+	s.mu.Lock()
+	s.lastRefresh = time.Time{}
+	s.snapshot = catalogResponse{}
+	s.sessionsByID = map[string]sessionRecord{}
+	s.mu.Unlock()
+}
+
+func parseSessionHeaderLine(raw string) (parsedSessionHeader, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return parsedSessionHeader{}, false
+	}
+	var header parsedSessionHeader
+	if err := json.Unmarshal([]byte(trimmed), &header); err != nil {
+		return parsedSessionHeader{}, false
+	}
+	if header.Type != "session" || strings.TrimSpace(header.ID) == "" {
+		return parsedSessionHeader{}, false
+	}
+	return header, true
+}
+
+func scanSessionFiles(root string) map[string]struct{} {
+	files := map[string]struct{}{}
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d == nil || d.IsDir() || filepath.Ext(path) != ".jsonl" {
+			return nil
+		}
+		files[path] = struct{}{}
+		return nil
+	})
+	return files
+}
+
+func discoverCreatedSessionFile(root string, before map[string]struct{}, sessionID string) string {
+	if before == nil {
+		return ""
+	}
+	var newestPath string
+	var newestTime time.Time
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d == nil || d.IsDir() || filepath.Ext(path) != ".jsonl" {
+			return nil
+		}
+		if _, seen := before[path]; seen {
+			return nil
+		}
+		if strings.Contains(path, sessionID) {
+			newestPath = path
+			return nil
+		}
+		info, infoErr := d.Info()
+		if infoErr == nil && info.ModTime().After(newestTime) {
+			newestTime = info.ModTime()
+			newestPath = path
+		}
+		return nil
+	})
+	return newestPath
+}
+
+func writeNDJSON(w http.ResponseWriter, payload any) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	_, _ = w.Write(data)
+	_, _ = w.Write([]byte("\n"))
 }
 
 func (s *server) refreshCatalogIfNeeded() error {
@@ -795,4 +1087,3 @@ func expandHome(path string) string {
 	}
 	return path
 }
-

@@ -3,40 +3,127 @@ import SwiftUI
 
 /// One Pi session that the user has open in a tab. The read-only MVP loads
 /// the underlying `.jsonl` file once and exposes the events to the chat
-/// view; the next iteration will start the `pi` process in the background
-/// and stream new events from its jsonl as they appear.
+/// view; live sends add transient user/assistant events while the backing
+/// process or remote daemon streams updates.
 @MainActor
 final class ChatSession: ObservableObject, Identifiable {
     let id = UUID()
-    let key: String
+    var key: String
     @Published var title: String
     @Published private(set) var events: [SessionEvent] = []
     @Published private(set) var statusMessage: String = ""
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var loadError: String?
+    @Published private(set) var isSending: Bool = false
 
     /// Path to the on-disk jsonl, if this session is backed by a file. For
-    /// brand-new sessions the path is assigned once the file is created.
-    let sessionPath: String?
-    private let eventLoader: (@Sendable () async throws -> [SessionEvent])?
+    /// brand-new sessions the path is assigned once the first turn creates it.
+    private(set) var sessionPath: String?
+    private(set) var sessionID: String?
+    private(set) var launchRequest: PiLaunchRequest?
+    private var eventLoader: (@Sendable () async throws -> [SessionEvent])?
     private var hasLoadedOnce = false
     private var lastLoadedModificationDate: Date?
     private var loadTask: Task<Void, Never>?
 
+    private var persistedEvents: [SessionEvent] = []
+    private var transientUserEvent: SessionEvent?
+    private var transientAssistantEvent: SessionEvent?
+
     init(
         key: String,
         title: String,
+        sessionID: String? = nil,
         sessionPath: String? = nil,
+        launchRequest: PiLaunchRequest? = nil,
         eventLoader: (@Sendable () async throws -> [SessionEvent])? = nil
     ) {
         self.key = key
         self.title = title
+        self.sessionID = sessionID
         self.sessionPath = sessionPath
+        self.launchRequest = launchRequest
         self.eventLoader = eventLoader
     }
 
-    /// Reload the session from disk. Safe to call multiple times; replaces
-    /// the current event list.
+    var canSend: Bool {
+        !isSending
+    }
+
+    func bindToSession(
+        key: String? = nil,
+        title: String? = nil,
+        sessionID: String?,
+        sessionPath: String?,
+        eventLoader: (@Sendable () async throws -> [SessionEvent])?
+    ) {
+        if let key {
+            self.key = key
+        }
+        if let title {
+            self.title = title
+        }
+        self.sessionID = sessionID
+        self.sessionPath = sessionPath
+        self.eventLoader = eventLoader
+        self.launchRequest = nil
+    }
+
+    func updateLaunchRequest(_ launchRequest: PiLaunchRequest?) {
+        self.launchRequest = launchRequest
+    }
+
+    func beginSending(prompt: String) {
+        loadError = nil
+        isSending = true
+        statusMessage = "Thinking..."
+        transientUserEvent = .message(
+            Message(
+                id: UUID().uuidString,
+                role: .user,
+                content: [.text(prompt)],
+                model: nil,
+                timestamp: Date(),
+                parentId: nil
+            ),
+            lineIndex: Self.transientUserLineIndex
+        )
+        transientAssistantEvent = nil
+        rebuildEvents()
+    }
+
+    func applyStreamingMessage(_ message: Message, isFinal: Bool) {
+        guard message.role == .assistant else { return }
+        transientAssistantEvent = .message(
+            message,
+            lineIndex: Self.transientAssistantLineIndex
+        )
+        statusMessage = isFinal ? "Finishing..." : "Streaming response..."
+        rebuildEvents()
+    }
+
+    func finishSendingAndReload() {
+        isSending = false
+        statusMessage = "Refreshing session..."
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            await MainActor.run {
+                self?.loadFromDisk(force: true)
+            }
+        }
+    }
+
+    func finishSendingWithError(_ message: String) {
+        isSending = false
+        loadError = message
+        statusMessage = message
+        transientUserEvent = nil
+        transientAssistantEvent = nil
+        rebuildEvents()
+    }
+
+    /// Reload the session from disk or remote API. Safe to call multiple
+    /// times; replaces the current persisted event list.
     func loadFromDisk(force: Bool = false) {
         guard !isLoading else { return }
 
@@ -69,16 +156,21 @@ final class ChatSession: ObservableObject, Identifiable {
                 isLoading = false
                 loadTask = nil
             case .loaded(let parsed, let modificationDate):
-                events = parsed
+                persistedEvents = parsed
+                transientUserEvent = nil
+                transientAssistantEvent = nil
+                rebuildEvents()
                 statusMessage = parsed.isEmpty ? "Session is empty." : "\(parsed.count) events"
                 hasLoadedOnce = true
                 lastLoadedModificationDate = modificationDate
                 isLoading = false
+                isSending = false
                 loadTask = nil
             case .failed(let message):
                 loadError = message
                 statusMessage = "Failed to read session: \(message)"
                 isLoading = false
+                isSending = false
                 loadTask = nil
             }
         }
@@ -90,6 +182,13 @@ final class ChatSession: ObservableObject, Identifiable {
         guard !trimmed.isEmpty else { return }
         title = trimmed
     }
+
+    private func rebuildEvents() {
+        events = persistedEvents + [transientUserEvent, transientAssistantEvent].compactMap { $0 }
+    }
+
+    private static let transientUserLineIndex = Int.max - 1
+    private static let transientAssistantLineIndex = Int.max
 }
 
 /// Multi-session store. Holds the list of open Pi sessions and the
@@ -117,7 +216,9 @@ final class ChatSessionStore: ObservableObject {
     func openTab(
         key: String,
         title: String,
+        sessionID: String? = nil,
         sessionPath: String? = nil,
+        launchRequest: PiLaunchRequest? = nil,
         eventLoader: (@Sendable () async throws -> [SessionEvent])? = nil
     ) -> ChatSession {
         if let existing = tabs.first(where: { $0.key == key }) {
@@ -133,7 +234,9 @@ final class ChatSessionStore: ObservableObject {
         let session = ChatSession(
             key: key,
             title: title,
+            sessionID: sessionID,
             sessionPath: sessionPath,
+            launchRequest: launchRequest,
             eventLoader: eventLoader
         )
         tabs = [session]
@@ -146,10 +249,19 @@ final class ChatSessionStore: ObservableObject {
     func openOrSelectTab(
         key: String,
         title: String,
+        sessionID: String? = nil,
         sessionPath: String?,
+        launchRequest: PiLaunchRequest? = nil,
         eventLoader: (@Sendable () async throws -> [SessionEvent])? = nil
     ) -> ChatSession {
-        openTab(key: key, title: title, sessionPath: sessionPath, eventLoader: eventLoader)
+        openTab(
+            key: key,
+            title: title,
+            sessionID: sessionID,
+            sessionPath: sessionPath,
+            launchRequest: launchRequest,
+            eventLoader: eventLoader
+        )
     }
 
     func close(_ tab: ChatSession) {

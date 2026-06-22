@@ -11,7 +11,7 @@ struct ChatSessionView: View {
     @State private var draftHeight: CGFloat = 30
 
     private var canSend: Bool {
-        !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !session.isSending && !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var body: some View {
@@ -92,7 +92,12 @@ struct ChatSessionView: View {
     }
 
     private func handleSendTapped() {
-        guard canSend else { return }
+        let prompt = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else { return }
+        if appState.sendMessage(prompt, in: session) {
+            draftText = ""
+            draftHeight = 30
+        }
     }
 }
 

@@ -39,10 +39,10 @@ enum SessionEventParser {
 
         switch type {
         case "session":
-            guard let meta = parseMeta(object) else { return nil }
+            guard let meta = decodeSessionMeta(from: object) else { return nil }
             return .meta(meta, lineIndex: lineIndex)
         case "message":
-            guard let message = parseMessage(object) else { return nil }
+            guard let message = decodeMessage(from: object) else { return nil }
             return .message(message, lineIndex: lineIndex)
         case "tool_use", "tool_call":
             guard let call = parseToolCall(object) else { return nil }
@@ -57,7 +57,7 @@ enum SessionEventParser {
 
     // MARK: - Field decoders
 
-    private static func parseMeta(_ object: [String: Any]) -> SessionMeta? {
+    static func decodeSessionMeta(from object: [String: Any]) -> SessionMeta? {
         let id = stringValue(from: object, keys: ["sessionId", "sessionID", "id"])
         let cwd = stringValue(from: object, keys: ["cwd", "workingDirectory"])
         let parent = stringValue(from: object, keys: ["parentSession"])
@@ -73,13 +73,17 @@ enum SessionEventParser {
         )
     }
 
-    private static func parseMessage(_ object: [String: Any]) -> Message? {
+    static func decodeMessage(from object: [String: Any]) -> Message? {
         guard let payload = object["message"] as? [String: Any] else { return nil }
         guard let roleString = payload["role"] as? String,
               let role = Message.Role(rawValue: roleString)
         else { return nil }
 
-        let id = (object["id"] as? String) ?? (payload["id"] as? String) ?? UUID().uuidString
+        let id = (object["id"] as? String)
+            ?? (payload["id"] as? String)
+            ?? (payload["responseId"] as? String)
+            ?? (object["responseId"] as? String)
+            ?? UUID().uuidString
         let content = parseContent(payload["content"])
         let model = (payload["model"] as? String) ?? (payload["modelId"] as? String)
         let parentId = (object["parentId"] as? String) ?? (payload["parentId"] as? String)
