@@ -99,6 +99,7 @@ EXECUTABLE_PATH="${MACOS_DIR}/${EXECUTABLE_NAME}"
 INFO_PLIST="${CONTENTS_DIR}/Info.plist"
 ICON_SOURCE="${ROOT_DIR}/Sources/ApplePi/Resources/AppIcon.icns"
 NOTIFY_EXTENSION_SOURCE="${ROOT_DIR}/Sources/ApplePi/Resources/ApplePiNotifyExtension.mjs"
+APP_ENTITLEMENTS_SOURCE="${ROOT_DIR}/script/ApplePi.entitlements"
 ZIP_PATH="${ROOT_DIR}/${DIST_DIR}/${ARCHIVE_NAME}-${VERSION}-${BUILD_NUMBER}.zip"
 APP_NAME_PLIST="$(plist_escape "${APP_NAME}")"
 BUNDLE_IDENTIFIER_PLIST="$(plist_escape "${BUNDLE_IDENTIFIER}")"
@@ -115,6 +116,11 @@ fi
 
 if [[ ! -f "${NOTIFY_EXTENSION_SOURCE}" ]]; then
   echo "Missing notification extension at ${NOTIFY_EXTENSION_SOURCE}" >&2
+  exit 1
+fi
+
+if [[ ! -f "${APP_ENTITLEMENTS_SOURCE}" ]]; then
+  echo "Missing entitlements file at ${APP_ENTITLEMENTS_SOURCE}" >&2
   exit 1
 fi
 
@@ -210,7 +216,7 @@ printf "APPL????" > "${CONTENTS_DIR}/PkgInfo"
 /usr/bin/plutil -lint "${INFO_PLIST}" >/dev/null
 /usr/bin/xattr -cr "${BUNDLE_DIR}" 2>/dev/null || true
 /usr/bin/codesign --force --sign "${SIGN_IDENTITY}" "${RESOURCES_DIR}/ApplePiAskpass"
-/usr/bin/codesign --force --deep --options runtime --sign "${SIGN_IDENTITY}" "${BUNDLE_DIR}"
+/usr/bin/codesign --force --deep --options runtime --entitlements "${APP_ENTITLEMENTS_SOURCE}" --sign "${SIGN_IDENTITY}" "${BUNDLE_DIR}"
 /usr/bin/codesign --verify --deep --strict --verbose=2 "${BUNDLE_DIR}"
 
 if [[ "${CREATE_ZIP}" -eq 1 ]]; then
