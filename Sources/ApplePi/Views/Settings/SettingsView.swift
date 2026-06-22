@@ -10,8 +10,11 @@ struct SettingsView: View {
     @State private var passwordStatus: String?
     @State private var apiTokenInput: String = ""
     @State private var apiTokenStatus: String?
+    @State private var groqAPIKeyInput: String = ""
+    @State private var groqAPIKeyStatus: String?
     @State private var isConfirmingClearPassword = false
     @State private var isConfirmingClearAPIToken = false
+    @State private var isConfirmingClearGroqAPIKey = false
     @State private var isConfirmingHostCommit = false
     @State private var pendingHostCommit: PiHostConfiguration?
     @State private var editingHost: PiHostConfiguration?
@@ -20,6 +23,7 @@ struct SettingsView: View {
         Form {
             appearanceSection
             hostSections
+            voiceSection
             Section("Notifications") {
                 Toggle("Pi session notifications", isOn: notificationBinding(\.isEnabled))
 
@@ -58,15 +62,18 @@ struct SettingsView: View {
         .onAppear {
             if editingHost == nil { editingHost = appState.host }
             refreshAPITokenStatus()
+            refreshGroqAPIKeyStatus()
         }
         .onChange(of: appState.host) { _, newValue in
             if editingHost != newValue {
                 editingHost = newValue
             }
             refreshAPITokenStatus()
+            refreshGroqAPIKeyStatus()
         }
         .onChange(of: editingHost) { _, _ in
             refreshAPITokenStatus()
+            refreshGroqAPIKeyStatus()
         }
         .onDisappear { commitHostIfChanged(force: true) }
         .confirmationDialog(
@@ -94,6 +101,18 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("The stored bearer token for this remote daemon will be deleted. You will need to paste it again before pi-app can authenticate to pi-appd.")
+        }
+        .confirmationDialog(
+            "Clear Groq API key?",
+            isPresented: $isConfirmingClearGroqAPIKey,
+            titleVisibility: .visible
+        ) {
+            Button("Clear Key", role: .destructive) {
+                clearGroqAPIKey()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The locally stored Groq API key will be deleted. Voice recording will still work, but auto-transcription will stop until you save the key again.")
         }
     }
 
@@ -167,6 +186,41 @@ struct SettingsView: View {
                     appState.updateAppearance { $0.emptyChatMessage = newValue }
                 }
             ))
+        }
+    }
+
+    @ViewBuilder
+    private var voiceSection: some View {
+        Section("Voice & Transcription") {
+            VStack(alignment: .leading, spacing: 6) {
+                SecureField("Groq API key", text: $groqAPIKeyInput)
+                    .textContentType(.password)
+                    .onSubmit { saveGroqAPIKey() }
+
+                HStack {
+                    Button(appState.hasGroqAPIKeyStored() ? "Update key" : "Save key", action: saveGroqAPIKey)
+                    if appState.hasGroqAPIKeyStored() {
+                        Button("Clear", role: .destructive) {
+                            isConfirmingClearGroqAPIKey = true
+                        }
+                    }
+                    Spacer()
+                }
+
+                if let groqAPIKeyStatus {
+                    Text(groqAPIKeyStatus)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if appState.hasGroqAPIKeyStored() {
+                    Text("A Groq API key is stored locally for Whisper transcription.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Stored as a 0600 file in Application Support — never in the Keychain.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
     }
 
@@ -568,6 +622,7 @@ struct SettingsView: View {
         if editingHost == nil { editingHost = appState.host }
         refreshPasswordStatus()
         refreshAPITokenStatus()
+        refreshGroqAPIKeyStatus()
     }
 
     private func refreshPasswordStatus() {
@@ -579,6 +634,12 @@ struct SettingsView: View {
     private func refreshAPITokenStatus() {
         apiTokenStatus = appState.hasRemoteDaemonTokenStored(for: currentEditingHost)
             ? "A token is stored for this daemon endpoint."
+            : nil
+    }
+
+    private func refreshGroqAPIKeyStatus() {
+        groqAPIKeyStatus = appState.hasGroqAPIKeyStored()
+            ? "A Groq API key is stored for Whisper transcription."
             : nil
     }
 
@@ -648,6 +709,27 @@ struct SettingsView: View {
             apiTokenStatus = error
         } else {
             apiTokenStatus = "Cleared."
+        }
+    }
+
+    private func saveGroqAPIKey() {
+        guard !groqAPIKeyInput.isEmpty else {
+            groqAPIKeyStatus = "API key is empty."
+            return
+        }
+        if let error = appState.saveGroqAPIKey(groqAPIKeyInput) {
+            groqAPIKeyStatus = error
+        } else {
+            groqAPIKeyInput = ""
+            groqAPIKeyStatus = "Saved."
+        }
+    }
+
+    private func clearGroqAPIKey() {
+        if let error = appState.clearGroqAPIKey() {
+            groqAPIKeyStatus = error
+        } else {
+            groqAPIKeyStatus = "Cleared."
         }
     }
 }

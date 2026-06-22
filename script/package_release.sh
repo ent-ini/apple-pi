@@ -162,6 +162,8 @@ cat > "${INFO_PLIST}" <<PLIST
     <string>Apple Pi launches terminal sessions in project folders you choose, including projects in Documents.</string>
     <key>NSDownloadsFolderUsageDescription</key>
     <string>Apple Pi launches terminal sessions in project folders you choose, including projects in Downloads.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Apple Pi can record voice prompts and transcribe them into chat messages before sending them to Pi.</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>

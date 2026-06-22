@@ -5,6 +5,7 @@ struct LocalPiTurnRunner {
         host: PiHostConfiguration,
         request: PiLaunchRequest,
         prompt: String,
+        attachments: [ChatAttachment],
         sessionRootCandidates: [String],
         onEvent: @escaping @Sendable (PiTurnStreamEvent) async -> Void
     ) async throws {
@@ -13,47 +14,62 @@ struct LocalPiTurnRunner {
         }
 
         let workingDirectory = request.workingDirectory?.expandingTilde ?? NSHomeDirectory()
-        let isCreatingSession = request.sessionPath == nil
-        let beforeFiles = isCreatingSession
-            ? Set(Self.collectSessionFiles(roots: sessionRootCandidates))
-            : []
+        let rpcPayload = PiRpcPayloadBuilder.build(prompt: prompt, attachments: attachments)
 
         let process = Process()
+        let fallbackTitle = Self.fallbackTitle(for: request, cwd: workingDirectory)
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = [host.piExecutable] + makePiArguments(request: request, prompt: prompt)
+        process.arguments = [host.piExecutable] + makePiArguments(request: request)
         process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory)
 
         var environment = RemoteSSHSupport.processEnvironment()
         environment["PI_CODING_AGENT_DIR"] = host.agentDirectory.expandingTilde
         process.environment = environment
-        process.standardInput = FileHandle.nullDevice
 
+        let inputPipe = Pipe()
         let outputPipe = Pipe()
         let errorPipe = Pipe()
+        process.standardInput = inputPipe
         process.standardOutput = outputPipe
         process.standardError = errorPipe
 
+        let terminationObserver = ProcessTerminationObserver()
+        process.terminationHandler = { process in
+            terminationObserver.finish(status: process.terminationStatus)
+        }
         let terminationStatusTask = Task<Int32, Never> {
-            await withCheckedContinuation { continuation in
-                process.terminationHandler = { process in
-                    continuation.resume(returning: process.terminationStatus)
-                }
-            }
+            await terminationObserver.wait()
         }
 
-        try process.run()
+        do {
+            try process.run()
+        } catch {
+            terminationObserver.finish(status: -1)
+            throw error
+        }
 
         let stdoutHandle = outputPipe.fileHandleForReading
         let stderrHandle = errorPipe.fileHandleForReading
+        let stdinHandle = inputPipe.fileHandleForWriting
 
         let stderrTask = Task.detached(priority: .utility) {
             stderrHandle.readDataToEndOfFile()
         }
 
+        try Self.sendRPCCommand(GetStateCommand(id: "apple-pi-state"), to: stdinHandle)
+        try Self.sendRPCCommand(
+            PromptCommand(
+                id: "apple-pi-prompt",
+                type: "prompt",
+                message: rpcPayload.message,
+                images: rpcPayload.images
+            ),
+            to: stdinHandle
+        )
+
         let lineTask = Task.detached(priority: .userInitiated) {
-            var discoveredBinding: PiSessionBinding?
-            var didEmitBinding = false
             var lineBuffer = Data()
+            var didEmitBinding = false
             let handle = stdoutHandle
 
             while true {
@@ -68,58 +84,33 @@ struct LocalPiTurnRunner {
                     lineBuffer.removeSubrange(lineBuffer.startIndex...newlineIndex)
                     guard let rawLine = String(data: lineData, encoding: .utf8) else { continue }
 
-                    if isCreatingSession && !didEmitBinding,
-                       let streamEvent = PiTurnStreamParser.parseLine(rawLine),
-                       case .sessionHeader(let meta) = streamEvent {
-                        let discoveredPath = Self.discoverCreatedSessionPath(
-                            sessionID: meta.id,
-                            roots: sessionRootCandidates,
-                            excluding: beforeFiles
-                        )
-                        let binding = PiSessionBinding(
-                            sessionID: meta.id,
-                            sessionPath: discoveredPath,
-                            title: request.sessionName ?? request.workingDirectory?.nilIfBlank.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "Pi",
-                            workingDirectory: meta.workingDirectory ?? request.workingDirectory
-                        )
-                        discoveredBinding = binding
+                    if !didEmitBinding,
+                       let binding = Self.decodeSessionBinding(from: rawLine, fallbackTitle: fallbackTitle, fallbackWorkingDirectory: workingDirectory) {
                         didEmitBinding = true
                         await onEvent(.sessionBound(binding))
+                        continue
+                    }
+
+                    if Self.isRPCResponseLine(rawLine) {
+                        continue
                     }
 
                     if let streamEvent = PiTurnStreamParser.parseLine(rawLine) {
                         await onEvent(streamEvent)
                     }
+
+                    if Self.isAgentEndLine(rawLine) {
+                        return
+                    }
                 }
             }
-
-            if !lineBuffer.isEmpty,
-               let rawLine = String(data: lineBuffer, encoding: .utf8),
-               let streamEvent = PiTurnStreamParser.parseLine(rawLine) {
-                await onEvent(streamEvent)
-            }
-
-            return (discoveredBinding, didEmitBinding)
         }
+
+        _ = await lineTask.value
+        try? stdinHandle.close()
 
         let terminationStatus = await terminationStatusTask.value
         let stderrData = await stderrTask.value
-        let (discoveredBinding, didEmitBinding) = await lineTask.value
-
-        if isCreatingSession && !didEmitBinding,
-           let sessionID = discoveredBinding?.sessionID ?? Self.findLatestSessionID(roots: sessionRootCandidates, excluding: beforeFiles) {
-            let binding = PiSessionBinding(
-                sessionID: sessionID,
-                sessionPath: discoveredBinding?.sessionPath ?? Self.discoverCreatedSessionPath(
-                    sessionID: sessionID,
-                    roots: sessionRootCandidates,
-                    excluding: beforeFiles
-                ),
-                title: request.sessionName ?? request.workingDirectory?.nilIfBlank.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "Pi",
-                workingDirectory: request.workingDirectory
-            )
-            await onEvent(.sessionBound(binding))
-        }
 
         guard terminationStatus == 0 else {
             let message = String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -127,8 +118,8 @@ struct LocalPiTurnRunner {
         }
     }
 
-    private func makePiArguments(request: PiLaunchRequest, prompt: String) -> [String] {
-        var arguments = ["--mode", "json"]
+    private func makePiArguments(request: PiLaunchRequest) -> [String] {
+        var arguments = ["--mode", "rpc"]
         if let sessionPath = request.sessionPath?.nilIfBlank {
             arguments.append(contentsOf: ["--session", sessionPath])
         } else if let forkPath = request.forkPath?.nilIfBlank {
@@ -136,73 +127,53 @@ struct LocalPiTurnRunner {
         } else if let sessionName = request.sessionName?.nilIfBlank {
             arguments.append(contentsOf: ["--name", sessionName])
         }
-        arguments.append(prompt)
         return arguments
     }
 
-    private static func collectSessionFiles(roots: [String]) -> [String] {
-        let fileManager = FileManager.default
-        return roots.flatMap { root -> [String] in
-            let expanded = root.expandingTilde
-            guard fileManager.fileExists(atPath: expanded) else { return [] }
-            return fileManager.enumerator(atPath: expanded)?
-                .compactMap { $0 as? String }
-                .filter { $0.hasSuffix(".jsonl") }
-                .map { URL(fileURLWithPath: expanded).appendingPathComponent($0).path } ?? []
-        }
+    private static func fallbackTitle(for request: PiLaunchRequest, cwd: String) -> String {
+        request.sessionName?.nilIfBlank ?? request.workingDirectory?.nilIfBlank.map { URL(fileURLWithPath: $0).lastPathComponent } ?? URL(fileURLWithPath: cwd).lastPathComponent
     }
 
-    private static func discoverCreatedSessionPath(
-        sessionID: String,
-        roots: [String],
-        excluding beforeFiles: Set<String>
-    ) -> String? {
-        let matchingFiles = collectSessionFiles(roots: roots)
-            .filter { !beforeFiles.contains($0) }
-            .filter { $0.contains(sessionID) }
-
-        if let exact = matchingFiles.first {
-            return exact
-        }
-
-        let fileManager = FileManager.default
-        let newest = collectSessionFiles(roots: roots)
-            .filter { !beforeFiles.contains($0) }
-            .compactMap { path -> (String, Date)? in
-                guard let attributes = try? fileManager.attributesOfItem(atPath: path),
-                      let modifiedAt = attributes[.modificationDate] as? Date else {
-                    return nil
-                }
-                return (path, modifiedAt)
-            }
-            .sorted { $0.1 > $1.1 }
-            .first?
-            .0
-        return newest
+    private static func sendRPCCommand<Command: Encodable>(_ command: Command, to handle: FileHandle) throws {
+        let data = try JSONEncoder().encode(command)
+        handle.write(data)
+        handle.write(Data([0x0A]))
     }
 
-    private static func findLatestSessionID(roots: [String], excluding beforeFiles: Set<String>) -> String? {
-        let fileManager = FileManager.default
-        let newestPath = collectSessionFiles(roots: roots)
-            .filter { !beforeFiles.contains($0) }
-            .compactMap { path -> (String, Date)? in
-                guard let attributes = try? fileManager.attributesOfItem(atPath: path),
-                      let modifiedAt = attributes[.modificationDate] as? Date else {
-                    return nil
-                }
-                return (path, modifiedAt)
-            }
-            .sorted { $0.1 > $1.1 }
-            .first?
-            .0
-        guard let newestPath,
-              let data = try? Data(contentsOf: URL(fileURLWithPath: newestPath)),
-              let text = String(data: data, encoding: .utf8)?.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first,
-              let event = SessionEventParser.decode(line: String(text), at: 0),
-              case .meta(let meta, _) = event else {
+    private static func decodeSessionBinding(from rawLine: String, fallbackTitle: String, fallbackWorkingDirectory: String) -> PiSessionBinding? {
+        guard let data = rawLine.data(using: .utf8),
+              let response = try? JSONDecoder().decode(GetStateResponse.self, from: data),
+              response.type == "response",
+              response.command == "get_state",
+              response.success,
+              let state = response.data else {
             return nil
         }
-        return meta.id
+
+        return PiSessionBinding(
+            sessionID: state.sessionId,
+            sessionPath: state.sessionFile,
+            title: state.sessionName?.nilIfBlank ?? fallbackTitle,
+            workingDirectory: fallbackWorkingDirectory.nilIfBlank
+        )
+    }
+
+    private static func isRPCResponseLine(_ rawLine: String) -> Bool {
+        guard let data = rawLine.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = object["type"] as? String else {
+            return false
+        }
+        return type == "response"
+    }
+
+    private static func isAgentEndLine(_ rawLine: String) -> Bool {
+        guard let data = rawLine.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = object["type"] as? String else {
+            return false
+        }
+        return type == "agent_end"
     }
 }
 
@@ -221,5 +192,61 @@ enum LocalPiTurnError: LocalizedError {
             }
             return "pi exited with status \(status)."
         }
+    }
+}
+
+private struct GetStateCommand: Encodable {
+    let id: String
+    let type = "get_state"
+}
+
+private struct PromptCommand: Encodable {
+    let id: String
+    let type: String
+    let message: String
+    let images: [PiRpcImageContent]
+}
+
+private final class ProcessTerminationObserver: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Int32, Never>?
+    private var status: Int32?
+
+    func wait() async -> Int32 {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if let status {
+                lock.unlock()
+                continuation.resume(returning: status)
+                return
+            }
+            self.continuation = continuation
+            lock.unlock()
+        }
+    }
+
+    func finish(status: Int32) {
+        lock.lock()
+        if let continuation {
+            self.continuation = nil
+            lock.unlock()
+            continuation.resume(returning: status)
+            return
+        }
+        self.status = status
+        lock.unlock()
+    }
+}
+
+private struct GetStateResponse: Decodable {
+    let type: String
+    let command: String
+    let success: Bool
+    let data: StateData?
+
+    struct StateData: Decodable {
+        let sessionFile: String?
+        let sessionId: String?
+        let sessionName: String?
     }
 }

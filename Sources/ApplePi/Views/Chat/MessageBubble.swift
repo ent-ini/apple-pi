@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 private let messageBubbleMaxWidth: CGFloat = 420
@@ -65,10 +66,18 @@ struct MessageBubble: View {
             }
         case .thinking:
             EmptyView()
-        case .image:
+        case .image(let path, _):
             bubbleSurface(isLastVisibleBlock: isLastVisibleBlock, prefersCompactWidth: true) {
-                Text("[image]")
-                    .font(.body.monospaced())
+                if let image = resolvedImage(for: path) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 240, maxHeight: 240)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                } else {
+                    Text("[image]")
+                        .font(.body.monospaced())
+                }
             }
         }
     }
@@ -170,6 +179,22 @@ struct MessageBubble: View {
     private func prefersCompactWidth(for text: String) -> Bool {
         let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return normalized.count <= 42 && !normalized.contains("\n")
+    }
+
+    private func resolvedImage(for path: String) -> NSImage? {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != "inline-image" else { return nil }
+        if trimmed.hasPrefix("data:"),
+           let commaIndex = trimmed.firstIndex(of: ",") {
+            let base64 = String(trimmed[trimmed.index(after: commaIndex)...])
+            if let data = Data(base64Encoded: base64) {
+                return NSImage(data: data)
+            }
+        }
+        if let image = NSImage(contentsOfFile: trimmed) {
+            return image
+        }
+        return nil
     }
 
     private static let timeFormatter: DateFormatter = {

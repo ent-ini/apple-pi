@@ -87,8 +87,8 @@ enum SessionEventParser {
         let content = parseContent(payload["content"])
         let model = (payload["model"] as? String) ?? (payload["modelId"] as? String)
         let parentId = (object["parentId"] as? String) ?? (payload["parentId"] as? String)
-        let timestamp = (object["timestamp"] as? String).flatMap(parseTimestamp)
-            ?? (payload["timestamp"] as? String).flatMap(parseTimestamp)
+        let timestamp = parseTimestamp(object["timestamp"])
+            ?? parseTimestamp(payload["timestamp"])
 
         return Message(
             id: id,
@@ -122,6 +122,18 @@ enum SessionEventParser {
                     }
                     if let path = block["path"] as? String {
                         return .image(path: path, mime: block["mimeType"] as? String)
+                    }
+                    if let fileName = block["fileName"] as? String {
+                        return .image(path: fileName, mime: block["mimeType"] as? String)
+                    }
+                    if let source = block["source"] as? [String: Any],
+                       let data = source["data"] as? String {
+                        let mime = (block["mimeType"] as? String) ?? "image/png"
+                        return .image(path: "data:\(mime);base64,\(data)", mime: mime)
+                    }
+                    if let data = block["data"] as? String {
+                        let mime = (block["mimeType"] as? String) ?? "image/png"
+                        return .image(path: "data:\(mime);base64,\(data)", mime: mime)
                     }
                 }
                 if let text = block["text"] as? String {
@@ -182,8 +194,19 @@ enum SessionEventParser {
         return nil
     }
 
-    private static func parseTimestamp(_ value: String) -> Date? {
-        timestampParsers.parse(value)
+    private static func parseTimestamp(_ value: Any?) -> Date? {
+        switch value {
+        case let string as String:
+            return timestampParsers.parse(string)
+        case let number as NSNumber:
+            return Date(timeIntervalSince1970: number.doubleValue / 1000)
+        case let integer as Int:
+            return Date(timeIntervalSince1970: Double(integer) / 1000)
+        case let double as Double:
+            return Date(timeIntervalSince1970: double / 1000)
+        default:
+            return nil
+        }
     }
 
     private static let timestampParsers = TimestampParsers()

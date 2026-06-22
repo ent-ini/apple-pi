@@ -74,15 +74,28 @@ final class ChatSession: ObservableObject, Identifiable {
         self.launchRequest = launchRequest
     }
 
-    func beginSending(prompt: String) {
+    func beginSending(prompt: String, attachments: [ChatAttachment] = []) {
         loadError = nil
         isSending = true
         statusMessage = "Thinking..."
+
+        var content: [ContentBlock] = attachments.map { attachment in
+            switch attachment.kind {
+            case .image:
+                return .image(path: attachment.filePath, mime: attachment.mimeType)
+            case .file, .audio:
+                return .text("[File: \(attachment.displayName)]")
+            }
+        }
+        if !prompt.isEmpty {
+            content.append(.text(prompt))
+        }
+
         transientUserEvent = .message(
             Message(
                 id: UUID().uuidString,
                 role: .user,
-                content: [.text(prompt)],
+                content: content,
                 model: nil,
                 timestamp: Date(),
                 parentId: nil

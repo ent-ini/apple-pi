@@ -1,17 +1,30 @@
 import AppKit
 import SwiftUI
 
-/// View for a single open Pi session. The composer is intentionally minimal:
-/// one auto-growing input field plus a send icon button on the same row.
+/// View for a single open Pi session. The composer stays compact but now
+/// supports staged attachments above the input row.
 struct ChatSessionView: View {
     @EnvironmentObject private var appState: PiAppState
     @ObservedObject var session: ChatSession
 
     @State private var draftText = ""
     @State private var draftHeight: CGFloat = 30
+    @State private var draftAttachments: [ChatAttachment] = []
+    @State private var isTranscribingAudio = false
+    @State private var transcriptionTask: Task<Void, Never>?
+    @StateObject private var audioRecorder = AudioRecordingController()
+
+    private let attachmentStagingService = AttachmentStagingService()
 
     private var canSend: Bool {
-        !session.isSending && !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !session.isSending && !audioRecorder.isRecording && !isTranscribingAudio && (
+            !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            !draftAttachments.isEmpty
+        )
+    }
+
+    private var canRecord: Bool {
+        !session.isSending && !isTranscribingAudio
     }
 
     var body: some View {
@@ -20,62 +33,372 @@ struct ChatSessionView: View {
             Divider().opacity(0.25)
             composerArea
         }
+        .onDisappear {
+            transcriptionTask?.cancel()
+            transcriptionTask = nil
+            if audioRecorder.isRecording {
+                audioRecorder.cancelRecording()
+            }
+            cleanupAttachments(draftAttachments)
+        }
     }
 
     private var composerArea: some View {
         let controlHeight = max(draftHeight, 30)
 
-        return HStack(alignment: .bottom, spacing: 10) {
-            ComposerTextView(
-                text: $draftText,
-                dynamicHeight: $draftHeight,
-                onSubmit: handleSendTapped
-            )
-            .frame(maxWidth: .infinity, minHeight: controlHeight, maxHeight: controlHeight)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.primary.opacity(0.03))
-                    .allowsHitTesting(false)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color.primary.opacity(0.12), lineWidth: 1)
-                    .allowsHitTesting(false)
-            )
-
-            Button(action: handleSendTapped) {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(sendIconStyle)
-                    .frame(width: 30, height: 30)
-                    .background(
-                        Circle()
-                            .fill(sendButtonBackground)
-                    )
+        return VStack(alignment: .leading, spacing: 10) {
+            if audioRecorder.isRecording || isTranscribingAudio {
+                voiceStatusView
             }
-            .buttonStyle(.plain)
-            .allowsHitTesting(canSend)
-            .opacity(canSend ? 1 : 0.82)
+
+            if !draftAttachments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 10) {
+                        ForEach(draftAttachments) { attachment in
+                            ComposerAttachmentPreview(
+                                attachment: attachment,
+                                onRemove: { removeAttachment(attachment) }
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 1)
+                }
+            }
+
+            HStack(alignment: .bottom, spacing: 10) {
+                composerActionButton(
+                    title: "Files",
+                    systemName: "paperclip",
+                    enabled: !audioRecorder.isRecording,
+                    action: pickAttachments
+                )
+                .help("Attach files")
+
+                ComposerTextView(
+                    text: $draftText,
+                    dynamicHeight: $draftHeight,
+                    onSubmit: handleSendTapped,
+                    onPasteAttachments: handlePasteAttachments
+                )
+                .frame(maxWidth: .infinity, minHeight: controlHeight, maxHeight: controlHeight)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.primary.opacity(0.03))
+                        .allowsHitTesting(false)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                        .allowsHitTesting(false)
+                )
+
+                composerActionButton(
+                    title: audioRecorder.isRecording ? "Stop" : "Voice",
+                    systemName: audioRecorder.isRecording ? "stop.fill" : "mic.fill",
+                    enabled: canRecord || audioRecorder.isRecording,
+                    foreground: audioRecorder.isRecording ? .white : nil,
+                    background: audioRecorder.isRecording ? Color.red.opacity(0.92) : nil,
+                    action: handleMicrophoneTapped
+                )
+                .help(audioRecorder.isRecording ? "Stop recording" : "Record voice note")
+
+                composerIconButton(
+                    systemName: "arrow.up",
+                    enabled: canSend,
+                    action: handleSendTapped
+                )
+                .help("Send")
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
     }
 
-    private var sendIconStyle: AnyShapeStyle {
-        AnyShapeStyle(appState.appearance.accentForegroundColor.opacity(canSend ? 1 : 0.78))
+    private var voiceStatusView: some View {
+        HStack(spacing: 10) {
+            if audioRecorder.isRecording {
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 8, height: 8)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+            }
+
+            VoiceWaveformView(levels: audioRecorder.levels, tint: appState.appearance.accentColor)
+                .frame(width: 108, height: 24)
+
+            Text(audioRecorder.isRecording ? formattedDuration(audioRecorder.elapsedTime) : "Transcribing…")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+
+            Spacer()
+
+            Button("Cancel", role: .destructive) {
+                if audioRecorder.isRecording {
+                    audioRecorder.cancelRecording()
+                    appState.statusMessage = "Voice note cancelled"
+                } else {
+                    transcriptionTask?.cancel()
+                    transcriptionTask = nil
+                    isTranscribingAudio = false
+                    appState.statusMessage = "Transcription cancelled"
+                }
+            }
+            .buttonStyle(.plain)
+            .font(.caption)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.primary.opacity(0.05))
+        )
     }
 
-    private var sendButtonBackground: Color {
-        appState.appearance.accentColor.opacity(canSend ? 1 : 0.24)
+    @ViewBuilder
+    private func composerActionButton(
+        title: String,
+        systemName: String,
+        enabled: Bool,
+        foreground: Color? = nil,
+        background: Color? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemName)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(foreground ?? appState.appearance.accentForegroundColor.opacity(enabled ? 1 : 0.78))
+                .frame(minWidth: 62, minHeight: 34)
+                .padding(.horizontal, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(background ?? controlBackground(enabled: enabled))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .stroke(Color.primary.opacity(0.14), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.82)
+    }
+
+    private func controlBackground(enabled: Bool) -> Color {
+        appState.appearance.accentColor.opacity(enabled ? 1 : 0.24)
     }
 
     private func handleSendTapped() {
         let prompt = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty else { return }
-        if appState.sendMessage(prompt, in: session) {
+        guard canSend else { return }
+        if appState.sendMessage(prompt, attachments: draftAttachments, in: session) {
             draftText = ""
             draftHeight = 30
+            draftAttachments = []
         }
+    }
+
+    private func handleMicrophoneTapped() {
+        if audioRecorder.isRecording {
+            finishVoiceRecording()
+            return
+        }
+
+        guard canRecord else { return }
+        Task {
+            do {
+                try await audioRecorder.startRecording()
+                await MainActor.run {
+                    appState.statusMessage = "Recording voice note..."
+                }
+            } catch {
+                await MainActor.run {
+                    appState.statusMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func finishVoiceRecording() {
+        do {
+            let recordingURL = try audioRecorder.stopRecording()
+            let staged = try attachmentStagingService.stageFile(at: recordingURL)
+            try? FileManager.default.removeItem(at: recordingURL)
+            appendAttachments([staged])
+            transcribeAudioAttachmentIfPossible(staged)
+        } catch {
+            appState.statusMessage = error.localizedDescription
+        }
+    }
+
+    private func transcribeAudioAttachmentIfPossible(_ attachment: ChatAttachment) {
+        guard attachment.kind == .audio else { return }
+        guard let apiKey = appState.groqAPIKey() else {
+            appState.statusMessage = "Voice note attached. Save a Groq API key in Settings to enable auto-transcription."
+            return
+        }
+
+        let fileURL = attachment.fileURL
+        isTranscribingAudio = true
+        appState.statusMessage = "Transcribing voice note..."
+        transcriptionTask?.cancel()
+        transcriptionTask = Task {
+            do {
+                let transcript = try await GroqTranscriptionClient().transcribeAudio(at: fileURL, apiKey: apiKey)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    mergeTranscript(transcript)
+                    isTranscribingAudio = false
+                    transcriptionTask = nil
+                    appState.statusMessage = "Voice note transcribed"
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    isTranscribingAudio = false
+                    transcriptionTask = nil
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    isTranscribingAudio = false
+                    transcriptionTask = nil
+                    appState.statusMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func mergeTranscript(_ transcript: String) {
+        let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        if draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            draftText = trimmed
+        } else if draftText.hasSuffix("\n") {
+            draftText += trimmed
+        } else {
+            draftText += "\n\n\(trimmed)"
+        }
+    }
+
+    private func pickAttachments() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.resolvesAliases = true
+        panel.title = "Choose files or images"
+
+        guard panel.runModal() == .OK else { return }
+        addAttachments(from: panel.urls)
+    }
+
+    private func handlePasteAttachments(_ pasteboard: NSPasteboard) {
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL], !urls.isEmpty {
+            addAttachments(from: urls)
+            return
+        }
+
+        do {
+            if let stagedImage = try attachmentStagingService.stagePastedImage(from: pasteboard) {
+                appendAttachments([stagedImage])
+            }
+        } catch {
+            appState.statusMessage = error.localizedDescription
+        }
+    }
+
+    private func addAttachments(from urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        do {
+            let staged = try urls.map { try attachmentStagingService.stageFile(at: $0) }
+            appendAttachments(staged)
+        } catch {
+            appState.statusMessage = error.localizedDescription
+        }
+    }
+
+    private func appendAttachments(_ attachments: [ChatAttachment]) {
+        for attachment in attachments where !draftAttachments.contains(where: { $0.fileURL == attachment.fileURL }) {
+            draftAttachments.append(attachment)
+        }
+    }
+
+    private func removeAttachment(_ attachment: ChatAttachment) {
+        draftAttachments.removeAll { $0.id == attachment.id }
+        cleanupAttachments([attachment])
+    }
+
+    private func cleanupAttachments(_ attachments: [ChatAttachment]) {
+        for attachment in attachments {
+            try? FileManager.default.removeItem(at: attachment.fileURL)
+        }
+    }
+
+    private func formattedDuration(_ value: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(value.rounded(.down)))
+        return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
+    }
+}
+
+private struct ComposerAttachmentPreview: View {
+    let attachment: ChatAttachment
+    let onRemove: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Group {
+                if attachment.isImage, let image = NSImage(contentsOf: attachment.fileURL) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 84, height: 84)
+                        .clipped()
+                } else {
+                    HStack(spacing: 8) {
+                        Image(systemName: attachment.kind == .audio ? "waveform" : "doc")
+                            .font(.system(size: 18, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        Text(attachment.displayName)
+                            .font(.caption)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                    }
+                    .frame(width: 160, height: 64, alignment: .leading)
+                    .padding(.horizontal, 10)
+                }
+            }
+            .background(Color.primary.opacity(0.05))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            Button(action: onRemove) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 18, height: 18)
+                    .background(Circle().fill(Color.black.opacity(0.7)))
+            }
+            .buttonStyle(.plain)
+            .offset(x: 6, y: -6)
+        }
+        .frame(width: attachment.isImage ? 84 : 160, height: attachment.isImage ? 84 : 64)
+    }
+}
+
+private struct VoiceWaveformView: View {
+    let levels: [CGFloat]
+    let tint: Color
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 3) {
+            ForEach(Array(levels.enumerated()), id: \.offset) { _, level in
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(tint.opacity(0.92))
+                    .frame(width: 3, height: max(CGFloat(4), CGFloat(24) * level))
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .center)
     }
 }
 
@@ -83,9 +406,15 @@ private struct ComposerTextView: NSViewRepresentable {
     @Binding var text: String
     @Binding var dynamicHeight: CGFloat
     let onSubmit: () -> Void
+    let onPasteAttachments: (NSPasteboard) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, dynamicHeight: $dynamicHeight, onSubmit: onSubmit)
+        Coordinator(
+            text: $text,
+            dynamicHeight: $dynamicHeight,
+            onSubmit: onSubmit,
+            onPasteAttachments: onPasteAttachments
+        )
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -103,6 +432,7 @@ private struct ComposerTextView: NSViewRepresentable {
         let textView = ComposerNSTextView()
         textView.delegate = context.coordinator
         textView.onSubmit = onSubmit
+        textView.onPasteAttachments = onPasteAttachments
         textView.isEditable = true
         textView.isSelectable = true
         textView.allowsUndo = true
@@ -143,6 +473,7 @@ private struct ComposerTextView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = context.coordinator.textView else { return }
+        textView.onPasteAttachments = onPasteAttachments
         if textView.string != text {
             textView.string = text
         }
@@ -160,12 +491,19 @@ private struct ComposerTextView: NSViewRepresentable {
         @Binding var text: String
         @Binding var dynamicHeight: CGFloat
         let onSubmit: () -> Void
+        let onPasteAttachments: (NSPasteboard) -> Void
         weak var textView: NSTextView?
 
-        init(text: Binding<String>, dynamicHeight: Binding<CGFloat>, onSubmit: @escaping () -> Void) {
+        init(
+            text: Binding<String>,
+            dynamicHeight: Binding<CGFloat>,
+            onSubmit: @escaping () -> Void,
+            onPasteAttachments: @escaping (NSPasteboard) -> Void
+        ) {
             self._text = text
             self._dynamicHeight = dynamicHeight
             self.onSubmit = onSubmit
+            self.onPasteAttachments = onPasteAttachments
         }
 
         func textDidChange(_ notification: Notification) {
@@ -215,6 +553,7 @@ private final class ComposerScrollView: NSScrollView {
 
 private final class ComposerNSTextView: NSTextView {
     var onSubmit: (() -> Void)?
+    var onPasteAttachments: ((NSPasteboard) -> Void)?
 
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 36 || event.keyCode == 76 {
@@ -226,5 +565,21 @@ private final class ComposerNSTextView: NSTextView {
             return
         }
         super.keyDown(with: event)
+    }
+
+    override func paste(_ sender: Any?) {
+        let pasteboard = NSPasteboard.general
+        if Self.hasAttachmentPayload(in: pasteboard) {
+            onPasteAttachments?(pasteboard)
+            return
+        }
+        super.paste(sender)
+    }
+
+    private static func hasAttachmentPayload(in pasteboard: NSPasteboard) -> Bool {
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL], !urls.isEmpty {
+            return true
+        }
+        return pasteboard.canReadObject(forClasses: [NSImage.self], options: nil)
     }
 }

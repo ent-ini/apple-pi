@@ -88,6 +88,7 @@ struct RemoteDaemonClient {
         host: PiHostConfiguration,
         request: PiLaunchRequest,
         prompt: String,
+        attachments: [UploadedAttachmentReference] = [],
         onEvent: @escaping @Sendable (PiTurnStreamEvent) async -> Void
     ) async throws {
         let body = CreateSessionRequestBody(
@@ -95,7 +96,8 @@ struct RemoteDaemonClient {
             sessionName: request.sessionName,
             isTemporary: request.isEphemeral,
             prompt: prompt,
-            forkPath: request.forkPath
+            forkPath: request.forkPath,
+            attachments: attachments
         )
         try await stream(
             host: host,
@@ -110,9 +112,10 @@ struct RemoteDaemonClient {
         host: PiHostConfiguration,
         sessionID: String,
         prompt: String,
+        attachments: [UploadedAttachmentReference] = [],
         onEvent: @escaping @Sendable (PiTurnStreamEvent) async -> Void
     ) async throws {
-        let body = SendSessionRequestBody(prompt: prompt)
+        let body = SendSessionRequestBody(prompt: prompt, attachments: attachments)
         try await stream(
             host: host,
             path: "/sessions/\(encodedPathComponent(sessionID))/send",
@@ -120,6 +123,49 @@ struct RemoteDaemonClient {
             body: body,
             onEvent: onEvent
         )
+    }
+
+    func uploadAttachment(host: PiHostConfiguration, attachment: ChatAttachment) async throws -> UploadedAttachmentReference {
+        let boundary = "ApplePiBoundary-\(UUID().uuidString)"
+        var request = try makeRequest(
+            host: host,
+            path: "/uploads",
+            method: "POST",
+            accept: "application/json"
+        )
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        var body = Data()
+        let multipartFileName = attachment.displayName
+            .replacingOccurrences(of: "\\", with: "-")
+            .replacingOccurrences(of: "\"", with: "-")
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(multipartFileName)\"\r\n".data(using: .utf8)!)
+        if let mimeType = attachment.mimeType {
+            body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
+        } else {
+            body.append("\r\n".data(using: .utf8)!)
+        }
+        body.append(try Data(contentsOf: attachment.fileURL))
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        request.httpBody = body
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw RemoteDaemonError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let message = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw RemoteDaemonError.requestFailed(status: httpResponse.statusCode, body: message)
+        }
+        do {
+            return try JSONDecoder().decode(UploadedAttachmentReference.self, from: data)
+        } catch {
+            throw RemoteDaemonError.decodingFailed(error.localizedDescription)
+        }
     }
 
     private func send<Response: Decodable>(
@@ -388,14 +434,23 @@ private struct FileItemRecord: Decodable {
     let isDirectory: Bool
 }
 
+struct UploadedAttachmentReference: Codable, Hashable, Sendable {
+    let path: String
+    let fileName: String
+    let mimeType: String?
+    let size: Int64?
+}
+
 private struct CreateSessionRequestBody: Encodable {
     let workingDirectory: String?
     let sessionName: String?
     let isTemporary: Bool
     let prompt: String
     let forkPath: String?
+    let attachments: [UploadedAttachmentReference]
 }
 
 private struct SendSessionRequestBody: Encodable {
     let prompt: String
+    let attachments: [UploadedAttachmentReference]
 }

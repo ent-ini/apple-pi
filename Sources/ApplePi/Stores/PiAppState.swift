@@ -419,10 +419,11 @@ final class PiAppState: ObservableObject {
     }
 
     @discardableResult
-    func sendMessage(_ prompt: String, in session: ChatSession) -> Bool {
+    func sendMessage(_ prompt: String, attachments: [ChatAttachment] = [], in session: ChatSession) -> Bool {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
-        let taggedPrompt = sourceTaggedAppPrompt(trimmed)
+        guard !trimmed.isEmpty || !attachments.isEmpty else { return false }
+        let effectivePrompt = trimmed.isEmpty ? "Please inspect the attached item(s)." : trimmed
+        let taggedPrompt = sourceTaggedAppPrompt(effectivePrompt)
         guard !session.isSending else {
             statusMessage = "Pi is already working on this session."
             return false
@@ -433,18 +434,20 @@ final class PiAppState: ObservableObject {
             return false
         }
 
-        session.beginSending(prompt: taggedPrompt)
+        session.beginSending(prompt: taggedPrompt, attachments: attachments)
         statusMessage = "Sending to Pi..."
 
         if host.usesRemoteDaemonTransport || host.mode == .remoteSSH {
             Task { [weak self, weak session] in
                 guard let self, let session else { return }
                 do {
+                    let daemonAttachments = try await self.uploadAttachmentsIfNeeded(attachments)
                     if let sessionID = session.sessionID?.nilIfBlank {
                         try await RemoteDaemonClient().streamSend(
                             host: self.host,
                             sessionID: sessionID,
                             prompt: taggedPrompt,
+                            attachments: daemonAttachments,
                             onEvent: { [weak self, weak session] event in
                                 guard let self, let session else { return }
                                 await MainActor.run {
@@ -457,6 +460,7 @@ final class PiAppState: ObservableObject {
                             host: self.host,
                             request: launchRequest,
                             prompt: taggedPrompt,
+                            attachments: daemonAttachments,
                             onEvent: { [weak self, weak session] event in
                                 guard let self, let session else { return }
                                 await MainActor.run {
@@ -503,6 +507,7 @@ final class PiAppState: ObservableObject {
                     host: self.host,
                     request: launchRequest,
                     prompt: taggedPrompt,
+                    attachments: attachments,
                     sessionRootCandidates: sessionRootCandidates,
                     onEvent: { [weak self, weak session] event in
                         guard let self, let session else { return }
@@ -675,6 +680,34 @@ final class PiAppState: ObservableObject {
         RemoteDaemonTokenStore.hasToken(for: targetHost ?? host)
     }
 
+    @discardableResult
+    func saveGroqAPIKey(_ token: String) -> String? {
+        do {
+            try GroqAPIKeyStore.saveKey(token)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    @discardableResult
+    func clearGroqAPIKey() -> String? {
+        do {
+            try GroqAPIKeyStore.deleteKey()
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    func hasGroqAPIKeyStored() -> Bool {
+        GroqAPIKeyStore.hasKey()
+    }
+
+    func groqAPIKey() -> String? {
+        GroqAPIKeyStore.readKey()
+    }
+
     private func scheduleCatalogRefresh(after delay: Duration = .seconds(1)) {
         Task { [weak self] in
             try? await Task.sleep(for: delay)
@@ -829,5 +862,15 @@ final class PiAppState: ObservableObject {
             return text
         }
         return "\(tag)\n\(text)"
+    }
+
+    private func uploadAttachmentsIfNeeded(_ attachments: [ChatAttachment]) async throws -> [UploadedAttachmentReference] {
+        guard !attachments.isEmpty else { return [] }
+        var uploaded: [UploadedAttachmentReference] = []
+        let client = RemoteDaemonClient()
+        for attachment in attachments {
+            uploaded.append(try await client.uploadAttachment(host: host, attachment: attachment))
+        }
+        return uploaded
     }
 }

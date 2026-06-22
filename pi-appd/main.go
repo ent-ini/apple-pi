@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 type server struct {
@@ -91,16 +93,25 @@ type fileItemRecord struct {
 	ModifiedAt  *time.Time `json:"modifiedAt,omitempty"`
 }
 
+type attachmentReference struct {
+	Path     string `json:"path"`
+	FileName string `json:"fileName,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
+	Size     int64  `json:"size,omitempty"`
+}
+
 type createSessionRequest struct {
-	WorkingDirectory string `json:"workingDirectory"`
-	SessionName      string `json:"sessionName"`
-	IsTemporary      bool   `json:"isTemporary"`
-	Prompt           string `json:"prompt"`
-	ForkPath         string `json:"forkPath"`
+	WorkingDirectory string                `json:"workingDirectory"`
+	SessionName      string                `json:"sessionName"`
+	IsTemporary      bool                  `json:"isTemporary"`
+	Prompt           string                `json:"prompt"`
+	ForkPath         string                `json:"forkPath"`
+	Attachments      []attachmentReference `json:"attachments"`
 }
 
 type sendSessionRequest struct {
-	Prompt string `json:"prompt"`
+	Prompt      string                `json:"prompt"`
+	Attachments []attachmentReference `json:"attachments"`
 }
 
 type sessionBoundRecord struct {
@@ -111,15 +122,46 @@ type sessionBoundRecord struct {
 	WorkingDirectory string `json:"workingDirectory,omitempty"`
 }
 
+type uploadResponse struct {
+	Path     string `json:"path"`
+	FileName string `json:"fileName"`
+	MimeType string `json:"mimeType,omitempty"`
+	Size     int64  `json:"size,omitempty"`
+}
+
 type streamErrorRecord struct {
 	Type  string `json:"type"`
 	Error string `json:"error"`
 }
 
-type parsedSessionHeader struct {
+type rpcImageContent struct {
+	Type     string `json:"type"`
+	Data     string `json:"data"`
+	MimeType string `json:"mimeType"`
+}
+
+type rpcPromptCommand struct {
+	ID                string            `json:"id,omitempty"`
+	Type              string            `json:"type"`
+	Message           string            `json:"message"`
+	Images            []rpcImageContent `json:"images,omitempty"`
+	StreamingBehavior string            `json:"streamingBehavior,omitempty"`
+}
+
+type rpcGetStateCommand struct {
+	ID   string `json:"id,omitempty"`
 	Type string `json:"type"`
-	ID   string `json:"id"`
-	CWD  string `json:"cwd"`
+}
+
+type rpcStateResponse struct {
+	Type    string `json:"type"`
+	Command string `json:"command"`
+	Success bool   `json:"success"`
+	Data    *struct {
+		SessionFile string `json:"sessionFile"`
+		SessionID   string `json:"sessionId"`
+		SessionName string `json:"sessionName"`
+	} `json:"data"`
 }
 
 type parsedSession struct {
@@ -163,6 +205,7 @@ func main() {
 	mux.HandleFunc("/sessions", srv.handleSessions)
 	mux.HandleFunc("/sessions/", srv.handleSessionSubroutes)
 	mux.HandleFunc("/files", srv.handleFiles)
+	mux.HandleFunc("/uploads", srv.handleUploads)
 
 	log.Printf("pi-appd listening on %s (agentDir=%s)", addr, srv.agentDir)
 	if err := http.ListenAndServe(addr, srv.loggingMiddleware(srv.authMiddleware(mux))); err != nil {
@@ -385,17 +428,20 @@ func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	cwd = expandHome(cwd)
 
-	beforeFiles := scanSessionFiles(filepath.Join(s.agentDir, "sessions"))
-	args := []string{"--mode", "json"}
+	rpcPrompt, err := s.buildRPCPromptPayload(prompt, request.Attachments)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	args := []string{"--mode", "rpc"}
 	if strings.TrimSpace(request.ForkPath) != "" {
 		args = append(args, "--fork", expandHome(request.ForkPath))
 	} else if strings.TrimSpace(request.SessionName) != "" {
 		args = append(args, "--name", strings.TrimSpace(request.SessionName))
 	}
-	args = append(args, prompt)
 
 	title := firstNonBlank(strings.TrimSpace(request.SessionName), filepath.Base(cwd), "Pi")
-	if err := s.streamPiCommand(w, cwd, args, beforeFiles, nil, title, cwd); err != nil {
+	if err := s.streamPiRPCCommand(w, cwd, args, rpcPrompt, nil, title, cwd); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -420,8 +466,13 @@ func (s *server) handleSessionSend(w http.ResponseWriter, r *http.Request, recor
 		WorkingDirectory: record.WorkingDirectory,
 	}
 	cwd := firstNonBlank(strings.TrimSpace(record.WorkingDirectory), filepath.Dir(record.FilePath), os.Getenv("HOME"))
-	args := []string{"--mode", "json", "--session", record.FilePath, prompt}
-	if err := s.streamPiCommand(w, cwd, args, nil, binding, record.Title, record.WorkingDirectory); err != nil {
+	rpcPrompt, err := s.buildRPCPromptPayload(prompt, request.Attachments)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	args := []string{"--mode", "rpc", "--session", record.FilePath}
+	if err := s.streamPiRPCCommand(w, cwd, args, rpcPrompt, binding, record.Title, record.WorkingDirectory); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -470,11 +521,138 @@ func (s *server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, fileListResponse{Path: path, Parent: parent, Items: items})
 }
 
-func (s *server) streamPiCommand(
+func (s *server) handleUploads(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid multipart form")
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "file is required")
+		return
+	}
+	defer file.Close()
+
+	uploadDir := filepath.Join(s.agentDir, "uploads")
+	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	fileName := sanitizeUploadName(header.Filename)
+	targetPath := filepath.Join(uploadDir, uniqueUploadName(fileName))
+	targetFile, err := os.Create(targetPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer targetFile.Close()
+
+	size, err := io.Copy(targetFile, file)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, uploadResponse{
+		Path:     targetPath,
+		FileName: filepath.Base(targetPath),
+		MimeType: header.Header.Get("Content-Type"),
+		Size:     size,
+	})
+}
+
+func (s *server) buildRPCPromptPayload(prompt string, attachments []attachmentReference) (rpcPromptCommand, error) {
+	prefix := strings.Builder{}
+	images := make([]rpcImageContent, 0, len(attachments))
+	resolved, err := s.resolveAttachmentPaths(attachments)
+	if err != nil {
+		return rpcPromptCommand{}, err
+	}
+
+	for _, attachment := range resolved {
+		data, readErr := os.ReadFile(attachment.Path)
+		if readErr != nil {
+			return rpcPromptCommand{}, errors.New("attachment file does not exist")
+		}
+
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(attachment.MimeType)), "image/") {
+			images = append(images, rpcImageContent{
+				Type:     "image",
+				Data:     base64.StdEncoding.EncodeToString(data),
+				MimeType: attachment.MimeType,
+			})
+			prefix.WriteString("<file name=\"")
+			prefix.WriteString(xmlEscape(attachment.Path))
+			prefix.WriteString("\"></file>\n")
+			continue
+		}
+
+		if len(data) <= 200000 && utf8.Valid(data) && !bytes.Contains(data, []byte{0}) {
+			prefix.WriteString("<file name=\"")
+			prefix.WriteString(xmlEscape(attachment.Path))
+			prefix.WriteString("\">\n")
+			prefix.Write(data)
+			prefix.WriteString("\n</file>\n")
+			continue
+		}
+
+		fallback := "[Binary file attached: " + firstNonBlank(attachment.FileName, filepath.Base(attachment.Path), "attachment") + "]"
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(attachment.MimeType)), "audio/") {
+			fallback = "[Audio attachment: " + firstNonBlank(attachment.FileName, filepath.Base(attachment.Path), "audio") + "]"
+		}
+		prefix.WriteString("<file name=\"")
+		prefix.WriteString(xmlEscape(attachment.Path))
+		prefix.WriteString("\">")
+		prefix.WriteString(xmlEscape(fallback))
+		prefix.WriteString("</file>\n")
+	}
+
+	message := prompt
+	if prefix.Len() > 0 {
+		message = prefix.String() + "\n" + prompt
+	}
+	return rpcPromptCommand{
+		ID:      "pi-appd-prompt",
+		Type:    "prompt",
+		Message: message,
+		Images:  images,
+	}, nil
+}
+
+func (s *server) resolveAttachmentPaths(attachments []attachmentReference) ([]attachmentReference, error) {
+	if len(attachments) == 0 {
+		return nil, nil
+	}
+	allowedRoot := filepath.Clean(filepath.Join(s.agentDir, "uploads"))
+	resolved := make([]attachmentReference, 0, len(attachments))
+	for _, attachment := range attachments {
+		pathValue, err := filepath.Abs(expandHome(strings.TrimSpace(attachment.Path)))
+		if err != nil {
+			return nil, errors.New("invalid attachment path")
+		}
+		pathValue = filepath.Clean(pathValue)
+		if !strings.HasPrefix(pathValue, allowedRoot+string(os.PathSeparator)) && pathValue != allowedRoot {
+			return nil, errors.New("attachment path is outside uploads directory")
+		}
+		if _, err := os.Stat(pathValue); err != nil {
+			return nil, errors.New("attachment file does not exist")
+		}
+		attachment.Path = pathValue
+		resolved = append(resolved, attachment)
+	}
+	return resolved, nil
+}
+
+func (s *server) streamPiRPCCommand(
 	w http.ResponseWriter,
 	cwd string,
 	args []string,
-	beforeFiles map[string]struct{},
+	prompt rpcPromptCommand,
 	binding *sessionBoundRecord,
 	fallbackTitle string,
 	fallbackWorkingDirectory string,
@@ -483,6 +661,10 @@ func (s *server) streamPiCommand(
 	cmd.Dir = expandHome(cwd)
 	cmd.Env = append(os.Environ(), "PI_CODING_AGENT_DIR="+s.agentDir)
 
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -512,30 +694,52 @@ func (s *server) streamPiCommand(
 		stderrDone <- strings.TrimSpace(string(data))
 	}()
 
+	if err := writeRPCCommand(stdin, rpcGetStateCommand{ID: "pi-appd-state", Type: "get_state"}); err != nil {
+		writeNDJSON(w, streamErrorRecord{Type: "stream_error", Error: err.Error()})
+		if flusher != nil {
+			flusher.Flush()
+		}
+		_ = stdin.Close()
+		_ = cmd.Wait()
+		<-stderrDone
+		return nil
+	}
+	if err := writeRPCCommand(stdin, prompt); err != nil {
+		writeNDJSON(w, streamErrorRecord{Type: "stream_error", Error: err.Error()})
+		if flusher != nil {
+			flusher.Flush()
+		}
+		_ = stdin.Close()
+		_ = cmd.Wait()
+		<-stderrDone
+		return nil
+	}
+
 	reader := bufio.NewReader(stdout)
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		if len(line) > 0 {
 			rawLine := strings.TrimRight(string(line), "\n")
 			if binding == nil {
-				if meta, ok := parseSessionHeaderLine(rawLine); ok {
-					binding = &sessionBoundRecord{
-						Type:             "session_bound",
-						SessionID:        meta.ID,
-						FilePath:         discoverCreatedSessionFile(filepath.Join(s.agentDir, "sessions"), beforeFiles, meta.ID),
-						Title:            fallbackTitle,
-						WorkingDirectory: firstNonBlank(meta.CWD, fallbackWorkingDirectory),
-					}
+				if parsedBinding, ok := parseRPCStateBindingLine(rawLine, fallbackTitle, fallbackWorkingDirectory); ok {
+					binding = &parsedBinding
 					writeNDJSON(w, binding)
 					if flusher != nil {
 						flusher.Flush()
 					}
+					continue
 				}
+			}
+			if isRPCResponseLine(rawLine) {
+				continue
 			}
 			_, _ = io.WriteString(w, rawLine)
 			_, _ = io.WriteString(w, "\n")
 			if flusher != nil {
 				flusher.Flush()
+			}
+			if isAgentEndLine(rawLine) {
+				break
 			}
 		}
 		if readErr != nil {
@@ -550,6 +754,7 @@ func (s *server) streamPiCommand(
 		}
 	}
 
+	_ = stdin.Close()
 	waitErr := cmd.Wait()
 	stderrText := <-stderrDone
 	if waitErr != nil {
@@ -576,58 +781,53 @@ func (s *server) invalidateCatalogSnapshot() {
 	s.mu.Unlock()
 }
 
-func parseSessionHeaderLine(raw string) (parsedSessionHeader, bool) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return parsedSessionHeader{}, false
+func writeRPCCommand(w io.Writer, payload any) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
 	}
-	var header parsedSessionHeader
-	if err := json.Unmarshal([]byte(trimmed), &header); err != nil {
-		return parsedSessionHeader{}, false
+	if _, err := w.Write(data); err != nil {
+		return err
 	}
-	if header.Type != "session" || strings.TrimSpace(header.ID) == "" {
-		return parsedSessionHeader{}, false
-	}
-	return header, true
+	_, err = w.Write([]byte("\n"))
+	return err
 }
 
-func scanSessionFiles(root string) map[string]struct{} {
-	files := map[string]struct{}{}
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d == nil || d.IsDir() || filepath.Ext(path) != ".jsonl" {
-			return nil
-		}
-		files[path] = struct{}{}
-		return nil
-	})
-	return files
+func parseRPCStateBindingLine(raw string, fallbackTitle string, fallbackWorkingDirectory string) (sessionBoundRecord, bool) {
+	var response rpcStateResponse
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &response); err != nil {
+		return sessionBoundRecord{}, false
+	}
+	if response.Type != "response" || response.Command != "get_state" || !response.Success || response.Data == nil {
+		return sessionBoundRecord{}, false
+	}
+	return sessionBoundRecord{
+		Type:             "session_bound",
+		SessionID:        response.Data.SessionID,
+		FilePath:         response.Data.SessionFile,
+		Title:            firstNonBlank(strings.TrimSpace(response.Data.SessionName), fallbackTitle),
+		WorkingDirectory: firstNonBlank(strings.TrimSpace(fallbackWorkingDirectory), os.Getenv("HOME")),
+	}, true
 }
 
-func discoverCreatedSessionFile(root string, before map[string]struct{}, sessionID string) string {
-	if before == nil {
-		return ""
+func isRPCResponseLine(raw string) bool {
+	var object struct {
+		Type string `json:"type"`
 	}
-	var newestPath string
-	var newestTime time.Time
-	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d == nil || d.IsDir() || filepath.Ext(path) != ".jsonl" {
-			return nil
-		}
-		if _, seen := before[path]; seen {
-			return nil
-		}
-		if strings.Contains(path, sessionID) {
-			newestPath = path
-			return nil
-		}
-		info, infoErr := d.Info()
-		if infoErr == nil && info.ModTime().After(newestTime) {
-			newestTime = info.ModTime()
-			newestPath = path
-		}
-		return nil
-	})
-	return newestPath
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &object); err != nil {
+		return false
+	}
+	return object.Type == "response"
+}
+
+func isAgentEndLine(raw string) bool {
+	var object struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &object); err != nil {
+		return false
+	}
+	return object.Type == "agent_end"
 }
 
 func writeNDJSON(w http.ResponseWriter, payload any) {
@@ -1086,4 +1286,31 @@ func expandHome(path string) string {
 		return filepath.Join(home, strings.TrimPrefix(path, "~/"))
 	}
 	return path
+}
+
+func sanitizeUploadName(name string) string {
+	base := filepath.Base(strings.TrimSpace(name))
+	if base == "." || base == string(filepath.Separator) || base == "" {
+		base = "attachment"
+	}
+	base = strings.ReplaceAll(base, string(filepath.Separator), "-")
+	return base
+}
+
+func uniqueUploadName(name string) string {
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	if base == "" {
+		base = "attachment"
+	}
+	return base + "-" + strconv.FormatInt(time.Now().UnixNano(), 10) + ext
+}
+
+func xmlEscape(value string) string {
+	return strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		"\"", "&quot;",
+	).Replace(value)
 }
