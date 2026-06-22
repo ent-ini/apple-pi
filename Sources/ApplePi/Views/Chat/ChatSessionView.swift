@@ -12,6 +12,7 @@ struct ChatSessionView: View {
     @State private var draftAttachments: [ChatAttachment] = []
     @State private var isTranscribingAudio = false
     @State private var transcriptionTask: Task<Void, Never>?
+    @State private var showMicrophonePermissionAlert = false
     @StateObject private var audioRecorder = AudioRecordingController()
 
     private let attachmentStagingService = AttachmentStagingService()
@@ -36,6 +37,14 @@ struct ChatSessionView: View {
                 audioRecorder.cancelRecording()
             }
             cleanupAttachments(draftAttachments)
+        }
+        .alert("Microphone Access Needed", isPresented: $showMicrophonePermissionAlert) {
+            Button("Open Settings") {
+                openMicrophoneSettings()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Allow microphone access for Apple Pi in System Settings → Privacy & Security → Microphone.")
         }
     }
 
@@ -220,17 +229,37 @@ struct ChatSessionView: View {
             isTranscribingAudio = false
         }
 
-        Task {
-            do {
-                try await audioRecorder.startRecording()
-                await MainActor.run {
-                    appState.statusMessage = "Recording voice note..."
-                }
-            } catch {
-                await MainActor.run {
-                    appState.statusMessage = error.localizedDescription
+        let status = AudioRecordingController.microphoneAuthorizationStatus()
+        switch status {
+        case .authorized:
+            startRecordingNow()
+        case .notDetermined:
+            appState.statusMessage = "Requesting microphone access..."
+            AudioRecordingController.requestMicrophoneAccess { granted in
+                Task { @MainActor in
+                    if granted {
+                        startRecordingNow()
+                    } else {
+                        appState.statusMessage = AudioRecordingError.microphonePermissionDenied.localizedDescription
+                        showMicrophonePermissionAlert = true
+                    }
                 }
             }
+        case .denied, .restricted:
+            appState.statusMessage = AudioRecordingError.microphonePermissionDenied.localizedDescription
+            showMicrophonePermissionAlert = true
+        @unknown default:
+            appState.statusMessage = AudioRecordingError.microphonePermissionDenied.localizedDescription
+            showMicrophonePermissionAlert = true
+        }
+    }
+
+    private func startRecordingNow() {
+        do {
+            try audioRecorder.startRecordingAuthorized()
+            appState.statusMessage = "Recording voice note..."
+        } catch {
+            appState.statusMessage = error.localizedDescription
         }
     }
 
@@ -353,6 +382,13 @@ struct ChatSessionView: View {
     private func formattedDuration(_ value: TimeInterval) -> String {
         let totalSeconds = max(0, Int(value.rounded(.down)))
         return String(format: "%d:%02d", totalSeconds / 60, totalSeconds % 60)
+    }
+
+    private func openMicrophoneSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") else {
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 }
 

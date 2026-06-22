@@ -13,12 +13,8 @@ final class AudioRecordingController: NSObject, ObservableObject, AVAudioRecorde
     private var recordingStartedAt: Date?
     private var currentRecordingURL: URL?
 
-    func startRecording() async throws {
+    func startRecordingAuthorized() throws {
         guard !isRecording else { return }
-        let granted = await Self.requestMicrophoneAccess()
-        guard granted else {
-            throw AudioRecordingError.microphonePermissionDenied
-        }
 
         let outputURL = try makeRecordingURL()
         let settings: [String: Any] = [
@@ -121,20 +117,22 @@ final class AudioRecordingController: NSObject, ObservableObject, AVAudioRecorde
         return CGFloat(0.12 + (normalized * 0.88))
     }
 
-    nonisolated private static func requestMicrophoneAccess() async -> Bool {
+    nonisolated static func microphoneAuthorizationStatus() -> AVAuthorizationStatus {
+        AVCaptureDevice.authorizationStatus(for: .audio)
+    }
+
+    nonisolated static func requestMicrophoneAccess(_ completion: @escaping (Bool) -> Void) {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
-            return true
+            completion(true)
         case .notDetermined:
-            return await withCheckedContinuation { continuation in
-                AVCaptureDevice.requestAccess(for: .audio) { granted in
-                    continuation.resume(returning: granted)
-                }
+            AVCaptureDevice.requestAccess(for: .audio) { granted in
+                completion(granted)
             }
         case .denied, .restricted:
-            return false
+            completion(false)
         @unknown default:
-            return false
+            completion(false)
         }
     }
 
