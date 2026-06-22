@@ -53,7 +53,7 @@ struct ChatSessionView: View {
             Button(action: handleSendTapped) {
                 Image(systemName: "arrow.up")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.tertiary : Color.secondary)
+                    .foregroundStyle(sendIconStyle)
                     .frame(width: 30, height: controlHeight)
             }
             .buttonStyle(.plain)
@@ -61,6 +61,12 @@ struct ChatSessionView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+    }
+
+    private var sendIconStyle: AnyShapeStyle {
+        draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? AnyShapeStyle(.tertiary)
+            : AnyShapeStyle(.secondary)
     }
 
     private func handleSendTapped() {
