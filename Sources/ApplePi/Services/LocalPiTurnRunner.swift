@@ -33,19 +33,18 @@ struct LocalPiTurnRunner {
         process.standardOutput = outputPipe
         process.standardError = errorPipe
 
-        let termination = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in
-            termination.signal()
+        let terminationStatusTask = Task<Int32, Never> {
+            await withCheckedContinuation { continuation in
+                process.terminationHandler = { process in
+                    continuation.resume(returning: process.terminationStatus)
+                }
+            }
         }
 
         try process.run()
 
         let stdoutHandle = outputPipe.fileHandleForReading
         let stderrHandle = errorPipe.fileHandleForReading
-
-        let terminationWaitTask = Task.detached(priority: .utility) {
-            termination.wait()
-        }
 
         let stderrTask = Task.detached(priority: .utility) {
             stderrHandle.readDataToEndOfFile()
@@ -103,8 +102,7 @@ struct LocalPiTurnRunner {
             return (discoveredBinding, didEmitBinding)
         }
 
-        _ = await terminationWaitTask.value
-        let terminationStatus = process.terminationStatus
+        let terminationStatus = await terminationStatusTask.value
         let stderrData = await stderrTask.value
         let (discoveredBinding, didEmitBinding) = await lineTask.value
 
