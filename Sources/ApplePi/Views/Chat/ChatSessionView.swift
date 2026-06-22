@@ -4,6 +4,7 @@ import SwiftUI
 /// View for a single open Pi session. The composer is intentionally minimal:
 /// one auto-growing input field plus a send icon button on the same row.
 struct ChatSessionView: View {
+    @EnvironmentObject private var appState: PiAppState
     @ObservedObject var session: ChatSession
 
     @State private var draftText = ""
@@ -49,6 +50,13 @@ struct ChatSessionView: View {
                 onSubmit: handleSendTapped
             )
             .frame(height: controlHeight)
+            .padding(.horizontal, 10)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                    .allowsHitTesting(false)
+            )
 
             Button(action: handleSendTapped) {
                 Image(systemName: "arrow.up")
@@ -66,7 +74,7 @@ struct ChatSessionView: View {
     private var sendIconStyle: AnyShapeStyle {
         draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? AnyShapeStyle(.tertiary)
-            : AnyShapeStyle(.secondary)
+            : AnyShapeStyle(appState.appearance.accentColor)
     }
 
     private func handleSendTapped() {
@@ -86,11 +94,14 @@ private struct ComposerTextView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
         scrollView.drawsBackground = false
+        scrollView.backgroundColor = .clear
         scrollView.borderType = .noBorder
         scrollView.hasVerticalScroller = false
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.focusRingType = .none
+        scrollView.wantsLayer = true
+        scrollView.layer?.backgroundColor = NSColor.clear.cgColor
 
         let textView = ComposerNSTextView()
         textView.delegate = context.coordinator
