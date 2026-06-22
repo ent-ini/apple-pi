@@ -56,7 +56,7 @@ struct RemoteDaemonClient {
     func loadSessionEvents(
         host: PiHostConfiguration,
         sessionID: String,
-        limit: Int = 200,
+        limit: Int = 120,
         tokenOverride: String? = nil
     ) async throws -> [SessionEvent] {
         let encodedID = sessionID.addingPercentEncoding(

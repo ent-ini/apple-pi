@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -203,12 +204,6 @@ func (s *server) handleSessionSubroutes(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *server) handleSessionEvents(w http.ResponseWriter, r *http.Request, record sessionRecord) {
-	lines, err := readAllLines(record.FilePath)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
 	before, hasBefore, err := optionalInt(r.URL.Query().Get("before"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid before")
@@ -221,7 +216,7 @@ func (s *server) handleSessionEvents(w http.ResponseWriter, r *http.Request, rec
 	}
 	limit := 0
 	if !hasBefore && !hasAfter {
-		limit = 200
+		limit = 120
 	}
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 		limit, err = strconv.Atoi(raw)
@@ -229,6 +224,35 @@ func (s *server) handleSessionEvents(w http.ResponseWriter, r *http.Request, rec
 			writeError(w, http.StatusBadRequest, "invalid limit")
 			return
 		}
+	}
+
+	if !hasBefore && !hasAfter {
+		lines, totalLines, err := readLastLines(record.FilePath, limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		startLine := totalLines - len(lines)
+		if startLine < 0 {
+			startLine = 0
+		}
+		events := make([]rawEventRecord, 0, len(lines))
+		for i, line := range lines {
+			events = append(events, rawEventRecord{Line: startLine + i, Raw: line})
+		}
+		page := pageRecord{HasMoreBefore: startLine > 0, HasMoreAfter: false}
+		if len(events) > 0 {
+			page.FirstLine = events[0].Line
+			page.LastLine = events[len(events)-1].Line
+		}
+		writeJSON(w, http.StatusOK, eventsResponse{Events: events, Page: page})
+		return
+	}
+
+	lines, err := readAllLines(record.FilePath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	start, end := 0, len(lines)
@@ -440,15 +464,11 @@ func buildProjects(sessions []sessionRecord) []projectRecord {
 }
 
 func parseSessionFile(path string) (parsedSession, error) {
-	lines, err := readAllLines(path)
+	lines, err := readPreviewLines(path, 80)
 	if err != nil {
 		return parsedSession{}, err
 	}
-	limit := len(lines)
-	if limit > 240 {
-		limit = 240
-	}
-	return parseSessionLines(lines[:limit]), nil
+	return parseSessionLines(lines), nil
 }
 
 func parseSessionLines(lines []string) parsedSession {
@@ -537,6 +557,126 @@ func readAllLines(path string) ([]string, error) {
 		lines[i] = string(part)
 	}
 	return lines, nil
+}
+
+func readPreviewLines(path string, limit int) ([]string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	const chunkSize = 64 * 1024
+	buffer := make([]byte, chunkSize)
+	pending := make([]byte, 0, chunkSize)
+	lines := make([]string, 0, limit)
+
+	for len(lines) < limit {
+		n, err := file.Read(buffer)
+		if n > 0 {
+			pending = append(pending, buffer[:n]...)
+			for len(lines) < limit {
+				index := bytes.IndexByte(pending, '\n')
+				if index < 0 {
+					break
+				}
+				lines = append(lines, string(pending[:index]))
+				pending = pending[index+1:]
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return lines, err
+		}
+	}
+	if len(lines) < limit && len(pending) > 0 {
+		lines = append(lines, string(pending))
+	}
+	return lines, nil
+}
+
+func readLastLines(path string, limit int) ([]string, int, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return nil, 0, err
+	}
+	const chunkSize int64 = 64 * 1024
+	var offset = info.Size()
+	buffer := make([]byte, 0, chunkSize*2)
+	newlineCount := 0
+
+	for offset > 0 && newlineCount <= limit {
+		readSize := chunkSize
+		if offset < readSize {
+			readSize = offset
+		}
+		offset -= readSize
+		chunk := make([]byte, readSize)
+		if _, err := file.ReadAt(chunk, offset); err != nil && err != io.EOF {
+			return nil, 0, err
+		}
+		buffer = append(chunk, buffer...)
+		newlineCount = bytes.Count(buffer, []byte("\n"))
+	}
+
+	totalLines, err := countLines(path)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	parts := bytes.Split(buffer, []byte("\n"))
+	if limit > 0 && len(parts) > limit {
+		parts = parts[len(parts)-limit:]
+	}
+	lines := make([]string, len(parts))
+	for i, part := range parts {
+		lines[i] = string(part)
+	}
+	return lines, totalLines, nil
+}
+
+func countLines(path string) (int, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+
+	const chunkSize = 64 * 1024
+	buffer := make([]byte, chunkSize)
+	total := 0
+	readAny := false
+	lastEndedWithNewline := false
+	for {
+		n, err := file.Read(buffer)
+		if n > 0 {
+			readAny = true
+			chunk := buffer[:n]
+			total += bytes.Count(chunk, []byte("\n"))
+			lastEndedWithNewline = chunk[len(chunk)-1] == '\n'
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return 0, err
+		}
+	}
+	if !readAny {
+		return 0, nil
+	}
+	if !lastEndedWithNewline {
+		total++
+	}
+	return total, nil
 }
 
 func projectTitle(projectID string, sessions []sessionRecord) string {
