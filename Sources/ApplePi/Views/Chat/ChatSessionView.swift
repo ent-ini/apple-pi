@@ -52,10 +52,6 @@ struct ChatSessionView: View {
         let controlHeight = max(draftHeight, 30)
 
         return VStack(alignment: .leading, spacing: 10) {
-            if audioRecorder.isRecording || isTranscribingAudio {
-                voiceStatusView
-            }
-
             if !draftAttachments.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 10) {
@@ -81,23 +77,7 @@ struct ChatSessionView: View {
                 )
                 .help("Attach files")
 
-                ComposerTextView(
-                    text: $draftText,
-                    dynamicHeight: $draftHeight,
-                    onSubmit: handleSendTapped,
-                    onPasteAttachments: handlePasteAttachments
-                )
-                .frame(maxWidth: .infinity, minHeight: controlHeight, maxHeight: controlHeight)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.primary.opacity(0.03))
-                        .allowsHitTesting(false)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(Color.primary.opacity(0.12), lineWidth: 1)
-                        .allowsHitTesting(false)
-                )
+                composerInputSurface(controlHeight: controlHeight)
 
                 composerActionButton(
                     title: nil,
@@ -124,46 +104,59 @@ struct ChatSessionView: View {
         .padding(.vertical, 10)
     }
 
-    private var voiceStatusView: some View {
-        HStack(spacing: 10) {
-            if audioRecorder.isRecording {
-                Circle()
-                    .fill(Color.red)
-                    .frame(width: 8, height: 8)
-            } else {
-                ProgressView()
-                    .controlSize(.small)
-            }
-
-            VoiceWaveformView(levels: audioRecorder.levels, tint: appState.appearance.accentColor)
-                .frame(width: 108, height: 24)
-
-            Text(audioRecorder.isRecording ? formattedDuration(audioRecorder.elapsedTime) : "Transcribing…")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-
-            Spacer()
-
-            Button("Cancel", role: .destructive) {
+    @ViewBuilder
+    private func composerInputSurface(controlHeight: CGFloat) -> some View {
+        if audioRecorder.isRecording || isTranscribingAudio {
+            HStack(spacing: 10) {
                 if audioRecorder.isRecording {
-                    audioRecorder.cancelRecording()
-                    appState.statusMessage = "Voice note cancelled"
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 8, height: 8)
                 } else {
-                    transcriptionTask?.cancel()
-                    transcriptionTask = nil
-                    isTranscribingAudio = false
-                    appState.statusMessage = "Transcription cancelled"
+                    ProgressView()
+                        .controlSize(.small)
                 }
+
+                VoiceWaveformView(levels: audioRecorder.levels, tint: appState.appearance.accentColor)
+                    .frame(width: 108, height: 24)
+
+                Text(audioRecorder.isRecording ? formattedDuration(audioRecorder.elapsedTime) : "Transcribing…")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.plain)
-            .font(.caption)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, minHeight: controlHeight, maxHeight: controlHeight)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.primary.opacity(0.03))
+                    .allowsHitTesting(false)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                    .allowsHitTesting(false)
+            )
+        } else {
+            ComposerTextView(
+                text: $draftText,
+                dynamicHeight: $draftHeight,
+                onSubmit: handleSendTapped,
+                onPasteAttachments: handlePasteAttachments
+            )
+            .frame(maxWidth: .infinity, minHeight: controlHeight, maxHeight: controlHeight)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.primary.opacity(0.03))
+                    .allowsHitTesting(false)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                    .allowsHitTesting(false)
+            )
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.primary.opacity(0.05))
-        )
     }
 
     @ViewBuilder
@@ -268,7 +261,6 @@ struct ChatSessionView: View {
             let recordingURL = try audioRecorder.stopRecording()
             let staged = try attachmentStagingService.stageFile(at: recordingURL)
             try? FileManager.default.removeItem(at: recordingURL)
-            appendAttachments([staged])
             transcribeAudioAttachmentIfPossible(staged)
         } catch {
             appState.statusMessage = error.localizedDescription
@@ -278,7 +270,8 @@ struct ChatSessionView: View {
     private func transcribeAudioAttachmentIfPossible(_ attachment: ChatAttachment) {
         guard attachment.kind == .audio else { return }
         guard let apiKey = appState.groqAPIKey() else {
-            appState.statusMessage = "Voice note attached. Save a Groq API key in Settings to enable auto-transcription."
+            cleanupAttachments([attachment])
+            appState.statusMessage = "Save a Groq API key in Settings to enable voice transcription."
             return
         }
 
@@ -294,18 +287,21 @@ struct ChatSessionView: View {
                     mergeTranscript(transcript)
                     isTranscribingAudio = false
                     transcriptionTask = nil
+                    cleanupAttachments([attachment])
                     appState.statusMessage = "Voice note transcribed"
                 }
             } catch is CancellationError {
                 await MainActor.run {
                     isTranscribingAudio = false
                     transcriptionTask = nil
+                    cleanupAttachments([attachment])
                 }
             } catch {
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     isTranscribingAudio = false
                     transcriptionTask = nil
+                    cleanupAttachments([attachment])
                     appState.statusMessage = error.localizedDescription
                 }
             }
