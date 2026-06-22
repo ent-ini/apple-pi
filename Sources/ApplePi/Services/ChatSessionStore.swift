@@ -15,6 +15,7 @@ final class ChatSession: ObservableObject, Identifiable {
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var loadError: String?
     @Published private(set) var isSending: Bool = false
+    @Published private(set) var streamRevision: Int = 0
 
     /// Path to the on-disk jsonl, if this session is backed by a file. For
     /// brand-new sessions the path is assigned once the first turn creates it.
@@ -185,6 +186,7 @@ final class ChatSession: ObservableObject, Identifiable {
 
     private func rebuildEvents() {
         events = persistedEvents + [transientUserEvent, transientAssistantEvent].compactMap { $0 }
+        streamRevision &+= 1
     }
 
     private static let transientUserLineIndex = Int.max - 1

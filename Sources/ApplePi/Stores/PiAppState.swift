@@ -422,6 +422,7 @@ final class PiAppState: ObservableObject {
     func sendMessage(_ prompt: String, in session: ChatSession) -> Bool {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
+        let taggedPrompt = sourceTaggedAppPrompt(trimmed)
         guard !session.isSending else {
             statusMessage = "Pi is already working on this session."
             return false
@@ -432,7 +433,7 @@ final class PiAppState: ObservableObject {
             return false
         }
 
-        session.beginSending(prompt: trimmed)
+        session.beginSending(prompt: taggedPrompt)
         statusMessage = "Sending to Pi..."
 
         if host.usesRemoteDaemonTransport || host.mode == .remoteSSH {
@@ -443,7 +444,7 @@ final class PiAppState: ObservableObject {
                         try await RemoteDaemonClient().streamSend(
                             host: self.host,
                             sessionID: sessionID,
-                            prompt: trimmed,
+                            prompt: taggedPrompt,
                             onEvent: { [weak self, weak session] event in
                                 guard let self, let session else { return }
                                 await MainActor.run {
@@ -455,7 +456,7 @@ final class PiAppState: ObservableObject {
                         try await RemoteDaemonClient().streamNewSession(
                             host: self.host,
                             request: launchRequest,
-                            prompt: trimmed,
+                            prompt: taggedPrompt,
                             onEvent: { [weak self, weak session] event in
                                 guard let self, let session else { return }
                                 await MainActor.run {
@@ -501,7 +502,7 @@ final class PiAppState: ObservableObject {
                 try await LocalPiTurnRunner().run(
                     host: self.host,
                     request: launchRequest,
-                    prompt: trimmed,
+                    prompt: taggedPrompt,
                     sessionRootCandidates: sessionRootCandidates,
                     onEvent: { [weak self, weak session] event in
                         guard let self, let session else { return }
@@ -820,5 +821,13 @@ final class PiAppState: ObservableObject {
     private func revealPath(_ path: String?) {
         guard let path, pathExists(path) else { return }
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+
+    private func sourceTaggedAppPrompt(_ text: String) -> String {
+        let tag = "[source:pi-app type=text]"
+        if text.hasPrefix(tag) {
+            return text
+        }
+        return "\(tag)\n\(text)"
     }
 }

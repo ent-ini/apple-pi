@@ -20,7 +20,7 @@ struct ChatSessionView: View {
             if !session.statusMessage.isEmpty || session.loadError != nil {
                 Divider().opacity(0.25)
             }
-            MessageListView(events: session.events)
+            MessageListView(session: session)
             Divider().opacity(0.25)
             composerArea
         }

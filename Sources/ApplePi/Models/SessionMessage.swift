@@ -12,6 +12,7 @@ struct SessionMeta: Hashable, Sendable {
 /// blocks the same way Claude does, so we mirror that shape.
 enum ContentBlock: Hashable, Sendable {
     case text(String)
+    case thinking(String, signature: String?)
     case image(path: String, mime: String?)
 }
 

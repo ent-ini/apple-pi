@@ -106,13 +106,16 @@ enum SessionEventParser {
         }
         if let blocks = value as? [[String: Any]] {
             return blocks.compactMap { block in
-                if let text = block["text"] as? String {
+                let type = block["type"] as? String
+                if type == "text", let text = block["text"] as? String {
                     return text.isEmpty ? nil : .text(text)
                 }
-                if (block["type"] as? String) == "text", let text = block["text"] as? String {
-                    return text.isEmpty ? nil : .text(text)
+                if type == "thinking" {
+                    let thinking = (block["thinking"] as? String) ?? ""
+                    let signature = (block["thinkingSignature"] as? String) ?? (block["signature"] as? String)
+                    return .thinking(thinking, signature: signature)
                 }
-                if (block["type"] as? String) == "image" {
+                if type == "image" {
                     if let source = block["source"] as? [String: Any],
                        let path = source["path"] as? String {
                         return .image(path: path, mime: block["mimeType"] as? String)
@@ -120,6 +123,9 @@ enum SessionEventParser {
                     if let path = block["path"] as? String {
                         return .image(path: path, mime: block["mimeType"] as? String)
                     }
+                }
+                if let text = block["text"] as? String {
+                    return text.isEmpty ? nil : .text(text)
                 }
                 return nil
             }

@@ -1,12 +1,11 @@
 import SwiftUI
 
-/// Scrollable list of `SessionEvent`s. Renders only message events as
-/// bubbles for now; meta, tool, and unknown events are skipped. As new
-/// events arrive the list auto-scrolls to the bottom, but only if the
-/// user is already near the bottom (so reading older messages does not
-/// get hijacked by streaming).
+/// Scrollable list of `SessionEvent`s. Renders only message events for now.
+/// As new events arrive the list auto-scrolls to the bottom, but only if the
+/// user is already near the bottom (so reading older messages does not get
+/// hijacked by streaming).
 struct MessageListView: View {
-    let events: [SessionEvent]
+    @ObservedObject var session: ChatSession
 
     @State private var isAnchoredToBottom = true
 
@@ -21,13 +20,16 @@ struct MessageListView: View {
                                 MessageBubble(message: message)
                                     .id(event.id)
                             case .toolCall, .toolResult, .meta, .other:
-                                // Read-only MVP: tool events are not rendered.
-                                // The next iteration adds collapsible blocks.
                                 EmptyView()
                             }
                         }
-                        // Sentinel for auto-scroll. The id is stable so
-                        // SwiftUI re-targets it as new messages arrive.
+                        if showsPendingAssistantPlaceholder {
+                            HStack(alignment: .top, spacing: 0) {
+                                BouncingDotsView()
+                                Spacer(minLength: 60)
+                            }
+                            .id(Self.pendingAssistantAnchorID)
+                        }
                         Color.clear
                             .frame(height: 1)
                             .id(Self.bottomAnchorID)
@@ -35,11 +37,11 @@ struct MessageListView: View {
                     .padding(20)
                     .frame(minHeight: proxy.size.height, alignment: .top)
                 }
-                .onChange(of: events.count) { _, _ in
-                    guard isAnchoredToBottom else { return }
-                    withAnimation(.easeOut(duration: 0.18)) {
-                        scrollProxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
-                    }
+                .onChange(of: session.events.count) { _, _ in
+                    scrollToBottomIfNeeded(using: scrollProxy)
+                }
+                .onChange(of: session.streamRevision) { _, _ in
+                    scrollToBottomIfNeeded(using: scrollProxy)
                 }
                 .onAppear {
                     scrollProxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
@@ -49,14 +51,43 @@ struct MessageListView: View {
     }
 
     private static let bottomAnchorID = "chat.list.bottom"
+    private static let pendingAssistantAnchorID = "chat.list.pending.assistant"
 
-    /// Filter out non-message events for the read-only MVP. The full event
-    /// list is still available to the parent `ChatSession` for tool-event
-    /// rendering in the next iteration.
     private var displayedEvents: [SessionEvent] {
-        events.filter {
+        session.events.filter {
             if case .message = $0 { return true }
             return false
+        }
+    }
+
+    private var showsPendingAssistantPlaceholder: Bool {
+        guard session.isSending else { return false }
+        guard let lastAssistantEvent = displayedEvents.last(where: {
+            if case .message(let message, _) = $0 {
+                return message.role == .assistant
+            }
+            return false
+        }) else {
+            return true
+        }
+        guard case .message(let message, let lineIndex) = lastAssistantEvent else { return true }
+        guard lineIndex == Int.max else { return false }
+        return !message.content.contains { block in
+            switch block {
+            case .text(let text):
+                return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            case .thinking(let text, _):
+                return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            case .image:
+                return true
+            }
+        }
+    }
+
+    private func scrollToBottomIfNeeded(using scrollProxy: ScrollViewProxy) {
+        guard isAnchoredToBottom else { return }
+        withAnimation(.easeOut(duration: 0.12)) {
+            scrollProxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
         }
     }
 }
