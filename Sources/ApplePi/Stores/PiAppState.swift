@@ -19,6 +19,11 @@ final class PiAppState: ObservableObject {
             saveHost()
             refreshConfigurationSummary()
             refreshCatalog(usesActiveProjectContext: false)
+            // The previous host's stream is torn down inside `clearCatalog`;
+            // start a fresh one for the new host.
+            if startsBackgroundWork {
+                startCatalogLiveUpdates()
+            }
         }
     }
     @Published private(set) var projects: [PiProject] = []
@@ -58,9 +63,15 @@ final class PiAppState: ObservableObject {
     private let appearanceDefaultsKey = "ApplePi.appearance"
     private let lastUpdateCheckKey = "ApplePi.updateCheck.lastCheckedAt"
     private let updateCheckInterval: TimeInterval = 24 * 60 * 60
+    private let startsBackgroundWork: Bool
     private var isLoadingPersistedState = false
     private var catalogRefreshID = UUID()
     private var remoteDirectoryRefreshID = UUID()
+    /// Long-lived task that subscribes to the daemon's `/sessions/stream`
+    /// SSE endpoint and pushes full catalog snapshots into `projects` /
+    /// `sessions`. `nil` whenever the current host doesn't use the daemon
+    /// transport or the task is not running.
+    private var catalogStreamTask: Task<Void, Never>?
 
     init(
         defaults: UserDefaults = Foundation.UserDefaults(suiteName: nil) ?? Foundation.UserDefaults(),
@@ -80,6 +91,7 @@ final class PiAppState: ObservableObject {
         self.updateCheckService = updateCheckService
         self.remoteDirectoryService = remoteDirectoryService
         self.catalogLoader = catalogLoader
+        self.startsBackgroundWork = startsBackgroundWork
 
         isLoadingPersistedState = true
         loadHost()
@@ -93,6 +105,11 @@ final class PiAppState: ObservableObject {
         if startsBackgroundWork {
             refreshCatalog()
             runUpdateCheckIfNeeded()
+        }
+        // The live subscription is independent of the one-shot refresh:
+        // it stays alive across app sessions for daemon-backed hosts.
+        if startsBackgroundWork {
+            startCatalogLiveUpdates()
         }
     }
 
@@ -852,6 +869,79 @@ final class PiAppState: ObservableObject {
         remoteDirectoryParent = nil
         remoteDirectoryStatus = ""
         newSessionWorkingDirectory = ""
+        // Stop the live SSE subscription — it is tied to the old host.
+        stopCatalogLiveUpdates()
+    }
+
+    // MARK: - Live catalog subscription
+
+    /// Starts (or restarts) the long-lived SSE subscription for the
+    /// current host. No-op when the host does not use the daemon
+    /// transport, or when the task is already running for that host.
+    private func startCatalogLiveUpdates() {
+        stopCatalogLiveUpdates()
+        guard host.usesRemoteDaemonTransport else { return }
+        let streamHost = host
+        catalogStreamTask = Task { [weak self] in
+            await self?.runCatalogLiveUpdates(host: streamHost)
+        }
+    }
+
+    /// Cancels the SSE subscription, if any. Safe to call from any
+    /// state — including when no task is running.
+    private func stopCatalogLiveUpdates() {
+        catalogStreamTask?.cancel()
+        catalogStreamTask = nil
+    }
+
+    /// Outer reconnect loop. On every successful snapshot the backoff
+    /// resets, so a stable connection pays only the per-event cost. On
+    /// any failure (network, auth, malformed event) we sleep with an
+    /// exponentially growing delay, capped at 30s. Cancellation is
+    /// observed after each iteration so a host change can tear us down
+    /// promptly.
+    private func runCatalogLiveUpdates(host: PiHostConfiguration) async {
+        let client = RemoteDaemonClient()
+        var backoff = Duration.seconds(1)
+        let maxBackoff = Duration.seconds(30)
+
+        while !Task.isCancelled {
+            let stream = client.streamCatalogSnapshots(host: host)
+            var receivedSnapshot = false
+            do {
+                for try await snapshot in stream {
+                    receivedSnapshot = true
+                    backoff = .seconds(1)
+                    applyLiveCatalogSnapshot(snapshot)
+                }
+                if Task.isCancelled { return }
+                try? await Task.sleep(for: backoff)
+            } catch is CancellationError {
+                return
+            } catch {
+                if Task.isCancelled { return }
+                let nsError = error as NSError
+                if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
+                    return
+                }
+                if !receivedSnapshot {
+                    statusMessage = "Live catalog lost: \(error.localizedDescription). Retrying…"
+                }
+                try? await Task.sleep(for: backoff)
+                backoff = min(backoff * 2, maxBackoff)
+            }
+        }
+    }
+
+    /// Applies a snapshot delivered by the SSE stream to the published
+    /// state. The body mirrors the one-shot `refreshCatalog` success
+    /// path so the UI behaves identically for HTTP-loaded and
+    /// stream-loaded snapshots.
+    private func applyLiveCatalogSnapshot(_ snapshot: PiCatalogSnapshot) {
+        projects = snapshot.projects
+        sessions = snapshot.sessions
+        repairSelectionIfNeeded()
+        refreshConfigurationSummary()
     }
 
     private func loadHost() {

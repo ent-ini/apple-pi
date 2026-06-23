@@ -15,6 +15,68 @@ struct RemoteDaemonClient {
         return "Connected. \(catalog.projects.count) projects, \(catalog.sessions.count) sessions."
     }
 
+    /// Live subscription to the daemon's `/sessions/stream` SSE endpoint.
+    /// Yields a full `PiCatalogSnapshot` every time the daemon emits a
+    /// `snapshot` event. Non-snapshot events, heartbeats, and malformed
+    /// frames are silently skipped — the stream only finishes (with an
+    /// error) when the underlying HTTP request itself fails. The caller
+    /// owns the reconnect cadence.
+    func streamCatalogSnapshots(
+        host: PiHostConfiguration,
+        tokenOverride: String? = nil
+    ) -> AsyncThrowingStream<PiCatalogSnapshot, Error> {
+        AsyncThrowingStream { continuation in
+            let worker = Task {
+                do {
+                    let request = try self.makeLiveRequest(
+                        host: host,
+                        path: "/sessions/stream",
+                        tokenOverride: tokenOverride,
+                        accept: "text/event-stream"
+                    )
+                    let (bytes, response) = try await Self.liveSession.bytes(for: request)
+                    guard let http = response as? HTTPURLResponse else {
+                        throw RemoteDaemonError.invalidResponse
+                    }
+                    guard (200..<300).contains(http.statusCode) else {
+                        var bodyData = Data()
+                        for try await byte in bytes {
+                            bodyData.append(byte)
+                        }
+                        let message = String(data: bodyData, encoding: .utf8)?
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        throw RemoteDaemonError.requestFailed(status: http.statusCode, body: message)
+                    }
+
+                    let parser = SSECatalogEventParser()
+                    for try await line in bytes.lines {
+                        if Task.isCancelled { break }
+                        guard let event = parser.feed(line),
+                              event.event == "snapshot" else { continue }
+                        guard let data = event.data.data(using: .utf8),
+                              let snapshot = Self.decodeCatalogSnapshot(from: data) else {
+                            continue
+                        }
+                        continuation.yield(snapshot)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in
+                worker.cancel()
+            }
+        }
+    }
+
+    private static func decodeCatalogSnapshot(from data: Data) -> PiCatalogSnapshot? {
+        guard let response = try? makeCatalogDecoder().decode(CatalogResponse.self, from: data) else {
+            return nil
+        }
+        return catalogSnapshot(from: response)
+    }
+
     func loadCatalog(host: PiHostConfiguration, activeProjectDirectory: String?, tokenOverride: String? = nil) async throws -> PiCatalogSnapshot {
         let response: CatalogResponse = try await send(
             host: host,
@@ -22,35 +84,7 @@ struct RemoteDaemonClient {
             queryItems: activeProjectDirectory?.nilIfBlank.map { [URLQueryItem(name: "projectDirectory", value: $0)] } ?? [],
             tokenOverride: tokenOverride
         )
-        return PiCatalogSnapshot(
-            projects: response.projects.map { record in
-                PiProject(
-                    id: record.id,
-                    title: record.title,
-                    workingDirectory: record.workingDirectory,
-                    sessionDirectory: record.sessionDirectory,
-                    sessionCount: record.sessionCount,
-                    lastActivity: record.lastActivity
-                )
-            },
-            sessions: response.sessions.map { record in
-                PiSessionSummary(
-                    id: record.id,
-                    filePath: record.filePath,
-                    projectID: record.projectID,
-                    title: record.title,
-                    workingDirectory: record.workingDirectory,
-                    messageCount: record.messageCount,
-                    modifiedAt: record.modifiedAt,
-                    displayName: record.displayName,
-                    parentSession: record.parentSession,
-                    branchCount: record.branchCount,
-                    labelCount: record.labelCount,
-                    branchSummaryCount: record.branchSummaryCount,
-                    latestModel: record.latestModel
-                )
-            }
-        )
+        return Self.catalogSnapshot(from: response)
     }
 
     func loadSessionEvents(
@@ -191,18 +225,7 @@ struct RemoteDaemonClient {
             throw RemoteDaemonError.requestFailed(status: httpResponse.statusCode, body: message)
         }
 
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .custom { decoder in
-            let container = try decoder.singleValueContainer()
-            let raw = try container.decode(String.self)
-            if let date = RemoteDaemonDateParsers.shared.parse(raw) {
-                return date
-            }
-            throw DecodingError.dataCorruptedError(
-                in: container,
-                debugDescription: "Invalid daemon date: \(raw)"
-            )
-        }
+        let decoder = Self.makeCatalogDecoder()
         do {
             return try decoder.decode(Response.self, from: data)
         } catch {
@@ -282,6 +305,26 @@ struct RemoteDaemonClient {
         return request
     }
 
+    private func makeLiveRequest(
+        host: PiHostConfiguration,
+        path: String,
+        method: String = "GET",
+        queryItems: [URLQueryItem] = [],
+        tokenOverride: String? = nil,
+        accept: String
+    ) throws -> URLRequest {
+        var request = try makeRequest(
+            host: host,
+            path: path,
+            method: method,
+            queryItems: queryItems,
+            tokenOverride: tokenOverride,
+            accept: accept
+        )
+        request.timeoutInterval = TimeInterval.infinity
+        return request
+    }
+
     private func makeRequest<Body: Encodable>(
         host: PiHostConfiguration,
         path: String,
@@ -303,6 +346,63 @@ struct RemoteDaemonClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         return request
     }
+
+    private static func makeCatalogDecoder() -> JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let raw = try container.decode(String.self)
+            if let date = RemoteDaemonDateParsers.shared.parse(raw) {
+                return date
+            }
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Invalid daemon date: \(raw)"
+            )
+        }
+        return decoder
+    }
+
+    private static func catalogSnapshot(from response: CatalogResponse) -> PiCatalogSnapshot {
+        PiCatalogSnapshot(
+            projects: response.projects.map { record in
+                PiProject(
+                    id: record.id,
+                    title: record.title,
+                    workingDirectory: record.workingDirectory,
+                    sessionDirectory: record.sessionDirectory,
+                    sessionCount: record.sessionCount,
+                    lastActivity: record.lastActivity
+                )
+            },
+            sessions: response.sessions.map { record in
+                PiSessionSummary(
+                    id: record.id,
+                    filePath: record.filePath,
+                    projectID: record.projectID,
+                    title: record.title,
+                    workingDirectory: record.workingDirectory,
+                    messageCount: record.messageCount,
+                    modifiedAt: record.modifiedAt,
+                    displayName: record.displayName,
+                    parentSession: record.parentSession,
+                    branchCount: record.branchCount,
+                    labelCount: record.labelCount,
+                    branchSummaryCount: record.branchSummaryCount,
+                    latestModel: record.latestModel
+                )
+            }
+        )
+    }
+
+    private static let liveSession: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.waitsForConnectivity = true
+        configuration.timeoutIntervalForRequest = TimeInterval.infinity
+        configuration.timeoutIntervalForResource = TimeInterval.infinity
+        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        return URLSession(configuration: configuration)
+    }()
 }
 
 private func joinedPath(basePath: String, requestPath: String) -> String {

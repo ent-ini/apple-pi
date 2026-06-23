@@ -19,6 +19,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 type server struct {
@@ -30,6 +32,8 @@ type server struct {
 	lastRefresh  time.Time
 	snapshot     catalogResponse
 	sessionsByID map[string]sessionRecord
+
+	broker *catalogBroker
 }
 
 type catalogResponse struct {
@@ -187,6 +191,14 @@ func (r *statusRecorder) WriteHeader(statusCode int) {
 	r.ResponseWriter.WriteHeader(statusCode)
 }
 
+// Flush forwards to the underlying ResponseWriter when it supports flushing.
+// This lets streaming handlers (SSE, NDJSON) work through the logging middleware.
+func (r *statusRecorder) Flush() {
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
 func main() {
 	agentDir := getenvDefault("PI_APPD_AGENT_DIR", "~/.pi/agent")
 	addr := getenvDefault("PI_APPD_ADDR", "127.0.0.1:8787")
@@ -198,6 +210,7 @@ func main() {
 		token:        token,
 		piExecutable: piExecutable,
 		sessionsByID: map[string]sessionRecord{},
+		broker:       newCatalogBroker(),
 	}
 
 	mux := http.NewServeMux()
@@ -206,6 +219,8 @@ func main() {
 	mux.HandleFunc("/sessions/", srv.handleSessionSubroutes)
 	mux.HandleFunc("/files", srv.handleFiles)
 	mux.HandleFunc("/uploads", srv.handleUploads)
+
+	go srv.watchCatalog()
 
 	log.Printf("pi-appd listening on %s (agentDir=%s)", addr, srv.agentDir)
 	if err := http.ListenAndServe(addr, srv.loggingMiddleware(srv.authMiddleware(mux))); err != nil {
@@ -265,6 +280,15 @@ func (s *server) handleSessionSubroutes(w http.ResponseWriter, r *http.Request) 
 	parts := strings.Split(path, "/")
 	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
 		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	// /sessions/stream is a top-level subroute and does not require a session lookup.
+	if parts[0] == "stream" && (len(parts) == 1 || parts[1] == "") {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.handleSessionsStream(w, r)
 		return
 	}
 	sessionID := parts[0]
@@ -769,7 +793,7 @@ func (s *server) streamPiRPCCommand(
 		return nil
 	}
 
-	s.invalidateCatalogSnapshot()
+	s.refreshAndBroadcast()
 	return nil
 }
 
@@ -840,16 +864,20 @@ func writeNDJSON(w http.ResponseWriter, payload any) {
 }
 
 func (s *server) refreshCatalogIfNeeded() error {
+	return s.refreshCatalog(false)
+}
+
+func (s *server) refreshCatalog(force bool) error {
 	s.mu.RLock()
-	fresh := time.Since(s.lastRefresh) < 15*time.Second && len(s.snapshot.Sessions) > 0
+	fresh := time.Since(s.lastRefresh) < 15*time.Second
 	s.mu.RUnlock()
-	if fresh {
+	if fresh && !force {
 		return nil
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if time.Since(s.lastRefresh) < 15*time.Second && len(s.snapshot.Sessions) > 0 {
+	if time.Since(s.lastRefresh) < 15*time.Second && !force {
 		return nil
 	}
 	catalog, byID, err := buildCatalog(s.agentDir)
@@ -1313,4 +1341,206 @@ func xmlEscape(value string) string {
 		">", "&gt;",
 		"\"", "&quot;",
 	).Replace(value)
+}
+
+// --- Live catalog SSE stream ---
+
+// catalogBroker fans out full catalog snapshots to all connected SSE clients.
+// Sends are non-blocking: a slow client that cannot keep up simply misses
+// intermediate snapshots and receives the most recent one.
+type catalogBroker struct {
+	mu          sync.RWMutex
+	subscribers map[chan catalogResponse]struct{}
+}
+
+func newCatalogBroker() *catalogBroker {
+	return &catalogBroker{subscribers: map[chan catalogResponse]struct{}{}}
+}
+
+func (b *catalogBroker) subscribe() chan catalogResponse {
+	ch := make(chan catalogResponse, 4)
+	b.mu.Lock()
+	b.subscribers[ch] = struct{}{}
+	b.mu.Unlock()
+	return ch
+}
+
+func (b *catalogBroker) unsubscribe(ch chan catalogResponse) {
+	b.mu.Lock()
+	if _, ok := b.subscribers[ch]; ok {
+		delete(b.subscribers, ch)
+		close(ch)
+	}
+	b.mu.Unlock()
+}
+
+func (b *catalogBroker) broadcast(snapshot catalogResponse) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for ch := range b.subscribers {
+		select {
+		case ch <- snapshot:
+		default:
+		}
+	}
+}
+
+// refreshAndBroadcast forces a fresh catalog rebuild and pushes the result
+// to every SSE subscriber. Safe to call concurrently.
+func (s *server) refreshAndBroadcast() {
+	if err := s.refreshCatalog(true); err != nil {
+		log.Printf("catalog refresh failed: %v", err)
+		return
+	}
+	s.mu.RLock()
+	snapshot := s.snapshot
+	s.mu.RUnlock()
+	s.broker.broadcast(snapshot)
+}
+
+// watchCatalog runs in its own goroutine. It watches the agent sessions
+// directory recursively via fsnotify and triggers a debounced refresh +
+// broadcast on any change. New subdirectories are added to the watch list
+// on the fly so newly created project folders are picked up.
+func (s *server) watchCatalog() {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Printf("fsnotify: live catalog updates disabled: %v", err)
+		return
+	}
+	defer watcher.Close()
+
+	sessionsRoot := filepath.Join(s.agentDir, "sessions")
+	if err := s.addWatchRecursive(watcher, sessionsRoot); err != nil {
+		log.Printf("fsnotify: live catalog watcher incomplete for %s: %v", sessionsRoot, err)
+	}
+
+	const debounce = 300 * time.Millisecond
+	var debounceTimer *time.Timer
+
+	schedule := func() {
+		if debounceTimer != nil {
+			debounceTimer.Stop()
+		}
+		debounceTimer = time.AfterFunc(debounce, s.refreshAndBroadcast)
+	}
+
+	for {
+		select {
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if event.Op&fsnotify.Create != 0 {
+				if info, statErr := os.Stat(event.Name); statErr == nil && info.IsDir() {
+					if addErr := watcher.Add(event.Name); addErr != nil {
+						log.Printf("fsnotify: watch %s: %v", event.Name, addErr)
+					}
+				}
+			}
+			schedule()
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Printf("fsnotify error: %v", err)
+		}
+	}
+}
+
+func (s *server) addWatchRecursive(watcher *fsnotify.Watcher, root string) error {
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			return watcher.Add(path)
+		}
+		return nil
+	})
+}
+
+// handleSessionsStream serves GET /sessions/stream as a Server-Sent Events
+// endpoint. It sends a full catalog snapshot on connect, then keeps the
+// connection open sending fresh snapshots whenever the catalog changes and a
+// short heartbeat comment every 15s to keep proxies and browsers happy.
+func (s *server) handleSessionsStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	// Subscribe before refreshing so any change that happens during the
+	// initial refresh is delivered via the channel rather than being missed.
+	ch := s.broker.subscribe()
+	defer s.broker.unsubscribe(ch)
+
+	if err := s.refreshCatalogIfNeeded(); err != nil {
+		writeSSEError(w, flusher, err.Error())
+		return
+	}
+	s.mu.RLock()
+	initial := s.snapshot
+	s.mu.RUnlock()
+	if !writeSSE(w, flusher, "snapshot", initial) {
+		return
+	}
+
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-heartbeat.C:
+			if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		case snapshot, ok := <-ch:
+			if !ok {
+				return
+			}
+			if !writeSSE(w, flusher, "snapshot", snapshot) {
+				return
+			}
+		}
+	}
+}
+
+// writeSSE serialises payload as a single SSE event. Returns false if the
+// underlying writer is broken (client disconnect), so the caller can abort.
+func writeSSE(w http.ResponseWriter, flusher http.Flusher, event string, payload any) bool {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return false
+	}
+	if _, err := io.WriteString(w, "event: "+event+"\ndata: "); err != nil {
+		return false
+	}
+	if _, err := w.Write(data); err != nil {
+		return false
+	}
+	if _, err := io.WriteString(w, "\n\n"); err != nil {
+		return false
+	}
+	flusher.Flush()
+	return true
+}
+
+func writeSSEError(w http.ResponseWriter, flusher http.Flusher, message string) {
+	_, _ = io.WriteString(w, "event: error\ndata: ")
+	data, _ := json.Marshal(map[string]string{"error": message})
+	_, _ = w.Write(data)
+	_, _ = io.WriteString(w, "\n\n")
+	flusher.Flush()
 }
