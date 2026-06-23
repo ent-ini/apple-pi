@@ -1023,11 +1023,11 @@ func parseSessionLines(lines []string) parsedSession {
 			}
 		}
 		if typeValue == "message" {
+			result.MessageCount++
 			if parentID, _ := object["parentId"].(string); parentID != "" {
 				childCounts[parentID]++
 			}
 			if message, ok := object["message"].(map[string]any); ok {
-				result.MessageCount++
 				if model := modelDescription(message); model != "" {
 					result.LatestModel = model
 				}
@@ -1036,15 +1036,14 @@ func parseSessionLines(lines []string) parsedSession {
 						result.FirstUserMessage = contentPreview(message["content"])
 					}
 				}
-			}
-		} else if object["message"] != nil || object["content"] != nil || object["role"] != nil {
-			result.MessageCount++
-			if model := modelDescription(object); model != "" {
-				result.LatestModel = model
-			}
-			if result.FirstUserMessage == "" {
-				if role, _ := object["role"].(string); role == "user" {
-					result.FirstUserMessage = contentPreview(object["content"])
+			} else {
+				if model := modelDescription(object); model != "" {
+					result.LatestModel = model
+				}
+				if result.FirstUserMessage == "" {
+					if role, _ := object["role"].(string); role == "user" {
+						result.FirstUserMessage = contentPreview(object["content"])
+					}
 				}
 			}
 		}

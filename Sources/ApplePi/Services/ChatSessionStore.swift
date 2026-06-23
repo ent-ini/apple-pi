@@ -252,15 +252,22 @@ final class ChatSessionStore: ObservableObject {
         eventLoader: (@Sendable () async throws -> [SessionEvent])? = nil
     ) -> ChatSession {
         if let existing = tabs.first(where: { $0.key == key }) {
+            existing.bindToSession(
+                key: key,
+                title: title,
+                sessionID: sessionID,
+                sessionPath: sessionPath,
+                eventLoader: eventLoader
+            )
+            existing.updateLaunchRequest(launchRequest)
             select(existing)
             existing.loadFromDisk()
             return existing
         }
 
-        // Single-session UX: opening a different conversation replaces the
-        // previous one instead of accumulating horizontal tabs.
-        closeAll(notify: false)
-
+        // Chat-first UX: keep previously opened conversations alive in
+        // memory so switching away and back preserves streaming state,
+        // scroll position, and already loaded content.
         let session = ChatSession(
             key: key,
             title: title,
@@ -269,7 +276,7 @@ final class ChatSessionStore: ObservableObject {
             launchRequest: launchRequest,
             eventLoader: eventLoader
         )
-        tabs = [session]
+        tabs.append(session)
         select(session)
         session.loadFromDisk()
         return session

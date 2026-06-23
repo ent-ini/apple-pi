@@ -198,19 +198,20 @@ final class PiSessionCatalogService {
                 childCounts[parentID, default: 0] += 1
             }
 
-            if type == "message", let message = object["message"] as? [String: Any] {
+            if type == "message" {
                 messageCount += 1
-                latestModel = modelDescription(from: message) ?? latestModel
-                if firstUserMessage == nil,
-                   message["role"] as? String == "user" {
-                    firstUserMessage = contentPreview(from: message["content"])
-                }
-            } else if object["message"] != nil || object["content"] != nil || object["role"] != nil {
-                messageCount += 1
-                latestModel = modelDescription(from: object) ?? latestModel
-                if firstUserMessage == nil,
-                   object["role"] as? String == "user" {
-                    firstUserMessage = contentPreview(from: object["content"])
+                if let message = object["message"] as? [String: Any] {
+                    latestModel = modelDescription(from: message) ?? latestModel
+                    if firstUserMessage == nil,
+                       message["role"] as? String == "user" {
+                        firstUserMessage = contentPreview(from: message["content"])
+                    }
+                } else {
+                    latestModel = modelDescription(from: object) ?? latestModel
+                    if firstUserMessage == nil,
+                       object["role"] as? String == "user" {
+                        firstUserMessage = contentPreview(from: object["content"])
+                    }
                 }
             }
 

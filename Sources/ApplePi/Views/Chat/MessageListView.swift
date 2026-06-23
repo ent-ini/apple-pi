@@ -43,8 +43,12 @@ struct MessageListView: View {
                 .onChange(of: session.streamRevision) { _, _ in
                     scrollToBottomIfNeeded(using: scrollProxy)
                 }
+                .onChange(of: session.isLoading) { _, isLoading in
+                    guard !isLoading else { return }
+                    scrollToBottom(using: scrollProxy, animated: false)
+                }
                 .onAppear {
-                    scrollProxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
+                    scrollToBottom(using: scrollProxy, animated: false)
                 }
             }
         }
@@ -84,7 +88,15 @@ struct MessageListView: View {
 
     private func scrollToBottomIfNeeded(using scrollProxy: ScrollViewProxy) {
         guard isAnchoredToBottom else { return }
-        withAnimation(.easeOut(duration: 0.12)) {
+        scrollToBottom(using: scrollProxy, animated: true)
+    }
+
+    private func scrollToBottom(using scrollProxy: ScrollViewProxy, animated: Bool) {
+        if animated {
+            withAnimation(.easeOut(duration: 0.12)) {
+                scrollProxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
+            }
+        } else {
             scrollProxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
         }
     }
