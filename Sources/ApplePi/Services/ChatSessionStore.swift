@@ -83,8 +83,14 @@ final class ChatSession: ObservableObject, Identifiable {
             switch attachment.kind {
             case .image:
                 return .image(path: attachment.filePath, mime: attachment.mimeType)
-            case .file, .audio:
-                return .text("[File: \(attachment.displayName)]")
+            case .file:
+                return .text(
+                    "<file name=\"\(attachment.filePath.xmlEscapedForPrompt)\">[Binary file attached: \(attachment.displayName.xmlEscapedForPrompt)]</file>"
+                )
+            case .audio:
+                return .text(
+                    "<file name=\"\(attachment.filePath.xmlEscapedForPrompt)\">[Audio attachment: \(attachment.displayName.xmlEscapedForPrompt)]</file>"
+                )
             }
         }
         if !prompt.isEmpty {
@@ -204,6 +210,15 @@ final class ChatSession: ObservableObject, Identifiable {
 
     private static let transientUserLineIndex = Int.max - 1
     private static let transientAssistantLineIndex = Int.max
+}
+
+private extension String {
+    var xmlEscapedForPrompt: String {
+        replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+    }
 }
 
 /// Multi-session store. Holds the list of open Pi sessions and the
