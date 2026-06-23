@@ -68,7 +68,7 @@ struct ApplePiCommands: Commands {
     @ObservedObject var appState: PiAppState
 
     var body: some Commands {
-        CommandGroup(replacing: .find) {
+        CommandGroup(replacing: .textEditing) {
             Button("Find Sessions") {
                 appState.requestSessionSearchFocus()
             }

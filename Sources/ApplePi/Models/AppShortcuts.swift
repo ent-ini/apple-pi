@@ -104,7 +104,7 @@ enum ShortcutKey: Codable, Equatable, Hashable, Sendable {
     case special(SpecialShortcutKey)
 
     fileprivate static func character(from rawCharacters: String) -> String? {
-        let scalars = rawCharacters.unicodeScalars.filter { !$0.properties.isControl }
+        let scalars = rawCharacters.unicodeScalars.filter { $0.properties.generalCategory != .control }
         guard scalars.count == 1, let scalar = scalars.first else { return nil }
         return String(Character(String(scalar))).lowercased()
     }

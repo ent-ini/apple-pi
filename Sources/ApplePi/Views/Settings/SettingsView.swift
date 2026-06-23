@@ -192,7 +192,7 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var shortcutsSection: some View {
-        Section("Shortcuts") {
+        Section {
             ForEach(AppShortcutAction.allCases) { action in
                 HStack(spacing: 16) {
                     Text(action.title)
@@ -201,6 +201,8 @@ struct SettingsView: View {
                         .frame(width: 160, height: 28)
                 }
             }
+        } header: {
+            Text("Shortcuts")
         } footer: {
             Text("Click a shortcut, then press a new key combination. Esc cancels. If the combo is already used, shortcuts swap places.")
                 .font(.caption)
