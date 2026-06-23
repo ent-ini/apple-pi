@@ -141,7 +141,8 @@ struct ContentView: View {
                 Button {
                     appState.openNewSessionInCurrentFolder()
                 } label: {
-                    Label("New", systemImage: "plus")
+                    Image(systemName: "plus")
+                        .foregroundStyle(appState.appearance.accentColor)
                 }
                 .help("New session")
 

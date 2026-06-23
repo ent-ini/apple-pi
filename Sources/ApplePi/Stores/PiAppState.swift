@@ -578,6 +578,7 @@ final class PiAppState: ObservableObject {
                 eventLoader: eventLoader
             )
             migrateSessionState(from: previousAliases, to: sessionAliases(for: session))
+            scheduleCatalogRefresh(after: .milliseconds(50))
         case .sessionHeader(let meta):
             if session.sessionID == nil {
                 let previousAliases = sessionAliases(for: session)
@@ -587,6 +588,7 @@ final class PiAppState: ObservableObject {
                     eventLoader: session.sessionPath == nil ? remoteEventLoader(sessionID: meta.id) : nil
                 )
                 migrateSessionState(from: previousAliases, to: sessionAliases(for: session))
+                scheduleCatalogRefresh(after: .milliseconds(50))
             }
         case .message(let message, let isFinal):
             if message.role == .assistant {
