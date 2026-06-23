@@ -71,35 +71,9 @@ enum RemoteCredentialStore {
 
     private static func write(data: Data, for host: PiHostConfiguration) throws {
         let path = try credentialPath(for: host)
-        let directory = (path as NSString).deletingLastPathComponent
-        let fileManager = Foundation.FileManager()
         do {
-            try fileManager.createDirectory(atPath: directory, withIntermediateDirectories: true, attributes: [
-                .posixPermissions: 0o700
-            ])
-            // createDirectory only applies attributes when the directory
-            // does not already exist; force the mode on every write so a
-            // user who hand-chmod'd the directory cannot accidentally
-            // expose stored passwords to other accounts.
-            try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory)
+            try SecureSecretFileWriter.writeAtomically(data: data, to: path)
         } catch {
-            throw CredentialError.ioFailure("Could not create credentials directory: \(error.localizedDescription)")
-        }
-
-        // Write atomically: write to a sibling .tmp file, fsync, then rename.
-        // This avoids leaving a half-written password file if the process is
-        // killed mid-write.
-        let temporaryPath = "\(path).tmp"
-        do {
-            try data.write(to: URL(fileURLWithPath: temporaryPath), options: [.atomic])
-            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporaryPath)
-            if fileManager.fileExists(atPath: path) {
-                try fileManager.removeItem(atPath: path)
-            }
-            try fileManager.moveItem(atPath: temporaryPath, toPath: path)
-            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
-        } catch {
-            try? fileManager.removeItem(atPath: temporaryPath)
             throw CredentialError.ioFailure("Could not write credentials file: \(error.localizedDescription)")
         }
     }

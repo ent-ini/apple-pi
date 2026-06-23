@@ -4,7 +4,7 @@
 
 **You already have Pi. Now give it a proper macOS home.**
 
-*A minimal native macOS app for running [Pi](https://github.com/earendil-works/pi) coding-agent terminal sessions — locally or over SSH.*
+*A minimal native macOS app for running [Pi](https://github.com/earendil-works/pi) coding-agent sessions — locally on your Mac, or remotely through a [pi-appd](https://github.com/ent-ini/apple-pi) daemon.*
 
 </div>
 
@@ -16,11 +16,11 @@
 
 <div align="center">
 
-**Projects on the left. Sessions in the middle. Terminals on the right, for the agents doing the work.**
+**Projects on the left. Sessions in the middle. The Pi conversation on the right.**
 
-No chat feed. No fake IDE. No Electron wrapper.
+No fake IDE. No Electron wrapper. No unreadable terminal UI pretending to be a chat.
 
-**Just Pi, terminals, and a cockpit that feels good to use.**
+**Just Pi, organised.**
 
 </div>
 
@@ -40,19 +40,19 @@ Pi is powerful. The terminal chaos around it is not.
 
 Browse your Pi `.jsonl` sessions, resume them with one click, fork a session into a parallel path, open fresh sessions per project, or start ephemeral ones when you want a clean run.
 
-Each tab is a real terminal backed by **SwiftTerm**. Parallel agents feel natural because they are not trapped inside a custom chat UI pretending to be one.
+The detail pane renders each open Pi conversation as a chat — message bubbles for user and assistant turns, compact disclosure rows for tool calls and tool results, and a composer that supports text, file attachments, and voice notes. You can keep multiple conversations open at once and switch between them from the sidebar.
 
 Local sessions can send a macOS notification when Pi is ready for your input again. The app bundles the small helper this needs and loads it only for sessions it starts. Your existing Pi agent settings are left exactly as they are.
 
-Run your local Pi with the configured `pi` executable, or connect to a remote machine over your existing SSH setup. No new password store.
+Run your local Pi with the configured `pi` executable, or talk to a remote machine through the lightweight `pi-appd` HTTP daemon. Apple Pi ships only the macOS client; `pi-appd` is a separate project that lives next to Pi on the remote host and exposes the same catalog, session, and turn APIs over a bearer-token-authenticated HTTP surface. No new password store on your Mac.
 
-Remote SSH mode can browse, start, and resume sessions on the remote host. It intentionally does not delete remote session files from the app, and the Pi context panel stays limited because project trust and local file actions belong to the remote machine.
+Remote API mode can browse, start, and resume sessions on the remote host. It intentionally does not delete remote session files from the app, and the Pi context panel stays limited because project trust and local file actions belong to the remote machine.
 
 ## Make it yours
 
-Tune the opacity of the window, sidebars, and terminal surface. Pick an accent color. Adjust the terminal font. Keep the titlebar transparent, or do not.
+Tune the opacity of the window, sidebars, and chat surface. Pick an accent color. Keep the titlebar transparent, or do not.
 
-A clean terminal cockpit floating over your desktop is a legitimate aesthetic. The app will not fight you on it.
+A clean translucent panel floating over your desktop is a legitimate aesthetic. The app will not fight you on it.
 
 ## Session discovery
 
@@ -68,7 +68,7 @@ Pi owns the sessions. Apple Pi makes them easier to find, read, start, and resum
 
 ## What it is not
 
-Apple Pi is not a replacement for Pi, a chat app, an IDE, an Electron dashboard, a cloud service, an account system, a model API key manager, or an SSH key manager.
+Apple Pi is not a replacement for Pi, an IDE, an Electron dashboard, a cloud service, an account system, a model API key manager, an SSH key manager, or a generic terminal emulator host. (It is, by design, a chat-style session UI for Pi.)
 
 ## Install
 
@@ -100,7 +100,7 @@ The package script creates the `.app`, ad-hoc signs it, verifies it, and writes 
 
 No analytics. No account. No background auto-updater.
 
-On launch, the app makes one anonymous GET to `api.github.com/repos/dodo-reach/apple-pi/releases/latest` to check for newer releases, throttled to once every 24 hours, and shows a small in-app link if one exists. It never downloads or installs anything on its own.
+On launch, the app makes one anonymous GET to `api.github.com/repos/ent-ini/apple-pi/releases/latest` to check for newer releases, throttled to once every 24 hours, and shows a small in-app link if one exists. It never downloads or installs anything on its own.
 
 No bundled browser runtime. No SSH key manager. No password store. No model API key manager. No hidden Pi installs.
 
@@ -115,12 +115,13 @@ plutil -p "Apple Pi.app/Contents/Info.plist"
 ## Requirements
 
 - macOS 14 or newer
-- Pi installed locally, or SSH access to a remote host running Pi
+- Pi installed locally, **or** a remote host running [pi-appd](https://github.com/ent-ini/apple-pi) and Pi
 - Swift 6.1 if building from source
-- `python3` on the remote host for remote session browsing
+
+Remote sessions only require whatever `pi-appd` itself requires on the remote host — Apple Pi does not need `python3` or any other tool installed on the remote beyond what `pi-appd` documents.
 
 ## License
 
 MIT. See [LICENSE.md](LICENSE.md).
 
-SwiftTerm is MIT licensed, included in [Vendor/SwiftTerm](Vendor/SwiftTerm).
+SwiftTerm is MIT licensed and vendored at [Vendor/SwiftTerm](Vendor/SwiftTerm). It is reserved for a future in-app terminal surface; the current release renders Pi conversations as chat, not as a SwiftTerm-backed terminal view.

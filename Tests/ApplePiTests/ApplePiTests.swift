@@ -165,6 +165,164 @@ import Testing
     #expect(session.latestModel == "openai/gpt-5")
 }
 
+@Test func catalogSkipsSymlinkedSessionFiles() async throws {
+    let temp = try TemporaryPiFixture()
+    let sessionsRoot = temp.agent.appendingPathComponent("sessions")
+    let encodedProject = sessionsRoot.appendingPathComponent("--Users-ada-Code-symlink-target--")
+    try Foundation.FileManager().createDirectory(at: encodedProject, withIntermediateDirectories: true)
+    let realFile = encodedProject.appendingPathComponent("real.jsonl")
+    try """
+    {"type":"session","id":"real","cwd":"/Users/ada/Code/symlink-target"}
+    {"type":"message","role":"user","content":"hello"}
+    """.write(to: realFile, atomically: true, encoding: .utf8)
+    // Symlink in the same root that points at the real file. If the
+    // catalog follows the symlink we would see the same session twice.
+    let symlink = sessionsRoot.appendingPathComponent("link-to-real.jsonl")
+    try Foundation.FileManager().createSymbolicLink(at: symlink, withDestinationURL: realFile)
+    let host = PiHostConfiguration(agentDirectory: temp.agent.path)
+    let service = PiSessionCatalogService(configurationService: PiConfigurationService(environment: []))
+
+    let snapshot = try await service.loadCatalog(host: host)
+
+    #expect(snapshot.sessions.count == 1)
+    #expect(snapshot.sessions.first?.filePath == realFile.path)
+}
+
+@Test func catalogSurfacesInvalidUTF8SessionFileAsWarning() async throws {
+    let temp = try TemporaryPiFixture()
+    let sessionsRoot = temp.agent.appendingPathComponent("sessions")
+    let encodedProject = sessionsRoot.appendingPathComponent("--Users-ada-Code-partial--")
+    try Foundation.FileManager().createDirectory(at: encodedProject, withIntermediateDirectories: true)
+    // Good file that we expect to be loaded normally.
+    let good = encodedProject.appendingPathComponent("good.jsonl")
+    try """
+    {"type":"session","id":"good","cwd":"/Users/ada/Code/partial"}
+    {"type":"message","role":"user","content":"hi"}
+    """.write(to: good, atomically: true, encoding: .utf8)
+    // A `.jsonl` file whose first preview line contains an invalid
+    // UTF-8 byte sequence. The catalog should still surface the good
+    // session and also record a warning naming the bad file.
+    let bad = encodedProject.appendingPathComponent("bad.jsonl")
+    var invalidBytes = Data([0xFF, 0xFE, 0xFD, 0xFC])
+    invalidBytes.append(Data(#"{"type":"message","role":"user","content":"ok"}"#.utf8))
+    try invalidBytes.write(to: bad)
+    let host = PiHostConfiguration(agentDirectory: temp.agent.path)
+    let service = PiSessionCatalogService(configurationService: PiConfigurationService(environment: []))
+
+    let snapshot = try await service.loadCatalog(host: host)
+
+    #expect(snapshot.sessions.contains(where: { $0.filePath == good.path }))
+    #expect(snapshot.warnings.contains(where: { $0.contains(bad.path) }))
+}
+
+@Test func catalogSurfacesUnreadableSessionFileAsWarning() async throws {
+    // Skip the test when running as root, because root can read any
+    // file regardless of its POSIX mode bits. The test is then unable
+    // to make a file genuinely unreadable.
+    let runningAsRoot = ProcessInfo.processInfo.environment["USER"] == "root"
+        || ProcessInfo.processInfo.environment["HOME"] == "/var/root"
+    try #require(!runningAsRoot, "Unreadable-file test does not apply when running as root.")
+
+    let temp = try TemporaryPiFixture()
+    let sessionsRoot = temp.agent.appendingPathComponent("sessions")
+    let encodedProject = sessionsRoot.appendingPathComponent("--Users-ada-Code-locked--")
+    try Foundation.FileManager().createDirectory(at: encodedProject, withIntermediateDirectories: true)
+    // Good file we expect to load normally.
+    let good = encodedProject.appendingPathComponent("good.jsonl")
+    try """
+    {"type":"session","id":"good","cwd":"/Users/ada/Code/locked"}
+    {"type":"message","role":"user","content":"hi"}
+    """.write(to: good, atomically: true, encoding: .utf8)
+    // A file we strip of all permissions so the catalog cannot read
+    // it. We restore the permissions in a defer so the test fixture's
+    // `deinit` can clean up the temporary directory.
+    let locked = encodedProject.appendingPathComponent("locked.jsonl")
+    try """
+    {"type":"session","id":"locked","cwd":"/Users/ada/Code/locked"}
+    {"type":"message","role":"user","content":"secret"}
+    """.write(to: locked, atomically: true, encoding: .utf8)
+    let fileManager = Foundation.FileManager()
+    try fileManager.setAttributes([.posixPermissions: NSNumber(value: 0o000)], ofItemAtPath: locked.path)
+    defer {
+        try? fileManager.setAttributes([.posixPermissions: NSNumber(value: 0o600)], ofItemAtPath: locked.path)
+    }
+    let host = PiHostConfiguration(agentDirectory: temp.agent.path)
+    let service = PiSessionCatalogService(configurationService: PiConfigurationService(environment: []))
+
+    let snapshot = try await service.loadCatalog(host: host)
+
+    #expect(snapshot.sessions.contains(where: { $0.filePath == good.path }))
+    #expect(snapshot.warnings.contains(where: { $0.contains(locked.path) }))
+}
+
+@Test func catalogCountsAllMessagesInOnePass() async throws {
+    let temp = try TemporaryPiFixture()
+    let sessionsRoot = temp.agent.appendingPathComponent("sessions")
+    let encodedProject = sessionsRoot.appendingPathComponent("--Users-ada-Code-counted--")
+    try Foundation.FileManager().createDirectory(at: encodedProject, withIntermediateDirectories: true)
+    let sessionFile = encodedProject.appendingPathComponent("counted.jsonl")
+    // 1 session header line and 250 message lines. The single-pass
+    // read should still report all 250 messages in the `messageCount`
+    // even though only the first 240 lines are kept for preview.
+    var lines: [String] = []
+    lines.append(#"{"type":"session","id":"counted","cwd":"/Users/ada/Code/counted"}"#)
+    for index in 0..<250 {
+        lines.append(#"{"type":"message","role":"user","content":"hello \#(index)"}"#)
+    }
+    try lines.joined(separator: "\n").write(to: sessionFile, atomically: true, encoding: .utf8)
+    let host = PiHostConfiguration(agentDirectory: temp.agent.path)
+    let service = PiSessionCatalogService(configurationService: PiConfigurationService(environment: []))
+
+    let snapshot = try await service.loadCatalog(host: host)
+    let session = try #require(snapshot.sessions.first)
+
+    #expect(session.messageCount == 250)
+}
+
+@Test func catalogBoundsLargeSessionFiles() async throws {
+    let temp = try TemporaryPiFixture()
+    let sessionsRoot = temp.agent.appendingPathComponent("sessions")
+    let encodedProject = sessionsRoot.appendingPathComponent("--Users-ada-Code-huge--")
+    try Foundation.FileManager().createDirectory(at: encodedProject, withIntermediateDirectories: true)
+    let sessionFile = encodedProject.appendingPathComponent("huge.jsonl")
+    // Write a session file with a header plus many message lines, so
+    // we exceed the catalog's bounded line cap and the catalog should
+    // surface a warning rather than read the entire file forever.
+    let lineCount = 250_001
+    var lines: [String] = ["{\"type\":\"session\",\"id\":\"huge\",\"cwd\":\"/Users/ada/Code/huge\"}"]
+    lines.reserveCapacity(lineCount)
+    for index in 0..<(lineCount - 1) {
+        lines.append(#"{"type":"message","role":"user","content":"hi \#(index)"}"#)
+    }
+    try lines.joined(separator: "\n").write(to: sessionFile, atomically: true, encoding: .utf8)
+    let host = PiHostConfiguration(agentDirectory: temp.agent.path)
+    let service = PiSessionCatalogService(configurationService: PiConfigurationService(environment: []))
+
+    let snapshot = try await service.loadCatalog(host: host)
+    let session = try #require(snapshot.sessions.first)
+
+    #expect(session.messageCount <= 200_000)
+    #expect(snapshot.warnings.contains(where: { $0.contains("Truncated") }))
+}
+
+@Test func catalogStatusMessageIncludesWarningsAndCount() {
+    #expect(PiAppState.catalogStatusMessage(sessionCount: 0, warnings: []) == "Loaded 0 Pi sessions")
+    #expect(PiAppState.catalogStatusMessage(sessionCount: 1, warnings: []) == "Loaded 1 Pi session")
+    #expect(PiAppState.catalogStatusMessage(sessionCount: 2, warnings: []) == "Loaded 2 Pi sessions")
+    let withOne = PiAppState.catalogStatusMessage(
+        sessionCount: 3,
+        warnings: ["Read error in /tmp/a.jsonl: oops"]
+    )
+    #expect(withOne.contains("Loaded 3 Pi sessions"))
+    #expect(withOne.contains("Read error in /tmp/a.jsonl: oops"))
+    let withMany = PiAppState.catalogStatusMessage(
+        sessionCount: 3,
+        warnings: ["warn-1", "warn-2", "warn-3", "warn-4", "warn-5"]
+    )
+    #expect(withMany.contains("warn-1"))
+    #expect(withMany.contains("(+ 2 more)"))
+}
+
 @MainActor
 @Test func deleteSessionRemovesFileAndRefreshesList() async throws {
     let temp = try TemporaryPiFixture()
@@ -427,6 +585,7 @@ import Testing
     let state = PiAppState(
         defaults: isolatedDefaults(),
         configurationService: PiConfigurationService(environment: [:]),
+        catalogLoader: { _, _ in PiCatalogSnapshot(projects: [], sessions: []) },
         startsBackgroundWork: false
     )
     state.host.mode = .remoteSSH
@@ -455,7 +614,7 @@ import Testing
     )
 
     #expect(state.configurationSummary.isRemote)
-    #expect(state.configurationSummary.trustDisplayTitle == "Remote SSH")
+    #expect(state.configurationSummary.trustDisplayTitle == "Remote API")
     #expect(state.configurationSummary.globalSettingsPath.isEmpty)
     #expect(state.configurationSummary.settingsCount == 0)
     #expect(state.configurationSummary.contextFileCount == 0)
@@ -751,7 +910,7 @@ private func isolatedDefaults() -> UserDefaults {
     }
     if case .toolResult(let result, _) = events[1] {
         #expect(result.callId == "call-1")
-        if case .result(_, _, let output, let isError) = result {
+        if case .result(_, _, _, let output, let isError) = result {
             #expect(output == "file contents")
             #expect(isError == false)
         } else {

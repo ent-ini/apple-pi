@@ -76,7 +76,7 @@ The release app is built by:
 script/package_release.sh
 ```
 
-That script builds the Swift package, creates the `.app` bundle, writes `Info.plist`, signs the bundle, verifies the signature, and creates the zip.
+That script builds the Swift package, creates the `.app` bundle, renders `Info.plist` from `script/Info.plist.tpl`, signs the bundle, verifies the signature, and creates the zip. `script/Info.plist.tpl` is the single source of truth for the bundle metadata (bundle identifier, version, build number, display name, ATS exceptions, etc.); review it alongside any release-tag diff.
 
 The Swift package has one local package dependency:
 
@@ -84,4 +84,4 @@ The Swift package has one local package dependency:
 Vendor/SwiftTerm
 ```
 
-No remote Swift package dependency is declared in `Package.swift`.
+SwiftTerm is vendored for a future in-app terminal surface; the current release does not link against it. No remote Swift package dependency is declared in `Package.swift`.

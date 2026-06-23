@@ -178,23 +178,23 @@ struct RemoteDaemonClient {
         )
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
 
-        var body = Data()
-        let multipartFileName = attachment.displayName
-            .replacingOccurrences(of: "\\", with: "-")
-            .replacingOccurrences(of: "\"", with: "-")
-            .replacingOccurrences(of: "\r", with: " ")
-            .replacingOccurrences(of: "\n", with: " ")
+        // The filename is embedded directly in a
+        // `Content-Disposition: form-data; name="file"; filename="…"`
+        // header. Apply a strict whitelist so unusual Unicode, control
+        // bytes, or semicolons cannot confuse the server's multipart
+        // parser or smuggle additional header parameters.
+        let multipartFileName = MultipartFilenameSanitizer.sanitize(
+            attachment.displayName,
+            placeholder: "attachment"
+        )
 
-        body.append("--\(boundary)\r\n".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(multipartFileName)\"\r\n".data(using: .utf8)!)
-        if let mimeType = attachment.mimeType {
-            body.append("Content-Type: \(mimeType)\r\n\r\n".data(using: .utf8)!)
-        } else {
-            body.append("\r\n".data(using: .utf8)!)
-        }
-        body.append(try Data(contentsOf: attachment.fileURL))
-        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
-        request.httpBody = body
+        let fileData = try Data(contentsOf: attachment.fileURL)
+        request.httpBody = Self.makeUploadMultipartBody(
+            fileName: multipartFileName,
+            mimeType: attachment.mimeType,
+            fileData: fileData,
+            boundary: boundary
+        )
 
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -209,6 +209,29 @@ struct RemoteDaemonClient {
         } catch {
             throw RemoteDaemonError.decodingFailed(error.localizedDescription)
         }
+    }
+
+    /// Builds the multipart body for `/uploads`. Exposed as a static
+    /// helper so the test suite can pin the exact wire format (in
+    /// particular the sanitised filename and the `Content-Disposition`
+    /// header) without having to mock `URLSession`.
+    static func makeUploadMultipartBody(
+        fileName: String,
+        mimeType: String?,
+        fileData: Data,
+        boundary: String
+    ) -> Data {
+        var body = Data()
+        body.append(Data("--\(boundary)\r\n".utf8))
+        body.append(Data("Content-Disposition: form-data; name=\"file\"; filename=\"\(fileName)\"\r\n".utf8))
+        if let mimeType {
+            body.append(Data("Content-Type: \(mimeType)\r\n\r\n".utf8))
+        } else {
+            body.append(Data("\r\n".utf8))
+        }
+        body.append(fileData)
+        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        return body
     }
 
     private func send<Response: Decodable>(

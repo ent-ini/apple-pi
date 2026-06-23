@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 @preconcurrency import UserNotifications
 
 @main
@@ -11,6 +12,9 @@ struct ApplePiApp: App {
             ContentView()
                 .environmentObject(appState)
                 .frame(minWidth: 260, minHeight: 180)
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    appState.shutdownForTermination()
+                }
         }
         .commands {
             ApplePiCommands(appState: appState)
@@ -20,6 +24,14 @@ struct ApplePiApp: App {
             SettingsView()
                 .environmentObject(appState)
                 .preferredColorScheme(appState.appearance.colorScheme.colorScheme)
+                .overlay(alignment: .topLeading) {
+                    // Mirror the main window's appearance so the titlebar
+                    // toggle and opacity apply here too. The overlay is
+                    // zero-sized and non-interactive.
+                    WindowAppearanceConfigurator(appearance: appState.appearance)
+                        .frame(width: 0, height: 0)
+                        .allowsHitTesting(false)
+                }
         }
     }
 }

@@ -1,6 +1,6 @@
 # Apple Pi <version>
 
-First public release of Apple Pi, a native macOS app for organizing Pi terminal sessions.
+Public release of Apple Pi, a native macOS app for organising Pi coding-agent sessions.
 
 ## Download
 
@@ -10,18 +10,18 @@ First public release of Apple Pi, a native macOS app for organizing Pi terminal 
 ## Requirements
 
 - macOS 14 or newer
-- Pi installed locally, or SSH access to a remote host that can run Pi
-- `python3` on the remote host for remote session browsing
+- Pi installed locally, **or** a remote host running [pi-appd](https://github.com/ent-ini/apple-pi) and Pi
 
 ## Highlights
 
 - Browse Pi session groups and `.jsonl` sessions.
 - Resume, fork, and start local Pi sessions.
 - Start temporary local sessions with `--no-session`.
-- Open multiple terminal tabs backed by SwiftTerm.
-- Connect to remote hosts through the system SSH client.
-- Browse and start remote SSH sessions without storing SSH passwords or keys.
-- Tune the app appearance, terminal theme, font, opacity, panes, and accent color.
+- Render open Pi conversations as chat (message bubbles, tool call/result disclosure rows, attachments, voice notes).
+- Keep multiple conversations open and switch between them from the sidebar.
+- Talk to a remote host running `pi-appd` over bearer-token-authenticated HTTP.
+- Browse and start remote sessions without storing SSH passwords, keys, or Pi session transcripts.
+- Tune the app appearance: window/sidebar/chat opacity, accent color, transparent titlebar, dark/light mode.
 - Receive macOS notifications from local sessions through the bundled OSC 777 helper.
 - Check for newer GitHub releases without automatic downloads or installs.
 
@@ -50,8 +50,10 @@ For ad-hoc builds, Gatekeeper assessment may reject the app. That is expected fo
 - Apple Pi does not install Pi.
 - Apple Pi does not manage SSH keys or store SSH passwords.
 - Apple Pi does not store model API keys or Pi session transcripts.
-- Remote SSH mode can browse, start, and resume remote sessions, but it does not delete remote session files.
+- The macOS client never shells out to `python3`, `ssh`, or any other tool on the remote host. Remote access is the `pi-appd` HTTP daemon, not a built-in SSH client.
+- Remote API mode can browse, start, and resume remote sessions, but it does not delete remote session files.
 - Remote notifications require notification support configured on the remote host; the bundled helper is only loaded into local sessions started by Apple Pi.
+- SwiftTerm is vendored at `Vendor/SwiftTerm` for a future in-app terminal surface. The current release renders Pi conversations as chat, not as a SwiftTerm-backed terminal view.
 - The app checks GitHub releases once every 24 hours and never updates itself automatically.
 
 ## Links

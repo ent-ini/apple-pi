@@ -1,15 +1,68 @@
 import Foundation
 
-/// Shared SSH plumbing for the catalog scanner, the remote-directory
-/// service, and the terminal launcher. Centralising this keeps the
-/// password-auth path (SSH_ASKPASS wiring, environment variables) in one
-/// place so the three call sites cannot drift.
+/// Process-environment helpers shared by the local Pi runner and the
+/// `pi-appd` remote turn path. Centralising the allowlist here keeps
+/// the secrets-stripping behaviour consistent between the two call
+/// sites.
+///
+/// The file also still carries the SSH-flavored helpers
+/// (`commonArguments`, `remoteEnvironment`, `bundledAskpassPath`) that
+/// were wired up when the remote runtime was SSH-based. The current
+/// release does not call them; remote mode is now a pure HTTP client
+/// against `pi-appd`. They are kept so a future local-SSH passthrough
+/// can reuse them without re-deriving the password/identity plumbing,
+/// and the test suite (`RemoteSSHSupportTests`) pins their behaviour.
 enum RemoteSSHSupport {
+    /// Environment variable names we are willing to forward to the child
+    /// `pi` and `ssh` processes. Everything else from the parent process is
+    /// intentionally dropped so secrets such as `OPENAI_API_KEY`,
+    /// `GITHUB_TOKEN`, `AWS_*`, etc. that might be set in the launching
+    /// shell (Terminal, an IDE, a CI launcher) do not leak into the agent
+    /// or onto the remote host.
+    ///
+    /// The list is small and explicit on purpose. Add a key here only
+    /// after confirming it is both safe to forward and actually required
+    /// by `pi` or `ssh`.
+    static let allowlistedEnvironmentKeys: [String] = [
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "PATH",
+        "TMPDIR",
+        "SHELL",
+        "TERM",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "XDG_RUNTIME_DIR"
+    ]
+
     /// Process environment used when invoking `ssh` for one-shot operations
-    /// (catalog scan, directory listing). The terminal launcher applies its
-    /// own env because it needs the merged PATH plus the askpass env vars.
-    static func processEnvironment() -> [String: String] {
-        var environment = ProcessInfo.processInfo.environment
+    /// (catalog scan, directory listing) and when launching the local
+    /// `pi` agent. The parent process's environment is filtered through
+    /// `allowlistedEnvironmentKeys` rather than passed through wholesale.
+    ///
+    /// `parentEnvironment` defaults to the real process environment but is
+    /// overridable for tests.
+    static func processEnvironment(
+        parentEnvironment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [String: String] {
+        var environment: [String: String] = [:]
+        for key in allowlistedEnvironmentKeys {
+            if let value = parentEnvironment[key], !value.isEmpty {
+                environment[key] = value
+            }
+        }
+        // Always guarantee a HOME and USER, even if the launching shell
+        // happened to leave them blank — tools that expand `~` or read
+        // `$USER` would otherwise misbehave in a way that's hard to
+        // diagnose from inside the agent.
+        if environment["HOME"] == nil {
+            environment["HOME"] = NSHomeDirectory()
+        }
+        if environment["USER"] == nil {
+            environment["USER"] = NSUserName()
+        }
         environment["PATH"] = "\(localDefaultPath):\(environment["PATH"] ?? "")"
         return environment
     }
@@ -18,9 +71,10 @@ enum RemoteSSHSupport {
     /// helper, password file pointer, and the dummy `DISPLAY` ssh insists on.
     static func remoteEnvironment(
         for host: PiHostConfiguration,
-        askpassExecutable: String?
+        askpassExecutable: String?,
+        parentEnvironment: [String: String] = ProcessInfo.processInfo.environment
     ) -> [String: String] {
-        var environment = processEnvironment()
+        var environment = processEnvironment(parentEnvironment: parentEnvironment)
         if let askpassExecutable, !askpassExecutable.isEmpty {
             environment["SSH_ASKPASS"] = askpassExecutable
             environment["SSH_ASKPASS_REQUIRE"] = "force"

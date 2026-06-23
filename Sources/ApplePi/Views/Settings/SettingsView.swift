@@ -16,6 +16,7 @@ struct SettingsView: View {
     @State private var isConfirmingClearAPIToken = false
     @State private var isConfirmingClearGroqAPIKey = false
     @State private var isConfirmingHostCommit = false
+    @State private var isConfirmingCopyWithToken = false
     @State private var pendingHostCommit: PiHostConfiguration?
     @State private var editingHost: PiHostConfiguration?
 
@@ -76,7 +77,7 @@ struct SettingsView: View {
             refreshAPITokenStatus()
             refreshGroqAPIKeyStatus()
         }
-        .onDisappear { commitHostIfChanged(force: true) }
+        .onDisappear { discardHostEdits() }
         .confirmationDialog(
             "Apply host changes?",
             isPresented: $isConfirmingHostCommit,
@@ -114,6 +115,18 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("The locally stored Groq API key will be deleted. Voice recording will still work, but auto-transcription will stop until you save the key again.")
+        }
+        .confirmationDialog(
+            "Copy curl with token?",
+            isPresented: $isConfirmingCopyWithToken,
+            titleVisibility: .visible
+        ) {
+            Button("Copy with token") {
+                copyCurlCommand(includeToken: true)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The curl command will include your stored bearer token in plain text. Anyone with access to your clipboard can read it. Prefer the redacted copy unless you need to run the command right now.")
         }
     }
 
@@ -277,8 +290,15 @@ struct SettingsView: View {
                     testRemoteAPI()
                 }
                 Button("Copy curl") {
-                    copyCurlCommand()
+                    copyCurlCommand(includeToken: false)
                 }
+                // The "Copy with token" path requires an explicit
+                // confirmation dialog because it puts the user's
+                // stored bearer token on the clipboard in plain text.
+                Button("Copy with token") {
+                    requestCopyCurlWithToken()
+                }
+                .disabled(!canCopyFullCurlCommand)
                 Spacer()
             }
         } header: {
@@ -286,10 +306,17 @@ struct SettingsView: View {
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
                 Text("pi-appd is now the only remote transport. Configure URL and token, then use Test Remote API before Apply.")
-                if let curlCommand {
-                    Text(curlCommand)
+                if let redactedCurlCommand {
+                    // Always show the redacted form here. The token is
+                    // never rendered in the UI; users who really need
+                    // a literal token in their command must click
+                    // "Copy with token" and confirm the prompt.
+                    Text(redactedCurlCommand)
                         .font(.caption.monospaced())
                         .textSelection(.enabled)
+                    Text("Token is redacted. Use \"Copy with token\" to include it in the clipboard.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
             .font(.caption)
@@ -386,17 +413,21 @@ struct SettingsView: View {
         refreshAPITokenStatus()
     }
 
-    private func commitHostIfChanged(force: Bool) {
-        guard let editingHost, editingHost != appState.host else { return }
-        if force {
-            appState.host = editingHost
-            pendingHostCommit = nil
-        }
-    }
-
     private func discardHostEdits() {
+        // Always revert the buffer back to the saved host. We never want
+        // half-typed host values (e.g. an incomplete `remoteDaemonURL`)
+        // to silently leak into `appState.host` when the user closes
+        // the settings window, switches tabs, or otherwise dismisses the
+        // view. Committing host changes is an explicit action: the user
+        // must press Apply, confirm the dialog, and only then do we
+        // touch the persisted host.
         editingHost = appState.host
         pendingHostCommit = nil
+        // Also clear the in-flight confirmation state so the destructive
+        // "Apply host changes?" dialog does not re-appear on the next
+        // open of the settings window after the user dismissed it by
+        // closing the window itself.
+        isConfirmingHostCommit = false
     }
 
     // MARK: - SSH pickers (operate on editingHost)
@@ -541,10 +572,31 @@ struct SettingsView: View {
     }
 
     private var curlCommand: String? {
-        guard let baseURL = currentEditingHost.remoteDaemonBaseURL else { return nil }
+        // Used only by the "Copy with token" path. The view never
+        // renders this string in the UI; it is gated by a confirmation
+        // dialog and only placed on the clipboard after the user
+        // confirms.
         let token = apiTokenInput.nilIfBlank ?? RemoteDaemonTokenStore.readToken(for: currentEditingHost)
         guard let token else { return nil }
-        return "curl -H \"Authorization: Bearer \(token)\" \(baseURL.appending(path: "healthz").absoluteString.shellQuoted)"
+        return RemoteCurlCommandBuilder.full(host: currentEditingHost, token: token)
+    }
+
+    /// Always-safe version of the curl command shown in the settings
+    /// footer. The bearer token is replaced with a `$APPLEPI_TOKEN`
+    /// shell variable so the rendered text never reveals a secret.
+    private var redactedCurlCommand: String? {
+        RemoteCurlCommandBuilder.redacted(host: currentEditingHost)
+    }
+
+    /// Whether the user currently has a token they could copy out —
+    /// i.e. either the in-progress input is non-blank, or a token is
+    /// stored for the editing host. The "Copy with token" button
+    /// mirrors this gate so we never offer a "with token" path when
+    /// there is nothing to copy.
+    private var canCopyFullCurlCommand: Bool {
+        guard currentEditingHost.remoteDaemonBaseURL != nil else { return false }
+        if apiTokenInput.nilIfBlank != nil { return true }
+        return RemoteDaemonTokenStore.hasToken(for: currentEditingHost)
     }
 
     private func notificationBinding<Value>(_ keyPath: WritableKeyPath<TerminalNotificationPreferences, Value>) -> Binding<Value> {
@@ -690,14 +742,40 @@ struct SettingsView: View {
         }
     }
 
-    private func copyCurlCommand() {
-        guard let curlCommand else {
-            apiTokenStatus = "Set URL and token first."
+    private func requestCopyCurlWithToken() {
+        // The "Copy with token" path always goes through a
+        // confirmation dialog. The dialog is gated by `canCopyFullCurlCommand`
+        // (the button is disabled otherwise) so the user cannot reach
+        // this branch with an empty token.
+        isConfirmingCopyWithToken = true
+    }
+
+    private func copyCurlCommand(includeToken: Bool) {
+        if includeToken {
+            // Full path: the caller already confirmed via
+            // `requestCopyCurlWithToken()`. We still re-check the
+            // inputs so a stale dialog cannot leak a token after the
+            // user clears the URL or the input field.
+            guard let curlCommand else {
+                apiTokenStatus = "Set URL and token first."
+                return
+            }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(curlCommand, forType: .string)
+            apiTokenStatus = "curl command with token copied. Treat the clipboard as sensitive."
+            return
+        }
+
+        // Default path: copy the redacted form. We never put the
+        // stored token on the clipboard unless the user explicitly
+        // opted into the with-token variant above.
+        guard let redactedCurlCommand else {
+            apiTokenStatus = "Set URL first."
             return
         }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(curlCommand, forType: .string)
-        apiTokenStatus = "curl command copied."
+        NSPasteboard.general.setString(redactedCurlCommand, forType: .string)
+        apiTokenStatus = "Redacted curl copied. Run with APPLEPI_TOKEN=<your-token>."
     }
 
     private func savePassword() {

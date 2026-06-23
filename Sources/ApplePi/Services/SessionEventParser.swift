@@ -19,39 +19,47 @@ enum SessionEventParser {
         events.reserveCapacity(lines.count)
 
         for (index, raw) in lines.enumerated() {
-            guard let event = decode(line: raw, at: index) else { continue }
-            events.append(event)
+            events.append(contentsOf: decodeAll(line: raw, at: index))
         }
         return events
     }
 
-    /// Decode a single line and return the corresponding event, or nil if
+    /// Decode a single line and return the primary event, or nil if
     /// the line is blank, malformed, or of a type we do not care about.
-    /// The caller is responsible for assigning the line index based on its
-    /// own tail offset.
+    /// A single line can in fact encode several events (e.g. an assistant
+    /// message with embedded tool-call blocks plus its tool results on the
+    /// same line) — callers that need every event for a line should use
+    /// `decodeAll(line:at:)`. The `decode(line:at:)` entry point returns
+    /// the first event only and is kept around for the live-tail path,
+    /// which appends one event per appended line.
     static func decode(line raw: String, at lineIndex: Int) -> SessionEvent? {
+        decodeAll(line: raw, at: lineIndex).first
+    }
+
+    /// Decode a single line and return *every* event encoded on it, in
+    /// source order. Blank and malformed lines produce an empty array.
+    static func decodeAll(line raw: String, at lineIndex: Int) -> [SessionEvent] {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let data = trimmed.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = object["type"] as? String
-        else { return nil }
+        else { return [] }
 
         switch type {
         case "session":
-            guard let meta = decodeSessionMeta(from: object) else { return nil }
-            return .meta(meta, lineIndex: lineIndex)
+            guard let meta = decodeSessionMeta(from: object) else { return [] }
+            return [.meta(meta, lineIndex: lineIndex)]
         case "message":
-            guard let message = decodeMessage(from: object) else { return nil }
-            return .message(message, lineIndex: lineIndex)
+            return decodeMessageEvents(from: object, lineIndex: lineIndex)
         case "tool_use", "tool_call":
-            guard let call = parseToolCall(object) else { return nil }
-            return .toolCall(call, lineIndex: lineIndex)
+            guard let call = parseToolCall(object) else { return [] }
+            return [.toolCall(call, lineIndex: lineIndex)]
         case "tool_result":
-            guard let result = parseToolResult(object) else { return nil }
-            return .toolResult(result, lineIndex: lineIndex)
+            guard let result = parseToolResult(object) else { return [] }
+            return [.toolResult(result, lineIndex: lineIndex)]
         default:
-            return .other(type: type, lineIndex: lineIndex)
+            return [.other(type: type, lineIndex: lineIndex)]
         }
     }
 
@@ -73,11 +81,25 @@ enum SessionEventParser {
         )
     }
 
-    static func decodeMessage(from object: [String: Any]) -> Message? {
-        guard let payload = object["message"] as? [String: Any] else { return nil }
-        guard let roleString = payload["role"] as? String,
-              let role = Message.Role(rawValue: roleString)
-        else { return nil }
+    /// Decode a `type: "message"` line into the events it represents. Pi
+    /// stores tool-call blocks inline in the assistant content array and
+    /// tool results as their own `role: "toolResult"` message, so a single
+    /// line can expand to several events: the chat message itself plus
+    /// zero or more tool calls. `role: "toolResult"` lines short-circuit
+    /// to a single `SessionEvent.toolResult` so we never lose them.
+    static func decodeMessageEvents(from object: [String: Any], lineIndex: Int) -> [SessionEvent] {
+        guard let payload = object["message"] as? [String: Any],
+              let roleString = payload["role"] as? String
+        else { return [] }
+
+        if roleString == "toolResult" {
+            guard let result = parseToolResultFromMessage(payload, parentID: object["id"] as? String) else {
+                return []
+            }
+            return [.toolResult(result, lineIndex: lineIndex)]
+        }
+
+        guard let role = Message.Role(rawValue: roleString) else { return [] }
 
         let id = (object["id"] as? String)
             ?? (payload["id"] as? String)
@@ -90,7 +112,7 @@ enum SessionEventParser {
         let timestamp = parseTimestamp(object["timestamp"])
             ?? parseTimestamp(payload["timestamp"])
 
-        return Message(
+        let message = Message(
             id: id,
             role: role,
             content: content,
@@ -98,6 +120,28 @@ enum SessionEventParser {
             timestamp: timestamp,
             parentId: parentId
         )
+
+        var events: [SessionEvent] = [.message(message, lineIndex: lineIndex)]
+        if role == .assistant {
+            for block in payload["content"] as? [[String: Any]] ?? [] {
+                if let call = parseToolCallFromContentBlock(block) {
+                    events.append(.toolCall(call, lineIndex: lineIndex))
+                }
+            }
+        }
+        return events
+    }
+
+    /// Backwards-compatible wrapper that returns only the chat message for
+    /// a `type: "message"` line. `toolResult` roles and inline tool-call
+    /// blocks are dropped here; callers that care about every event on
+    /// the line should use `decodeMessageEvents` instead.
+    static func decodeMessage(from object: [String: Any]) -> Message? {
+        let events = decodeMessageEvents(from: object, lineIndex: 0)
+        for event in events {
+            if case .message(let message, _) = event { return message }
+        }
+        return nil
     }
 
     private static func parseContent(_ value: Any?) -> [ContentBlock] {
@@ -148,41 +192,70 @@ enum SessionEventParser {
     private static func parseToolCall(_ object: [String: Any]) -> ToolCall? {
         let id = (object["id"] as? String) ?? UUID().uuidString
         let name = (object["name"] as? String) ?? (object["toolName"] as? String) ?? "tool"
-        let arguments: String
-        if let input = object["input"] {
-            if JSONSerialization.isValidJSONObject(input),
-               let data = try? JSONSerialization.data(withJSONObject: input, options: [.fragmentsAllowed, .sortedKeys]),
-               let str = String(data: data, encoding: .utf8) {
-                arguments = str
-            } else {
-                arguments = "\(input)"
-            }
-        } else {
-            arguments = ""
-        }
+        let arguments = stringifyArguments(object["input"] ?? object["arguments"])
         return .function(id: id, name: name, arguments: arguments)
+    }
+
+    /// Parse a `toolCall` content block embedded inside an assistant
+    /// message. Pi uses `id`, `name`, and `arguments` (an object) inside
+    /// content blocks — distinct from the top-level `tool_use` shape which
+    /// exposes the payload as `input`.
+    private static func parseToolCallFromContentBlock(_ block: [String: Any]) -> ToolCall? {
+        guard (block["type"] as? String) == "toolCall" else { return nil }
+        let id = (block["id"] as? String) ?? UUID().uuidString
+        let name = (block["name"] as? String) ?? "tool"
+        let arguments = stringifyArguments(block["arguments"] ?? block["input"])
+        return .function(id: id, name: name, arguments: arguments)
+    }
+
+    private static func stringifyArguments(_ value: Any?) -> String {
+        guard let value else { return "" }
+        if JSONSerialization.isValidJSONObject(value),
+           let data = try? JSONSerialization.data(
+               withJSONObject: value,
+               options: [.fragmentsAllowed, .sortedKeys]
+           ),
+           let str = String(data: data, encoding: .utf8) {
+            return str
+        }
+        return "\(value)"
     }
 
     private static func parseToolResult(_ object: [String: Any]) -> ToolResult? {
         let callId = (object["toolCallId"] as? String) ?? (object["callId"] as? String) ?? ""
         let id = (object["id"] as? String) ?? UUID().uuidString
+        let toolName = (object["toolName"] as? String)
         let isError = (object["isError"] as? Bool) ?? false
-        let output: String
-        if let content = object["content"] {
-            if let text = content as? String {
-                output = text
-            } else if let data = try? JSONSerialization.data(
-                withJSONObject: content,
-                options: [.fragmentsAllowed, .prettyPrinted, .sortedKeys]
-            ), let str = String(data: data, encoding: .utf8) {
-                output = str
-            } else {
-                output = "\(content)"
-            }
-        } else {
-            output = ""
+        let output = stringifyToolResultContent(object["content"])
+        return .result(id: id, callId: callId, toolName: toolName, output: output, isError: isError)
+    }
+
+    /// Parse a `role: "toolResult"` line that lives inside a `type: "message"`
+    /// wrapper. The fields on the message payload mirror `ToolResultMessage`
+    /// (`toolCallId`, `toolName`, `content`, `isError`, `timestamp`). The
+    /// event id is taken from the outer message id when present so the chat
+    /// view can de-duplicate against the live tail.
+    private static func parseToolResultFromMessage(_ payload: [String: Any], parentID: String?) -> ToolResult? {
+        let callId = (payload["toolCallId"] as? String) ?? (payload["callId"] as? String) ?? ""
+        let id = parentID ?? (payload["id"] as? String) ?? UUID().uuidString
+        let toolName = (payload["toolName"] as? String)
+        let isError = (payload["isError"] as? Bool) ?? false
+        let output = stringifyToolResultContent(payload["content"])
+        return .result(id: id, callId: callId, toolName: toolName, output: output, isError: isError)
+    }
+
+    private static func stringifyToolResultContent(_ value: Any?) -> String {
+        guard let value else { return "" }
+        if let text = value as? String {
+            return text
         }
-        return .result(id: id, callId: callId, output: output, isError: isError)
+        if let data = try? JSONSerialization.data(
+            withJSONObject: value,
+            options: [.fragmentsAllowed, .prettyPrinted, .sortedKeys]
+        ), let str = String(data: data, encoding: .utf8) {
+            return str
+        }
+        return "\(value)"
     }
 
     private static func stringValue(from object: [String: Any], keys: [String]) -> String? {

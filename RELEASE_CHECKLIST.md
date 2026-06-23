@@ -23,13 +23,14 @@ Expected coverage areas:
 
 - shell quoting
 - local Pi command construction
-- remote SSH command construction
+- remote API URL/host parsing
 - session-root resolution
 - project trust handling
 - invalid settings handling
 - remote delete safety
 - remote configuration summaries
 - configuration summary counts
+- `RemoteSSHSupport` environment-variable allowlist (shared by local and remote)
 
 ## Build
 
@@ -90,30 +91,40 @@ For ad-hoc builds, rejection is expected. Do not present Gatekeeper acceptance a
 - Open a new local session.
 - Resume an existing session.
 - Open an ephemeral session.
-- Close a terminal tab and confirm the process is terminated.
-- Use tab reconnect on an exited session.
-- Confirm tab reconnect is unavailable while a session is still running.
+- Close an open chat and confirm the local `pi` process is terminated (or, for remote sessions, the in-flight HTTP stream is cancelled).
+- Use the reconnect action on an exited session and confirm it rehydrates the chat from disk.
+- Confirm the reconnect action is unavailable while a session is still running.
 - Use search against projects and sessions.
 - Collapse and reopen the project and session panes.
 - Use the Pi context popover and verify paths are correct.
 - Open or reveal Pi settings, instruction, and resource paths when present.
 - Quit and relaunch to confirm settings and pane layout persist.
 
-## Remote SSH Test Pass
+## Remote API Test Pass
 
 Complete this section if remote support is included in the release notes.
+Apple Pi talks to the remote host through [pi-appd](https://github.com/ent-ini/apple-pi),
+a separate HTTP daemon, not through a built-in SSH client.
 
-- Confirm `ssh user@host` works in Terminal.
-- Confirm `python3` exists on the remote host.
-- Confirm the remote Pi executable works in Terminal.
-- Configure Remote SSH mode in app settings.
+- Confirm `pi-appd` is installed on the remote host and reachable at the
+  configured URL (for example `http://<host>:<port>/healthz`).
+- Confirm the remote Pi executable works on the host that runs `pi-appd`
+  (the daemon delegates to it).
+- Configure Remote API mode in app settings: `pi-appd URL` and a bearer
+  token.
+- `Test Remote API` returns a project/session count, not a connection
+  or auth error.
+- `Copy curl` produces a `curl -H "Authorization: Bearer …"` line that
+  works when pasted into Terminal.
 - Refresh remote sessions.
 - Start a new remote session.
 - Resume an existing remote session.
-- Confirm remote session deletion is not offered in the session context menu.
-- Confirm the Pi context popover identifies the context as Remote SSH and does not expose local settings/trust counts for remote paths.
-- Test a non-default SSH port if advertised.
-- Confirm the app does not require storing an SSH password.
+- Confirm remote session deletion is not offered in the session
+  context menu.
+- Confirm the Pi context popover identifies the context as Remote API
+  and does not expose local settings/trust counts for remote paths.
+- Confirm the app does not require storing a password, key, or `python3`
+  on the remote host.
 
 ## Release Artifact
 

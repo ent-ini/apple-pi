@@ -3,6 +3,13 @@ import Foundation
 struct PiCatalogSnapshot: Sendable {
     var projects: [PiProject]
     var sessions: [PiSessionSummary]
+    /// Human-readable notes about non-fatal problems encountered while
+    /// building the snapshot, e.g. a session file that could not be
+    /// read or a session file that exceeded the bounded line cap. The
+    /// list is intentionally surfaced to the user via the status bar
+    /// rather than swallowed — silent loss of sessions is worse than a
+    /// short warning.
+    var warnings: [String] = []
 }
 
 final class PiSessionCatalogService {
@@ -31,28 +38,74 @@ final class PiSessionCatalogService {
     private func loadLocalCatalog(host: PiHostConfiguration, activeProjectDirectory: String?) throws -> PiCatalogSnapshot {
         let roots = configurationService.resolveSessionRoots(host: host, projectDirectory: activeProjectDirectory).roots
         let fileManager = Foundation.FileManager()
-        let keys: Set<URLResourceKey> = [.contentModificationDateKey, .isRegularFileKey]
-        let urls = roots.flatMap { root -> [URL] in
+        let keys: Set<URLResourceKey> = [
+            .contentModificationDateKey,
+            .isRegularFileKey,
+            .isSymbolicLinkKey,
+            .fileSizeKey
+        ]
+        var warnings: [String] = []
+        var collectedURLs: [URL] = []
+        var seenPaths = Set<String>()
+
+        for root in roots {
             let rootURL = URL(fileURLWithPath: root)
-            guard fileManager.fileExists(atPath: rootURL.path) else { return [] }
-            return fileManager.enumerator(at: rootURL, includingPropertiesForKeys: Array(keys))?
-                .compactMap { $0 as? URL } ?? []
+            guard fileManager.fileExists(atPath: rootURL.path) else { continue }
+            guard let enumerator = fileManager.enumerator(
+                at: rootURL,
+                includingPropertiesForKeys: Array(keys),
+                options: [.skipsHiddenFiles, .skipsPackageDescendants],
+                errorHandler: { failedURL, error in
+                    // Capture and continue. The catalog should still
+                    // surface every session we can read even if a
+                    // sibling directory returns an error (permissions,
+                    // vanished, etc).
+                    let path = failedURL.path
+                    if !path.isEmpty {
+                        warnings.append("Could not enumerate \(path): \(error.localizedDescription)")
+                    }
+                    return true
+                }
+            ) else {
+                warnings.append("Could not enumerate session root \(rootURL.path).")
+                continue
+            }
+
+            for case let url as URL in enumerator {
+                // Skip symlinks. The enumerator follows them by default,
+                // which means a link can re-surface the same file under
+                // a different path (and the count, preview, and JSONL
+                // validation logic would all run twice). For a session
+                // catalog we only want the canonical filesystem entry.
+                let resourceValues = try? url.resourceValues(forKeys: Set([URLResourceKey.isSymbolicLinkKey]))
+                if resourceValues?.isSymbolicLink == true { continue }
+
+                if seenPaths.insert(url.path).inserted {
+                    collectedURLs.append(url)
+                }
+            }
         }
 
-        let sessions = Dictionary(grouping: urls, by: { (url: URL) in url.path }).values.compactMap { duplicates -> PiSessionSummary? in
-            guard let url = duplicates.first else { return nil }
-            guard url.pathExtension == "jsonl" else { return nil }
+        var sessions: [PiSessionSummary] = []
+        for url in collectedURLs {
+            guard url.pathExtension == "jsonl" else { continue }
             let values = try? url.resourceValues(forKeys: keys)
-            guard values?.isRegularFile == true else { return nil }
-            return parseSessionFile(
+            guard values?.isRegularFile == true else { continue }
+            let load = readSessionFile(
                 filePath: url.path,
                 projectID: url.deletingLastPathComponent().lastPathComponent,
                 modifiedAt: values?.contentModificationDate ?? Date.distantPast
             )
+            if let warning = load.warning {
+                warnings.append(warning)
+            }
+            if let summary = load.summary {
+                sessions.append(summary)
+            }
         }
-        .sorted { $0.modifiedAt > $1.modifiedAt }
+        sessions.sort { $0.modifiedAt > $1.modifiedAt }
 
-        return snapshot(from: sessions)
+        return snapshot(from: sessions, warnings: warnings)
     }
 
     private func loadRemoteCatalog(host: PiHostConfiguration, activeProjectDirectory: String?) async throws -> PiCatalogSnapshot {
@@ -62,7 +115,7 @@ final class PiSessionCatalogService {
         )
     }
 
-    private func snapshot(from sessions: [PiSessionSummary]) -> PiCatalogSnapshot {
+    private func snapshot(from sessions: [PiSessionSummary], warnings: [String] = []) -> PiCatalogSnapshot {
         let grouped = Dictionary(grouping: sessions, by: \.projectID)
         let projects = grouped.map { projectID, sessions in
             PiProject(
@@ -78,51 +131,128 @@ final class PiSessionCatalogService {
             ($0.lastActivity ?? .distantPast) > ($1.lastActivity ?? .distantPast)
         }
 
-        return PiCatalogSnapshot(projects: projects, sessions: sessions)
+        return PiCatalogSnapshot(projects: projects, sessions: sessions, warnings: warnings)
     }
 
-    private func parseSessionFile(filePath: String, projectID: String, modifiedAt: Date) -> PiSessionSummary? {
+    /// Result of trying to read a single Pi session `.jsonl` file.
+    /// `summary` is `nil` when the file is unreadable or the JSON
+    /// metadata needed to build a `PiSessionSummary` is missing. In
+    /// those cases `warning` describes the problem so the catalog can
+    /// surface it to the user instead of dropping the file silently.
+    private struct SessionFileLoad {
+        var summary: PiSessionSummary?
+        var warning: String?
+    }
+
+    private func readSessionFile(
+        filePath: String,
+        projectID: String,
+        modifiedAt: Date,
+        previewLimit: Int = 240,
+        maxLineLimit: Int = 200_000
+    ) -> SessionFileLoad {
         let url = URL(fileURLWithPath: filePath)
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forReadingFrom: url)
+        } catch {
+            return SessionFileLoad(
+                summary: nil,
+                warning: "Could not open session file \(filePath): \(error.localizedDescription)"
+            )
+        }
         defer { try? handle.close() }
 
-        guard let lines = readSessionPreviewLines(from: handle) else { return nil }
-        let fullMessageCount = countMessageLines(filePath: filePath)
-
-        return parseSessionRecord(
-            filePath: filePath,
-            projectID: projectID,
-            modifiedAt: modifiedAt,
-            lines: Array(lines.prefix(240)),
-            fullMessageCount: fullMessageCount
-        )
-    }
-
-    private func readSessionPreviewLines(from handle: FileHandle, limit: Int = 240) -> [String]? {
-        var lines: [String] = []
+        // Read the file in a single pass so the preview and the full
+        // message count share the same buffer. We do not need to keep
+        // the entire file in memory: we keep at most `previewLimit`
+        // non-empty lines for parsing, and an integer counter for the
+        // message total. `maxLineLimit` caps the work even if a session
+        // file is accidentally huge.
+        var previewLines: [String] = []
+        var messageCount = 0
+        var totalLines = 0
         var buffer = Data()
         let newline = Character("\n").asciiValue!
+        var readError: String?
+        var encounteredInvalidUTF8 = false
 
-        while lines.count < limit {
-            guard let data = try? handle.read(upToCount: 64 * 1024), !data.isEmpty else { break }
-            buffer.append(data)
+        outer: while true {
+            let chunk: Data
+            do {
+                guard let next = try handle.read(upToCount: 64 * 1024), !next.isEmpty else { break }
+                chunk = next
+            } catch {
+                readError = error.localizedDescription
+                break
+            }
+            buffer.append(chunk)
 
-            while lines.count < limit, let newlineIndex = buffer.firstIndex(of: newline) {
+            while let newlineIndex = buffer.firstIndex(of: newline) {
                 let lineData = buffer[..<newlineIndex]
-                if !lineData.isEmpty {
-                    guard let line = String(data: lineData, encoding: .utf8) else { return nil }
-                    lines.append(line)
-                }
                 buffer.removeSubrange(buffer.startIndex...newlineIndex)
+                guard !lineData.isEmpty else { continue }
+
+                totalLines += 1
+
+                if totalLines <= maxLineLimit,
+                   let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                   object["type"] as? String == "message" {
+                    messageCount += 1
+                }
+
+                if previewLines.count < previewLimit {
+                    if let line = String(data: lineData, encoding: .utf8) {
+                        previewLines.append(line)
+                    } else {
+                        encounteredInvalidUTF8 = true
+                    }
+                }
+
+                if totalLines >= maxLineLimit && previewLines.count >= previewLimit {
+                    break outer
+                }
             }
         }
 
-        if lines.count < limit, !buffer.isEmpty {
-            guard let line = String(data: buffer, encoding: .utf8) else { return nil }
-            lines.append(line)
+        if !buffer.isEmpty {
+            totalLines += 1
+            if totalLines <= maxLineLimit,
+               let object = try? JSONSerialization.jsonObject(with: buffer) as? [String: Any],
+               object["type"] as? String == "message" {
+                messageCount += 1
+            }
+            if previewLines.count < previewLimit {
+                if let line = String(data: buffer, encoding: .utf8) {
+                    previewLines.append(line)
+                } else {
+                    encounteredInvalidUTF8 = true
+                }
+            }
         }
 
-        return lines
+        let truncated = totalLines >= maxLineLimit
+        let summary = parseSessionRecord(
+            filePath: filePath,
+            projectID: projectID,
+            modifiedAt: modifiedAt,
+            lines: Array(previewLines.prefix(previewLimit)),
+            fullMessageCount: messageCount
+        )
+        var warningParts: [String] = []
+        if let readError {
+            warningParts.append("Read error in \(filePath): \(readError)")
+        }
+        if encounteredInvalidUTF8 {
+            warningParts.append("Skipped non-UTF-8 line(s) in \(filePath).")
+        }
+        if truncated {
+            warningParts.append("Truncated \(filePath) at \(maxLineLimit) lines for the message count.")
+        }
+        return SessionFileLoad(
+            summary: summary,
+            warning: warningParts.isEmpty ? nil : warningParts.joined(separator: " ")
+        )
     }
 
     private func parseSessionRecord(filePath: String, projectID: String, modifiedAt: Date, lines: [String], fullMessageCount: Int?) -> PiSessionSummary? {
@@ -163,39 +293,6 @@ final class PiSessionCatalogService {
             .filter { $0 != "/" && !$0.isEmpty }
         guard !components.isEmpty else { return "--root--" }
         return "--\(components.joined(separator: "-"))--"
-    }
-
-    private func countMessageLines(filePath: String) -> Int? {
-        guard let handle = try? FileHandle(forReadingFrom: URL(fileURLWithPath: filePath)) else { return nil }
-        defer { try? handle.close() }
-
-        var buffer = Data()
-        let newline = Character("\n").asciiValue!
-        var count = 0
-
-        while true {
-            guard let data = try? handle.read(upToCount: 64 * 1024) else { return nil }
-            if data.isEmpty { break }
-            buffer.append(data)
-
-            while let newlineIndex = buffer.firstIndex(of: newline) {
-                let lineData = buffer[..<newlineIndex]
-                if !lineData.isEmpty,
-                   let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
-                   object["type"] as? String == "message" {
-                    count += 1
-                }
-                buffer.removeSubrange(buffer.startIndex...newlineIndex)
-            }
-        }
-
-        if !buffer.isEmpty,
-           let object = try? JSONSerialization.jsonObject(with: buffer) as? [String: Any],
-           object["type"] as? String == "message" {
-            count += 1
-        }
-
-        return count
     }
 
     private func parseSessionLines(_ lines: [String]) -> ParsedSession {
@@ -336,110 +433,6 @@ final class PiSessionCatalogService {
         guard projectID.hasPrefix("--"), projectID.hasSuffix("--") else { return projectID }
         return String(projectID.dropFirst(2).dropLast(2))
     }
-
-    private func remoteCatalogScript(agentDirectory: String, projectDirectory: String?) -> String {
-        let projectArgument = projectDirectory?.nilIfBlank ?? ""
-        return """
-        python3 -c \(remotePythonSource.shellQuoted) \(agentDirectory.shellQuoted) \(projectArgument.shellQuoted)
-        """
-    }
-
-    private var remotePythonSource: String {
-        """
-        import json, os, sys
-        agent = os.path.expanduser(sys.argv[1])
-        project = os.path.expanduser(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2] else None
-
-        def read_json(path):
-            try:
-                with open(path, 'r', encoding='utf-8') as fh:
-                    data = json.load(fh)
-                return data if isinstance(data, dict) else None
-            except Exception:
-                return None
-
-        def resolve(path, base):
-            path = os.path.expanduser(path)
-            return path if os.path.isabs(path) else os.path.join(base, path)
-
-        def trusted(project_path):
-            if not project_path:
-                return False
-            trust = read_json(os.path.join(agent, 'trust.json'))
-            if trust is None:
-                return False
-            project_path = os.path.normpath(project_path)
-            def contains(value):
-                if isinstance(value, str):
-                    return os.path.normpath(os.path.expanduser(value)) == project_path
-                if isinstance(value, list):
-                    return any(contains(item) for item in value)
-                if isinstance(value, dict):
-                    for key, item in value.items():
-                        if os.path.normpath(os.path.expanduser(key)) == project_path:
-                            if isinstance(item, bool):
-                                return item
-                            if isinstance(item, str):
-                                return item.lower() == 'trusted'
-                            return True
-                        if contains(item):
-                            return True
-                return False
-            return contains(trust)
-
-        default_root = os.path.join(agent, 'sessions')
-        env_root = os.environ.get('PI_CODING_AGENT_SESSION_DIR')
-        global_settings = read_json(os.path.join(agent, 'settings.json'))
-        project_settings = read_json(os.path.join(project, '.pi', 'settings.json')) if trusted(project) else None
-        roots = []
-        if env_root:
-            roots = [os.path.expanduser(env_root)]
-        else:
-            if project_settings and isinstance(project_settings.get('sessionDir'), str):
-                roots.append(resolve(project_settings.get('sessionDir'), os.path.join(project, '.pi')))
-            if global_settings and isinstance(global_settings.get('sessionDir'), str):
-                roots.append(resolve(global_settings.get('sessionDir'), agent))
-            roots.append(default_root)
-
-        seen = set()
-        roots = [root for root in roots if not (os.path.normpath(root) in seen or seen.add(os.path.normpath(root)))]
-        out = []
-        emitted = set()
-        for root in roots:
-            if not os.path.exists(root):
-                continue
-            for dirpath, _, files in os.walk(root):
-                project_id = os.path.basename(dirpath)
-                for name in files:
-                    if not name.endswith('.jsonl'):
-                        continue
-                    path = os.path.join(dirpath, name)
-                    if path in emitted:
-                        continue
-                    emitted.add(path)
-                    try:
-                        stat = os.stat(path)
-                        lines = []
-                        with open(path, 'r', encoding='utf-8', errors='replace') as fh:
-                            for _, line in zip(range(240), fh):
-                                lines.append(line)
-                        out.append({'filePath': path, 'projectID': project_id, 'modifiedAt': stat.st_mtime, 'lines': lines})
-                    except Exception:
-                        pass
-        print(json.dumps(out))
-        """
-    }
-
-    enum CatalogError: LocalizedError {
-        case remoteScanFailed(String)
-
-        var errorDescription: String? {
-            switch self {
-            case .remoteScanFailed(let message):
-                return message.isEmpty ? "Remote session scan failed." : message
-            }
-        }
-    }
 }
 
 private struct ParsedSession {
@@ -453,13 +446,6 @@ private struct ParsedSession {
     let labelCount: Int
     let branchSummaryCount: Int
     let latestModel: String?
-}
-
-private struct RemoteSessionRecord: Decodable {
-    let filePath: String
-    let projectID: String
-    let modifiedAt: TimeInterval
-    let lines: [String]
 }
 
 private extension String {

@@ -38,9 +38,21 @@ Review changes to:
 - `Package.swift`
 - `Sources/ApplePi`
 - `Tests/ApplePiTests`
-- `script/package_release.sh`
+- `script/package_release.sh` and `script/Info.plist.tpl`
 - `Vendor/SwiftTerm`
 - release docs
+
+### Bundle metadata source of truth
+
+`script/package_release.sh` is the single source of truth for the bundle
+metadata written into `dist/Apple Pi.app/Contents/Info.plist`. The actual
+plist payload is kept at `script/Info.plist.tpl` so the file is diffable
+and reviewable in PRs; `package_release.sh` substitutes the
+`APP_NAME`, `BUNDLE_IDENTIFIER`, `VERSION`, `BUILD_NUMBER`, and
+`EXECUTABLE_NAME` placeholders at build time and validates the result
+with `plutil -lint` before signing. If you need to add a new
+`Info.plist` key, edit `script/Info.plist.tpl` — do not duplicate the
+plist body into another file.
 
 ## 3. Build A Release Candidate
 
@@ -109,7 +121,9 @@ At minimum, test:
 - ephemeral session
 - tab close and reconnect
 - reconnect unavailable while a tab is still running
-- remote SSH mode, if advertised in the release notes
+- remote API mode, if advertised in the release notes
+- `Test Remote API` returns a project/session count, not a connection error
+- `Copy curl` produces a working `curl -H 'Authorization: Bearer …'` line
 - remote delete action absent for remote sessions
 - quit and relaunch preference persistence
 

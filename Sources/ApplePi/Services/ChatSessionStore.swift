@@ -26,6 +26,14 @@ final class ChatSession: ObservableObject, Identifiable {
     private var hasLoadedOnce = false
     private var lastLoadedModificationDate: Date?
     private var loadTask: Task<Void, Never>?
+    /// The in-flight send task, if any. `PiAppState.sendMessage`
+    /// assigns the task it spawns so the store can cancel it when
+    /// the tab is closed. The task body clears the reference on
+    /// completion (success, error, or cancellation). The setter is
+    /// intentionally `internal` rather than `private(set)` because
+    /// the only legitimate writer lives in a different file
+    /// (`PiAppState`).
+    var sendTask: Task<Void, Never>?
 
     private var persistedEvents: [SessionEvent] = []
     private var transientUserEvent: SessionEvent?
@@ -53,6 +61,23 @@ final class ChatSession: ObservableObject, Identifiable {
 
     var canSend: Bool {
         !isSending
+    }
+
+    /// True while a send task is associated with this session. The
+    /// store uses this to decide whether closing the tab needs to
+    /// cancel work in flight.
+    var hasActiveSend: Bool { sendTask != nil }
+
+    /// Cancel the active send task, if any, and drop the reference.
+    /// Safe to call from any state, including when no task is running.
+    /// The task body still runs to completion but its cancellation
+    /// handler is responsible for tearing down the underlying process
+    /// or HTTP stream.
+    func cancelSend() {
+        if let task = sendTask {
+            task.cancel()
+        }
+        sendTask = nil
     }
 
     func bindToSession(
@@ -135,6 +160,19 @@ final class ChatSession: ObservableObject, Identifiable {
                 self?.loadFromDisk(force: true)
             }
         }
+    }
+
+    /// Mark the current send as cancelled without showing an error to
+    /// the user. Called from `PiAppState.sendMessage` when the task
+    /// body observes `CancellationError` (e.g. the tab was closed
+    /// mid-send). Clears transient UI state so the composer is usable
+    /// again.
+    func finishSendingCancelled() {
+        isSending = false
+        statusMessage = ""
+        transientUserEvent = nil
+        transientAssistantEvent = nil
+        rebuildEvents()
     }
 
     func finishSendingWithError(_ message: String) {
@@ -245,6 +283,13 @@ final class ChatSessionStore: ObservableObject {
     /// sessions show up in the sidebar.
     var onSessionExit: (() -> Void)?
 
+    /// Fired on any mutation that affects the set of open tabs or the
+    /// selected tab. The persistence layer hooks into this to keep the
+    /// on-disk snapshot in sync. Not fired for transient state such as
+    /// per-tab `loadError` or `isSending` because those are part of the
+    /// runtime session, not the persisted shape.
+    var onTabsChanged: (() -> Void)?
+
     var selectedTab: ChatSession? {
         guard let selectedTabID else { return nil }
         return tabs.first(where: { $0.id == selectedTabID })
@@ -291,6 +336,7 @@ final class ChatSessionStore: ObservableObject {
         tabs.append(session)
         select(session)
         session.loadFromDisk()
+        onTabsChanged?()
         return session
     }
 
@@ -315,6 +361,11 @@ final class ChatSessionStore: ObservableObject {
 
     func close(_ tab: ChatSession) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        // Cancel any in-flight send before removing the tab so the
+        // underlying process / HTTP stream is torn down promptly. The
+        // task body is responsible for the rest of the cleanup; here
+        // we just make sure we don't leak a detached process.
+        tab.cancelSend()
         let wasSelected = selectedTabID == tab.id
         tabs.remove(at: index)
         if wasSelected {
@@ -326,6 +377,7 @@ final class ChatSessionStore: ObservableObject {
             }
         }
         onSessionExit?()
+        onTabsChanged?()
     }
 
     /// Close every open tab. Used when the host changes so the user does
@@ -339,13 +391,21 @@ final class ChatSessionStore: ObservableObject {
     ///   afterwards).
     func closeAll(notify: Bool = true) {
         guard !tabs.isEmpty else { return }
+        // Cancel active sends across every tab before wiping the list.
+        // The task bodies finish on their own and quietly observe the
+        // cancellation.
+        for tab in tabs {
+            tab.cancelSend()
+        }
         tabs.removeAll()
         selectedTabID = nil
         if notify { onSessionExit?() }
+        onTabsChanged?()
     }
 
     func select(_ tab: ChatSession) {
         selectedTabID = tab.id
+        onTabsChanged?()
     }
 }
 

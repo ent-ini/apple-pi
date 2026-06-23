@@ -1,6 +1,6 @@
 # Privacy
 
-Apple Pi is designed as a local native macOS app for organizing Pi terminal sessions.
+Apple Pi is a local native macOS app for organising Pi coding-agent sessions as a chat. The current release does not include a built-in SSH client; remote sessions go through a separate [pi-appd](https://github.com/ent-ini/apple-pi) HTTP daemon that you run next to Pi on the remote host.
 
 ## Data Collection
 
@@ -17,7 +17,7 @@ Depending on your settings and selected sessions, the app can read:
 - project instruction files such as `AGENTS.md`
 - resource folders such as `skills`, `prompts`, `themes`, `packages`, and `extensions`
 
-For session list display, the app parses session metadata and message counts from local or remote `.jsonl` files. Pi remains responsible for the actual session contents and model interactions.
+For session list display, the app parses session metadata and message counts from local `.jsonl` files (or, in remote mode, from the JSON that `pi-appd` returns from `/sessions`). Pi remains responsible for the actual session contents and model interactions.
 
 ## Data The App Stores
 
@@ -25,14 +25,15 @@ The app stores preferences in macOS `UserDefaults`, including:
 
 - local Pi executable
 - agent directory
-- remote SSH host
-- remote SSH user
-- remote SSH port
-- remote Pi executable
+- `pi-appd` URL
 - appearance settings
 - pane visibility and pane widths
 
-The current codebase does not intentionally store SSH passwords, API keys, model credentials, full terminal transcripts, or copies of Pi session files.
+The host model still carries SSH-shaped fields (remote host, user, port, identity file, `~/.ssh/config` alias) for backwards compatibility with saved configs from earlier previews. The current release does not read them back into a runtime path.
+
+The app does not intentionally store SSH passwords, API keys, model credentials, full chat transcripts, or copies of Pi session files.
+
+The `pi-appd` bearer token and the optional Groq API key (used only for Whisper transcription of voice notes) are stored as `0600` files under Application Support — never in the Keychain. They are scoped per daemon endpoint / per app instance.
 
 ## Notifications
 
@@ -44,9 +45,9 @@ Notification titles and messages are sent to macOS Notification Center for displ
 
 ## Remote Mode
 
-Remote mode uses your system SSH client. The app sends SSH commands to the host you configure so it can scan session metadata and open interactive Pi terminal sessions.
+Remote mode is the "Remote API" host in the Settings window. The macOS client sends bearer-token-authenticated HTTP requests to the configured `pi-appd` URL. Authentication, host verification, and network routing are `pi-appd`'s responsibility; the macOS side only stores the bearer token you paste in.
 
-Authentication, known-host checks, SSH agent behavior, key use, password prompts, and network routing are handled by `/usr/bin/ssh` and your SSH configuration.
+Apple Pi does not shell out to `ssh`, `python3`, or any other tool on the remote host. If you point it at a `pi-appd` you control, that is the only thing the app talks to remotely.
 
 ## Pi Behavior
 
@@ -59,7 +60,7 @@ Review your Pi configuration and project trust settings before launching session
 On launch, the app performs a single anonymous HTTP GET to:
 
 ```
-https://api.github.com/repos/dodo-reach/apple-pi/releases/latest
+https://api.github.com/repos/ent-ini/apple-pi/releases/latest
 ```
 
 The only data sent is the request URL plus three headers: `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28`, and `User-Agent: ApplePi`. The app does not send an authentication token, a device identifier, analytics, telemetry, or any user content, session data, or Pi configuration.

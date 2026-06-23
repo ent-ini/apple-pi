@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# This script is the single source of truth for the bundle metadata
+# written into dist/Apple Pi.app/Contents/Info.plist. The plist body
+# itself lives in script/Info.plist.tpl so the file is diffable and
+# reviewable in pull requests. This script only substitutes the
+# placeholder tokens, runs plutil -lint, signs, and zips.
+
 APP_NAME="${APP_NAME:-Apple Pi}"
 ARCHIVE_NAME="${ARCHIVE_NAME:-apple-pi}"
 PRODUCT_NAME="${PRODUCT_NAME:-ApplePi}"
@@ -47,9 +53,23 @@ quit_running_app() {
 
 plist_escape() {
   local value="$1"
-  value="${value//&/&amp;}"
-  value="${value//</&lt;}"
-  value="${value//>/&gt;}"
+  # The `\&` in the replacement text is required: an unescaped `&`
+  # inside `${var//pat/repl}` is treated as a job-control reference
+  # by bash, so the literal `&amp;` we want to insert gets eaten.
+  value="${value//&/\&amp;}"
+  value="${value//</\&lt;}"
+  value="${value//>/\&gt;}"
+  printf '%s' "${value}"
+}
+
+# Escape a value for insertion into a bash `${var//pat/repl}` replacement.
+# `&` and `\` are special in the replacement text, so they have to be
+# doubled before the parameter expansion runs. Used below when we
+# render `script/Info.plist.tpl` into `dist/Apple Pi.app/Contents/Info.plist`.
+plist_subst_escape() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//&/\\&}"
   printf '%s' "${value}"
 }
 
@@ -97,6 +117,7 @@ MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 EXECUTABLE_PATH="${MACOS_DIR}/${EXECUTABLE_NAME}"
 INFO_PLIST="${CONTENTS_DIR}/Info.plist"
+INFO_PLIST_TEMPLATE="${ROOT_DIR}/script/Info.plist.tpl"
 ICON_SOURCE="${ROOT_DIR}/Sources/ApplePi/Resources/AppIcon.icns"
 NOTIFY_EXTENSION_SOURCE="${ROOT_DIR}/Sources/ApplePi/Resources/ApplePiNotifyExtension.mjs"
 APP_ENTITLEMENTS_SOURCE="${ROOT_DIR}/script/ApplePi.entitlements"
@@ -106,6 +127,12 @@ BUNDLE_IDENTIFIER_PLIST="$(plist_escape "${BUNDLE_IDENTIFIER}")"
 EXECUTABLE_NAME_PLIST="$(plist_escape "${EXECUTABLE_NAME}")"
 VERSION_PLIST="$(plist_escape "${VERSION}")"
 BUILD_NUMBER_PLIST="$(plist_escape "${BUILD_NUMBER}")"
+
+APP_NAME_SUBST="$(plist_subst_escape "${APP_NAME_PLIST}")"
+BUNDLE_IDENTIFIER_SUBST="$(plist_subst_escape "${BUNDLE_IDENTIFIER_PLIST}")"
+EXECUTABLE_NAME_SUBST="$(plist_subst_escape "${EXECUTABLE_NAME_PLIST}")"
+VERSION_SUBST="$(plist_subst_escape "${VERSION_PLIST}")"
+BUILD_NUMBER_SUBST="$(plist_subst_escape "${BUILD_NUMBER_PLIST}")"
 
 cd "${ROOT_DIR}"
 
@@ -124,6 +151,11 @@ if [[ ! -f "${APP_ENTITLEMENTS_SOURCE}" ]]; then
   exit 1
 fi
 
+if [[ ! -f "${INFO_PLIST_TEMPLATE}" ]]; then
+  echo "Missing Info.plist template at ${INFO_PLIST_TEMPLATE}" >&2
+  exit 1
+fi
+
 swift build -c "${CONFIGURATION}" --product "${PRODUCT_NAME}"
 swift build -c "${CONFIGURATION}" --product "ApplePiAskpass"
 
@@ -135,81 +167,24 @@ cp "${ICON_SOURCE}" "${RESOURCES_DIR}/AppIcon.icns"
 cp "${NOTIFY_EXTENSION_SOURCE}" "${RESOURCES_DIR}/ApplePiNotifyExtension.mjs"
 chmod +x "${EXECUTABLE_PATH}" "${RESOURCES_DIR}/ApplePiAskpass"
 
-cat > "${INFO_PLIST}" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleDevelopmentRegion</key>
-    <string>en</string>
-    <key>CFBundleDisplayName</key>
-    <string>${APP_NAME_PLIST}</string>
-    <key>CFBundleExecutable</key>
-    <string>${EXECUTABLE_NAME_PLIST}</string>
-    <key>CFBundleIconFile</key>
-    <string>AppIcon.icns</string>
-    <key>CFBundleIdentifier</key>
-    <string>${BUNDLE_IDENTIFIER_PLIST}</string>
-    <key>CFBundleName</key>
-    <string>${APP_NAME_PLIST}</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>${VERSION_PLIST}</string>
-    <key>CFBundleVersion</key>
-    <string>${BUILD_NUMBER_PLIST}</string>
-    <key>LSApplicationCategoryType</key>
-    <string>public.app-category.developer-tools</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
-    <key>NSDesktopFolderUsageDescription</key>
-    <string>Apple Pi launches terminal sessions in project folders you choose, including projects on your Desktop.</string>
-    <key>NSDocumentsFolderUsageDescription</key>
-    <string>Apple Pi launches terminal sessions in project folders you choose, including projects in Documents.</string>
-    <key>NSDownloadsFolderUsageDescription</key>
-    <string>Apple Pi launches terminal sessions in project folders you choose, including projects in Downloads.</string>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>Apple Pi can record voice prompts and transcribe them into chat messages before sending them to Pi.</string>
-    <key>NSAppTransportSecurity</key>
-    <dict>
-        <key>NSAllowsArbitraryLoads</key>
-        <true/>
-        <key>NSAllowsLocalNetworking</key>
-        <true/>
-        <key>NSExceptionDomains</key>
-        <dict>
-            <key>100.100.11.4</key>
-            <dict>
-                <key>NSExceptionAllowsInsecureHTTPLoads</key>
-                <true/>
-                <key>NSIncludesSubdomains</key>
-                <true/>
-            </dict>
-            <key>127.0.0.1</key>
-            <dict>
-                <key>NSExceptionAllowsInsecureHTTPLoads</key>
-                <true/>
-            </dict>
-            <key>localhost</key>
-            <dict>
-                <key>NSExceptionAllowsInsecureHTTPLoads</key>
-                <true/>
-                <key>NSIncludesSubdomains</key>
-                <true/>
-            </dict>
-        </dict>
-    </dict>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-    <key>NSHumanReadableCopyright</key>
-    <string>Copyright © 2026 ent-ini. All rights reserved.</string>
-    <key>NSPrincipalClass</key>
-    <string>NSApplication</string>
-    <key>NSSupportsAutomaticGraphicsSwitching</key>
-    <true/>
-</dict>
-</plist>
-PLIST
+# Render the Info.plist from script/Info.plist.tpl. The placeholders
+# are `__APP_NAME__`, `__BUNDLE_IDENTIFIER__`, `__EXECUTABLE_NAME__`,
+# `__VERSION__`, and `__BUILD_NUMBER__`. Substitution is done with
+# bash parameter expansion so the values (which `plist_escape` has
+# already escaped for XML, and `plist_subst_escape` has escaped for
+# the bash pattern engine) are inserted verbatim — a `&` in the
+# bundle name (or any other value) does not get interpreted as a
+# pattern metacharacter and does not change which placeholder gets
+# replaced. The template is ~3 KB, so reading it into a shell
+# variable is cheap. `plutil -lint` below rejects the result if the
+# template is malformed.
+plutil_template="$(cat "${INFO_PLIST_TEMPLATE}")"
+plutil_template="${plutil_template//__APP_NAME__/${APP_NAME_SUBST}}"
+plutil_template="${plutil_template//__BUNDLE_IDENTIFIER__/${BUNDLE_IDENTIFIER_SUBST}}"
+plutil_template="${plutil_template//__EXECUTABLE_NAME__/${EXECUTABLE_NAME_SUBST}}"
+plutil_template="${plutil_template//__VERSION__/${VERSION_SUBST}}"
+plutil_template="${plutil_template//__BUILD_NUMBER__/${BUILD_NUMBER_SUBST}}"
+printf '%s' "${plutil_template}" > "${INFO_PLIST}"
 
 printf "APPL????" > "${CONTENTS_DIR}/PkgInfo"
 

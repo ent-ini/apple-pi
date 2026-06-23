@@ -25,7 +25,11 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
     var remoteAuthMethod: RemoteAuthMethod = .publicKey
     var remoteIdentityFile: String = ""
     var remoteSSHConfigAlias: String = ""
-    /// Base URL or IP:port of the future lightweight `pi-appd` daemon.
+    /// Base URL or IP:port of the `pi-appd` daemon that Apple Pi talks
+    /// to in Remote API mode. The Mac client only ever reaches Pi
+    /// through this daemon; it does not shell out to `ssh` or
+    /// `python3` on the remote host.
+    ///
     /// Example: `http://100.100.20.10:8787`.
     var remoteDaemonURL: String = ""
 

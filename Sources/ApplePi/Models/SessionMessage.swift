@@ -42,15 +42,51 @@ enum ToolCall: Identifiable, Hashable, Sendable {
         case .function(let id, _, _): return id
         }
     }
+
+    var name: String {
+        switch self {
+        case .function(_, let name, _): return name
+        }
+    }
+
+    var arguments: String {
+        switch self {
+        case .function(_, _, let arguments): return arguments
+        }
+    }
 }
 
 /// The outcome of a tool invocation, paired with the originating call id.
 enum ToolResult: Identifiable, Hashable, Sendable {
-    case result(id: String, callId: String, output: String, isError: Bool)
+    case result(id: String, callId: String, toolName: String?, output: String, isError: Bool)
 
     var id: String {
         switch self {
-        case .result(let id, _, _, _): return id
+        case .result(let id, _, _, _, _): return id
+        }
+    }
+
+    var callId: String {
+        switch self {
+        case .result(_, let callId, _, _, _): return callId
+        }
+    }
+
+    var toolName: String? {
+        switch self {
+        case .result(_, _, let toolName, _, _): return toolName
+        }
+    }
+
+    var output: String {
+        switch self {
+        case .result(_, _, _, let output, _): return output
+        }
+    }
+
+    var isError: Bool {
+        switch self {
+        case .result(_, _, _, _, let isError): return isError
         }
     }
 }

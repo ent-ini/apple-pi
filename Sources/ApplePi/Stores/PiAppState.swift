@@ -70,9 +70,11 @@ final class PiAppState: ObservableObject {
     private let hostDefaultsKey = "ApplePi.host"
     private let appearanceDefaultsKey = "ApplePi.appearance"
     private let shortcutDefaultsKey = "ApplePi.shortcuts"
+    private let chatTabDefaultsKey = "ApplePi.chatTabs"
     private let lastUpdateCheckKey = "ApplePi.updateCheck.lastCheckedAt"
     private let updateCheckInterval: TimeInterval = 24 * 60 * 60
     private let startsBackgroundWork: Bool
+    private let chatTabPersistence: ChatTabPersistence
     private var isLoadingPersistedState = false
     private var catalogRefreshID = UUID()
     private var remoteDirectoryRefreshID = UUID()
@@ -85,6 +87,9 @@ final class PiAppState: ObservableObject {
     /// `sessions`. `nil` whenever the current host doesn't use the daemon
     /// transport or the task is not running.
     private var catalogStreamTask: Task<Void, Never>?
+    /// Pending debounced save for the chat tabs snapshot. A single task
+    /// is reused so a burst of mutations only writes once.
+    private var chatTabsSaveTask: Task<Void, Never>?
 
     init(
         defaults: UserDefaults = Foundation.UserDefaults(suiteName: nil) ?? Foundation.UserDefaults(),
@@ -105,6 +110,10 @@ final class PiAppState: ObservableObject {
         self.remoteDirectoryService = remoteDirectoryService
         self.catalogLoader = catalogLoader
         self.startsBackgroundWork = startsBackgroundWork
+        self.chatTabPersistence = ChatTabPersistence(
+            defaults: defaults,
+            defaultsKey: chatTabDefaultsKey
+        )
 
         isLoadingPersistedState = true
         loadHost()
@@ -115,6 +124,17 @@ final class PiAppState: ObservableObject {
         chatWorkspace.onSessionExit = { [weak self] in
             self?.scheduleCatalogRefresh()
         }
+        // Persist whenever the user mutates the set of open tabs or
+        // changes which one is selected. The save is debounced inside
+        // `schedulePersistedChatTabsSave` so a burst of streaming
+        // events only writes once.
+        chatWorkspace.onTabsChanged = { [weak self] in
+            self?.schedulePersistedChatTabsSave()
+        }
+        // Restore previously open tabs before kicking off the catalog
+        // refresh. A fingerprint mismatch (different host) is a no-op
+        // and the snapshot is simply overwritten on the first save.
+        restorePersistedChatTabs()
         refreshConfigurationSummary()
         if startsBackgroundWork {
             refreshCatalog()
@@ -132,6 +152,22 @@ final class PiAppState: ObservableObject {
 
     func dismissAvailableUpdate() {
         availableUpdate = nil
+    }
+
+    /// Called from the app termination notification. Cancels background
+    /// catalog work and active sends before the process exits, so a local
+    /// `pi --mode rpc` child does not survive as an orphan when the user
+    /// quits Apple Pi mid-turn.
+    func shutdownForTermination() {
+        catalogRefreshID = UUID()
+        stopCatalogLiveUpdates()
+        stopCatalogAdaptivePolling()
+        selectedSessionPollingTask?.cancel()
+        selectedSessionPollingTask = nil
+        savePersistedChatTabs()
+        for tab in chatWorkspace.tabs {
+            tab.cancelSend()
+        }
     }
 
     private func runUpdateCheckIfNeeded() {
@@ -278,7 +314,10 @@ final class PiAppState: ObservableObject {
                     self.sessions = snapshot.sessions
                     self.isLoadingCatalog = false
                     if !quietly {
-                        self.statusMessage = "Loaded \(snapshot.sessions.count) Pi sessions"
+                        self.statusMessage = PiAppState.catalogStatusMessage(
+                            sessionCount: snapshot.sessions.count,
+                            warnings: snapshot.warnings
+                        )
                     }
                     self.repairSelectionIfNeeded()
                     self.refreshConfigurationSummary()
@@ -527,54 +566,27 @@ final class PiAppState: ObservableObject {
         statusMessage = "Sending to Pi..."
 
         if host.usesRemoteDaemonTransport || host.mode == .remoteSSH {
-            Task { [weak self, session] in
-                guard let self else { return }
-                do {
-                    let daemonAttachments = try await self.uploadAttachmentsIfNeeded(attachments)
-                    if let sessionID = session.sessionID?.nilIfBlank {
-                        try await RemoteDaemonClient().streamSend(
-                            host: self.host,
-                            sessionID: sessionID,
-                            prompt: taggedPrompt,
-                            attachments: daemonAttachments,
-                            onEvent: { [weak self, session] event in
-                                guard let self else { return }
-                                await MainActor.run {
-                                    self.applyTurnStreamEvent(event, to: session)
-                                }
-                            }
-                        )
-                    } else if let launchRequest = session.launchRequest {
-                        try await RemoteDaemonClient().streamNewSession(
-                            host: self.host,
-                            request: launchRequest,
-                            prompt: taggedPrompt,
-                            attachments: daemonAttachments,
-                            onEvent: { [weak self, session] event in
-                                guard let self else { return }
-                                await MainActor.run {
-                                    self.applyTurnStreamEvent(event, to: session)
-                                }
-                            }
-                        )
-                    } else {
-                        throw RemoteDaemonError.requestFailed(status: 400, body: "Session is missing an ID.")
-                    }
-
-                    await MainActor.run {
-                        session.finishSendingAndReload()
-                        self.completeSend(for: session, fallbackAliases: initialAliases)
-                        self.statusMessage = "Pi replied"
-                        self.scheduleCatalogRefresh(after: .seconds(0.2))
-                    }
-                } catch {
-                    await MainActor.run {
-                        session.finishSendingWithError(error.localizedDescription)
-                        self.setSessionSending(false, aliases: self.sessionAliases(for: session, fallback: initialAliases))
-                        self.statusMessage = error.localizedDescription
-                    }
+            let task = Task { [weak self, weak session] in
+                let outcome: SendOutcome
+                if let self {
+                    outcome = await self.runRemoteTurn(
+                        session: session,
+                        prompt: taggedPrompt,
+                        attachments: attachments
+                    )
+                } else {
+                    outcome = .cancelled
+                }
+                await MainActor.run {
+                    Self.applySendOutcome(
+                        outcome,
+                        session: session,
+                        initialAliases: initialAliases,
+                        appState: self
+                    )
                 }
             }
+            session.sendTask = task
             return true
         }
 
@@ -591,8 +603,24 @@ final class PiAppState: ObservableObject {
             .roots
             .map { $0.expandingTilde }
 
-        Task { [weak self, session] in
-            guard let self else { return }
+        let task = Task { [weak self, weak session] in
+            // If the app state was deallocated there is nothing left to
+            // coordinate with; bail out as a cancellation. In practice
+            // this never happens because `PiAppState` is owned by the
+            // SwiftUI environment, but the weak capture keeps the
+            // closure Sendable-safe.
+            guard let self else {
+                await MainActor.run {
+                    Self.applySendOutcome(
+                        .cancelled,
+                        session: session,
+                        initialAliases: initialAliases,
+                        appState: nil
+                    )
+                }
+                return
+            }
+            let outcome: SendOutcome
             do {
                 try await LocalPiTurnRunner().run(
                     host: self.host,
@@ -600,29 +628,130 @@ final class PiAppState: ObservableObject {
                     prompt: taggedPrompt,
                     attachments: attachments,
                     sessionRootCandidates: sessionRootCandidates,
-                    onEvent: { [weak self, session] event in
+                    onEvent: { [weak self, weak session] event in
                         guard let self else { return }
                         await MainActor.run {
+                            guard let session else { return }
                             self.applyTurnStreamEvent(event, to: session)
                         }
                     }
                 )
-                await MainActor.run {
-                    session.finishSendingAndReload()
-                    self.completeSend(for: session, fallbackAliases: initialAliases)
-                    self.statusMessage = "Pi replied"
-                    self.scheduleCatalogRefresh(after: .seconds(0.2))
-                }
+                outcome = .success
+            } catch is CancellationError {
+                outcome = .cancelled
             } catch {
-                await MainActor.run {
-                    session.finishSendingWithError(error.localizedDescription)
-                    self.setSessionSending(false, aliases: self.sessionAliases(for: session, fallback: initialAliases))
-                    self.statusMessage = error.localizedDescription
-                }
+                outcome = .failure(error.localizedDescription)
+            }
+            await MainActor.run {
+                Self.applySendOutcome(
+                    outcome,
+                    session: session,
+                    initialAliases: initialAliases,
+                    appState: self
+                )
             }
         }
+        session.sendTask = task
 
         return true
+    }
+
+    /// Outcome of a single send. The task body always funnels through
+    /// `applySendOutcome` so success, failure, and cancellation take
+    /// the same path: the session is mutated on the main actor only
+    /// when it is still alive, and the send task reference is always
+    /// cleared at the end.
+    fileprivate enum SendOutcome: Sendable {
+        case success
+        case cancelled
+        case failure(String)
+    }
+
+    /// Apply the outcome of a send. Runs on the main actor; silently
+    /// no-ops if the session has been deallocated (e.g. the tab was
+    /// closed mid-send). Always clears `session.sendTask` so the store
+    /// stops reporting the session as busy.
+    fileprivate static func applySendOutcome(
+        _ outcome: SendOutcome,
+        session: ChatSession?,
+        initialAliases: [String],
+        appState: PiAppState?
+    ) {
+        defer { session?.sendTask = nil }
+        guard let session else { return }
+        switch outcome {
+        case .success:
+            session.finishSendingAndReload()
+            appState?.completeSend(for: session, fallbackAliases: initialAliases)
+            appState?.statusMessage = "Pi replied"
+            appState?.scheduleCatalogRefresh(after: .seconds(0.2))
+        case .cancelled:
+            // Cancellation is an expected user action (closing the
+            // tab, switching hosts, hitting a future "stop" button).
+            // Reset the composer without surfacing an error.
+            session.finishSendingCancelled()
+            appState?.setSessionSending(false, aliases: initialAliases)
+        case .failure(let message):
+            session.finishSendingWithError(message)
+            let aliases = appState?.sessionAliases(for: session, fallback: initialAliases) ?? initialAliases
+            appState?.setSessionSending(false, aliases: aliases)
+            appState?.statusMessage = message
+        }
+    }
+
+    /// Runs the remote (pi-appd HTTP) send path. The session is
+    /// captured weakly so closing the tab mid-send stops further
+    /// mutations. Returns a `SendOutcome` for the caller to apply.
+    ///
+    /// The current release only reaches the daemon transport; the old
+    /// SSH path is no longer wired up. This helper is therefore the
+    /// "remote turn" entry point in practice, but it is named
+    /// `runRemoteTurn` to leave room for an SSH-fallback runtime if
+    /// one is reintroduced.
+    private func runRemoteTurn(
+        session: ChatSession?,
+        prompt: String,
+        attachments: [ChatAttachment]
+    ) async -> SendOutcome {
+        do {
+            let daemonAttachments = try await self.uploadAttachmentsIfNeeded(attachments)
+            if let sessionID = session?.sessionID?.nilIfBlank {
+                try await RemoteDaemonClient().streamSend(
+                    host: self.host,
+                    sessionID: sessionID,
+                    prompt: prompt,
+                    attachments: daemonAttachments,
+                    onEvent: { [weak self, weak session] event in
+                        guard let self else { return }
+                        await MainActor.run {
+                            guard let session else { return }
+                            self.applyTurnStreamEvent(event, to: session)
+                        }
+                    }
+                )
+            } else if let launchRequest = session?.launchRequest {
+                try await RemoteDaemonClient().streamNewSession(
+                    host: self.host,
+                    request: launchRequest,
+                    prompt: prompt,
+                    attachments: daemonAttachments,
+                    onEvent: { [weak self, weak session] event in
+                        guard let self else { return }
+                        await MainActor.run {
+                            guard let session else { return }
+                            self.applyTurnStreamEvent(event, to: session)
+                        }
+                    }
+                )
+            } else {
+                throw RemoteDaemonError.requestFailed(status: 400, body: "Session is missing an ID.")
+            }
+            return .success
+        } catch is CancellationError {
+            return .cancelled
+        } catch {
+            return .failure(error.localizedDescription)
+        }
     }
 
     private func applyTurnStreamEvent(_ event: PiTurnStreamEvent, to session: ChatSession) {
@@ -639,6 +768,9 @@ final class PiAppState: ObservableObject {
                 eventLoader: eventLoader
             )
             migrateSessionState(from: previousAliases, to: sessionAliases(for: session))
+            // The key changed from `new:<UUID>` to the real file path,
+            // so the persisted tabs snapshot is now stale. Save again.
+            schedulePersistedChatTabsSave()
             scheduleCatalogRefresh(after: .milliseconds(50))
         case .sessionHeader(let meta):
             if session.sessionID == nil {
@@ -649,6 +781,7 @@ final class PiAppState: ObservableObject {
                     eventLoader: session.sessionPath == nil ? remoteEventLoader(sessionID: meta.id) : nil
                 )
                 migrateSessionState(from: previousAliases, to: sessionAliases(for: session))
+                schedulePersistedChatTabsSave()
                 scheduleCatalogRefresh(after: .milliseconds(50))
             }
         case .message(let message, let isFinal):
@@ -1076,8 +1209,26 @@ final class PiAppState: ObservableObject {
     private func applyLiveCatalogSnapshot(_ snapshot: PiCatalogSnapshot) {
         projects = snapshot.projects
         sessions = snapshot.sessions
+        if !snapshot.warnings.isEmpty {
+            statusMessage = PiAppState.catalogStatusMessage(
+                sessionCount: snapshot.sessions.count,
+                warnings: snapshot.warnings
+            )
+        }
         repairSelectionIfNeeded()
         refreshConfigurationSummary()
+    }
+
+    /// Builds a short status-bar message that lists the session count
+    /// and any non-fatal catalog warnings, so the user actually sees
+    /// "skipped 2 unreadable files" instead of getting a silently
+    /// truncated catalog.
+    static func catalogStatusMessage(sessionCount: Int, warnings: [String]) -> String {
+        let prefix = "Loaded \(sessionCount) Pi session\(sessionCount == 1 ? "" : "s")"
+        guard !warnings.isEmpty else { return prefix }
+        let firstFew = warnings.prefix(3).joined(separator: " ")
+        let suffix = warnings.count > 3 ? " (+ \(warnings.count - 3) more)" : ""
+        return "\(prefix). \(firstFew)\(suffix)"
     }
 
     private func loadHost() {
@@ -1117,6 +1268,110 @@ final class PiAppState: ObservableObject {
     private func saveShortcutPreferences() {
         guard let data = try? JSONEncoder().encode(shortcutPreferences) else { return }
         defaults.set(data, forKey: shortcutDefaultsKey)
+    }
+
+    // MARK: - Chat tab persistence
+
+    /// Builds a snapshot of the current open tabs (filtered to only
+    /// file-backed or remote sessions) and writes it to `UserDefaults`.
+    /// Safe to call on every mutation; the actual write is debounced via
+    /// `schedulePersistedChatTabsSave` for the hot path.
+    func savePersistedChatTabs() {
+        let tabs = chatWorkspace.tabs.compactMap { session -> PersistedChatTab? in
+            guard Self.isPersistedTabKey(session.key) else { return nil }
+            return PersistedChatTab(
+                key: session.key,
+                title: session.title,
+                sessionID: session.sessionID
+            )
+        }
+        // Only persist the selected key if the selected tab is also
+        // persisted-worthy. A `new:<UUID>` selection would never be
+        // resolvable on the next launch, so it is intentionally dropped.
+        let selectedKey: String? = {
+            guard let key = chatWorkspace.selectedTab?.key,
+                  Self.isPersistedTabKey(key) else { return nil }
+            return key
+        }()
+        let snapshot = PersistedChatTabsSnapshot(
+            hostFingerprint: host.persistenceFingerprint,
+            tabs: tabs,
+            selectedTabKey: selectedKey
+        )
+        chatTabPersistence.save(snapshot)
+    }
+
+    /// Debounces `savePersistedChatTabs` so a burst of mutations during
+    /// streaming (e.g. successive `bindToSession` calls) collapses into
+    /// a single write.
+    func schedulePersistedChatTabsSave() {
+        chatTabsSaveTask?.cancel()
+        chatTabsSaveTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(200))
+            if Task.isCancelled { return }
+            await MainActor.run {
+                self?.savePersistedChatTabs()
+            }
+        }
+    }
+
+    /// Reopens tabs and restores the selected tab from the persisted
+    /// snapshot. Skips tabs whose underlying local file no longer
+    /// exists and tolerates remote session IDs that the daemon has
+    /// forgotten (the loader surfaces a `loadError`, the tab is not
+    /// created in a way that could crash).
+    func restorePersistedChatTabs() {
+        guard let snapshot = chatTabPersistence.load() else { return }
+        // Different host: keep the snapshot on disk (it will be
+        // overwritten on the next save) but do not reopen any tabs.
+        guard snapshot.hostFingerprint == host.persistenceFingerprint else { return }
+
+        let isRemote = host.usesRemoteDaemonTransport || host.mode == .remoteSSH
+        let fileManager = Foundation.FileManager()
+
+        for tab in snapshot.tabs {
+            guard Self.isPersistedTabKey(tab.key) else { continue }
+            if isRemote {
+                let loader = tab.sessionID.flatMap { remoteEventLoader(sessionID: $0) }
+                chatWorkspace.openOrSelectTab(
+                    key: tab.key,
+                    title: tab.title,
+                    sessionID: tab.sessionID,
+                    sessionPath: nil,
+                    eventLoader: loader
+                )
+            } else {
+                // Local: only reopen if the file is still on disk. A
+                // missing file is the most common reason a saved tab
+                // becomes stale (session was deleted or the agent
+                // directory moved).
+                guard fileManager.fileExists(atPath: tab.key) else { continue }
+                chatWorkspace.openOrSelectTab(
+                    key: tab.key,
+                    title: tab.title,
+                    sessionID: nil,
+                    sessionPath: tab.key,
+                    eventLoader: nil
+                )
+            }
+        }
+
+        if let selectedKey = snapshot.selectedTabKey,
+           let tab = chatWorkspace.tabs.first(where: { $0.key == selectedKey }) {
+            chatWorkspace.select(tab)
+        }
+    }
+
+    /// `true` for keys that refer to a file-backed or remote session
+    /// and are therefore safe to round-trip through persistence. The
+    /// `new:<UUID>` and `fork:<path>:<UUID>` prefixes identify
+    /// ephemeral tabs that have no on-disk file and no remote ID yet,
+    /// so persisting them would produce a tab that the next launch
+    /// cannot reopen.
+    private static func isPersistedTabKey(_ key: String) -> Bool {
+        guard !key.isEmpty else { return false }
+        if key.hasPrefix("new:") || key.hasPrefix("fork:") { return false }
+        return true
     }
 
     private func openPath(_ path: String?) {

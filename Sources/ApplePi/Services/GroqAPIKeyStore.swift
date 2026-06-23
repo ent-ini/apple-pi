@@ -49,28 +49,9 @@ enum GroqAPIKeyStore {
 
     private static func write(data: Data) throws {
         let path = try keyPath()
-        let directory = (path as NSString).deletingLastPathComponent
-        let fileManager = Foundation.FileManager()
         do {
-            try fileManager.createDirectory(atPath: directory, withIntermediateDirectories: true, attributes: [
-                .posixPermissions: 0o700
-            ])
-            try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory)
+            try SecureSecretFileWriter.writeAtomically(data: data, to: path)
         } catch {
-            throw KeyError.ioFailure("Could not create Groq token directory: \(error.localizedDescription)")
-        }
-
-        let temporaryPath = "\(path).tmp"
-        do {
-            try data.write(to: URL(fileURLWithPath: temporaryPath), options: [.atomic])
-            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: temporaryPath)
-            if fileManager.fileExists(atPath: path) {
-                try fileManager.removeItem(atPath: path)
-            }
-            try fileManager.moveItem(atPath: temporaryPath, toPath: path)
-            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
-        } catch {
-            try? fileManager.removeItem(atPath: temporaryPath)
             throw KeyError.ioFailure("Could not write Groq token file: \(error.localizedDescription)")
         }
     }

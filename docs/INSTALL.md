@@ -9,8 +9,9 @@ Verify the release hash and source before running it.
 ## Requirements
 
 - macOS 14 or newer.
-- Pi installed locally, or a remote SSH host that can run Pi.
-- For remote session browsing, `python3` on the remote host.
+- Pi installed locally, **or** a remote host running [pi-appd](https://github.com/ent-ini/apple-pi) and Pi.
+
+Apple Pi does not need `python3` (or any other tool) on the remote host beyond whatever `pi-appd` itself requires. The macOS client talks to the daemon over bearer-token-authenticated HTTP.
 
 ## Install From A Release Zip
 
@@ -40,13 +41,13 @@ For local mode:
 - `Local Pi executable`: defaults to `pi`.
 - `Agent directory`: defaults to `~/.pi/agent`.
 
-For remote SSH mode:
+For Remote API mode:
 
-- `Host`: remote hostname or IP address.
-- `User`: optional SSH user.
-- `Port`: defaults to `22`.
-- `Remote Pi executable`: defaults to `pi`.
-- `Agent directory`: the remote Pi agent directory path.
+- `pi-appd URL or IP`: the URL or `host:port` of the remote `pi-appd` daemon (for example `http://100.100.20.10:8787`).
+- `Bearer token`: paste the daemon's bearer token. It is stored locally as a `0600` file in Application Support — never in the Keychain.
+- Use `Test Remote API` before pressing Apply to confirm the URL and token work, and `Copy curl` if you want a one-shot way to check the daemon from a terminal.
+
+The bundled SSH password, identity-file, and `~/.ssh/config` alias fields from earlier previews are no longer required: Remote API mode uses HTTP only, and the SSH plumbing is reserved for a future local SSH passthrough. The fields are kept in the host model so the data shape does not break for anyone who already has a saved config.
 
 The app does not install Pi and does not configure SSH keys. Confirm those work in Terminal first.
 
@@ -56,9 +57,9 @@ For local sessions, Apple Pi includes its own small Pi notification helper insid
 
 If notifications are disabled in the app settings, new local sessions are launched without the helper.
 
-For remote SSH sessions, Pi runs on the remote host. The bundled local helper is not available there, so notification support requires a Pi notification extension on the remote host.
+For Remote API sessions, Pi runs on the remote host. The bundled local helper is not available there, so notification support requires a Pi notification extension on the remote host.
 
-Remote SSH mode can browse, start, and resume sessions on the remote host. Apple Pi does not delete remote session files, and local Finder/file actions are disabled or limited for remote paths.
+Remote API mode can browse, start, and resume sessions on the remote host. Apple Pi does not delete remote session files, and local Finder/file actions are disabled or limited for remote paths.
 
 ## Useful Terminal Checks
 
@@ -69,12 +70,13 @@ which pi
 pi --help
 ```
 
-Remote Pi:
+Remote `pi-appd` reachability (replace the URL and token with the ones configured in Settings):
 
 ```sh
-ssh user@host 'command -v pi && pi --help'
-ssh user@host 'command -v python3'
+curl -H "Authorization: Bearer <token>" http://<host:port>/healthz
 ```
+
+The Settings pane's `Copy curl` button produces the same command with the values it has on screen.
 
 ## Local Test Builds
 

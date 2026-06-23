@@ -6,9 +6,12 @@ struct AvailableUpdate: Equatable, Sendable {
 }
 
 struct UpdateCheckService: Sendable {
-    static let latestReleaseURL = URL(
-        string: "https://api.github.com/repos/ent-ini/apple-pi/releases/latest"
-    )!
+    /// The hardcoded GitHub releases endpoint. The URL falls back to a
+    /// local file URL if the literal ever fails to parse, so the app never
+    /// crashes on static URL initialisation. The fallback branch is
+    /// unreachable for a well-formed HTTPS literal.
+    static let latestReleaseURL: URL = URL(string: "https://api.github.com/repos/ent-ini/apple-pi/releases/latest")
+        ?? URL(fileURLWithPath: "/")
 
     private let latestReleaseURL: URL
     private let currentVersionProvider: @Sendable () -> String
