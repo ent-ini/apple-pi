@@ -174,7 +174,7 @@ final class PiSessionCatalogService {
         var count = 0
 
         while true {
-            guard let data = try? handle.read(upToCount: 64 * 1024), let data else { return nil }
+            guard let data = try? handle.read(upToCount: 64 * 1024) else { return nil }
             if data.isEmpty { break }
             buffer.append(data)
 
