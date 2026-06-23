@@ -39,7 +39,11 @@ final class ShortcutRecorderButton: NSButton {
     private var isRecording = false {
         didSet { updateAppearance() }
     }
-    private var localKeyMonitor: Any?
+    private let monitorBox = MonitorBox()
+
+    deinit {
+        monitorBox.removeMonitor()
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -71,7 +75,7 @@ final class ShortcutRecorderButton: NSButton {
         guard !isRecording else { return }
         isRecording = true
         window?.makeFirstResponder(self)
-        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        let monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.isRecording else { return event }
             if event.keyCode == 53 {
                 self.stopRecording()
@@ -86,6 +90,7 @@ final class ShortcutRecorderButton: NSButton {
             self.onCapture?(captured)
             return nil
         }
+        monitorBox.setMonitor(monitor)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -101,18 +106,9 @@ final class ShortcutRecorderButton: NSButton {
         return result
     }
 
-    deinit {
-        if let localKeyMonitor {
-            NSEvent.removeMonitor(localKeyMonitor)
-        }
-    }
-
     private func stopRecording() {
         isRecording = false
-        if let localKeyMonitor {
-            NSEvent.removeMonitor(localKeyMonitor)
-            self.localKeyMonitor = nil
-        }
+        monitorBox.removeMonitor()
     }
 
     private func updateAppearance() {
@@ -122,5 +118,30 @@ final class ShortcutRecorderButton: NSButton {
             string: titleText,
             attributes: [.font: font]
         )
+    }
+}
+
+private final class MonitorBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var monitor: Any?
+
+    func setMonitor(_ monitor: Any?) {
+        lock.lock()
+        let existing = self.monitor
+        self.monitor = monitor
+        lock.unlock()
+        if let existing {
+            NSEvent.removeMonitor(existing)
+        }
+    }
+
+    func removeMonitor() {
+        lock.lock()
+        let existing = self.monitor
+        self.monitor = nil
+        lock.unlock()
+        if let existing {
+            NSEvent.removeMonitor(existing)
+        }
     }
 }
