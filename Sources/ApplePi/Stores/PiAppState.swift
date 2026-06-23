@@ -928,15 +928,20 @@ final class PiAppState: ObservableObject {
         let center = NotificationCenter.default
         activityObservers.append(
             center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-                self?.isApplicationActive = true
-                if let self, self.host.usesRemoteDaemonTransport, !self.isLoadingCatalog {
-                    self.refreshCatalog(quietly: true)
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.isApplicationActive = true
+                    if self.host.usesRemoteDaemonTransport, !self.isLoadingCatalog {
+                        self.refreshCatalog(quietly: true)
+                    }
                 }
             }
         )
         activityObservers.append(
             center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
-                self?.isApplicationActive = false
+                Task { @MainActor [weak self] in
+                    self?.isApplicationActive = false
+                }
             }
         )
     }
