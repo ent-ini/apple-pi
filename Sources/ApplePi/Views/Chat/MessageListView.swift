@@ -45,10 +45,10 @@ struct MessageListView: View {
                 }
                 .onChange(of: session.isLoading) { _, isLoading in
                     guard !isLoading else { return }
-                    scrollToBottom(using: scrollProxy, animated: false)
+                    scrollToBottomSettled(using: scrollProxy, animated: false)
                 }
                 .onAppear {
-                    scrollToBottom(using: scrollProxy, animated: false)
+                    scrollToBottomSettled(using: scrollProxy, animated: false)
                 }
             }
         }
@@ -98,6 +98,16 @@ struct MessageListView: View {
             }
         } else {
             scrollProxy.scrollTo(Self.bottomAnchorID, anchor: .bottom)
+        }
+    }
+
+    private func scrollToBottomSettled(using scrollProxy: ScrollViewProxy, animated: Bool) {
+        scrollToBottom(using: scrollProxy, animated: animated)
+        DispatchQueue.main.async {
+            scrollToBottom(using: scrollProxy, animated: false)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            scrollToBottom(using: scrollProxy, animated: false)
         }
     }
 }

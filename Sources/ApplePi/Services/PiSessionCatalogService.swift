@@ -87,12 +87,14 @@ final class PiSessionCatalogService {
         defer { try? handle.close() }
 
         guard let lines = readSessionPreviewLines(from: handle) else { return nil }
+        let fullMessageCount = countMessageLines(filePath: filePath)
 
         return parseSessionRecord(
             filePath: filePath,
             projectID: projectID,
             modifiedAt: modifiedAt,
-            lines: Array(lines.prefix(240))
+            lines: Array(lines.prefix(240)),
+            fullMessageCount: fullMessageCount
         )
     }
 
@@ -123,7 +125,7 @@ final class PiSessionCatalogService {
         return lines
     }
 
-    private func parseSessionRecord(filePath: String, projectID: String, modifiedAt: Date, lines: [String]) -> PiSessionSummary? {
+    private func parseSessionRecord(filePath: String, projectID: String, modifiedAt: Date, lines: [String], fullMessageCount: Int?) -> PiSessionSummary? {
         let url = URL(fileURLWithPath: filePath)
         let parsed = parseSessionLines(lines)
         let fallbackTitle = url.deletingPathExtension().lastPathComponent
@@ -135,7 +137,7 @@ final class PiSessionCatalogService {
             projectID: effectiveProjectID,
             title: parsed.displayName ?? parsed.firstUserMessage ?? fallbackTitle,
             workingDirectory: parsed.workingDirectory,
-            messageCount: parsed.messageCount,
+            messageCount: fullMessageCount ?? parsed.messageCount,
             modifiedAt: modifiedAt,
             displayName: parsed.displayName,
             parentSession: parsed.parentSession,
@@ -161,6 +163,39 @@ final class PiSessionCatalogService {
             .filter { $0 != "/" && !$0.isEmpty }
         guard !components.isEmpty else { return "--root--" }
         return "--\(components.joined(separator: "-"))--"
+    }
+
+    private func countMessageLines(filePath: String) -> Int? {
+        guard let handle = try? FileHandle(forReadingFrom: URL(fileURLWithPath: filePath)) else { return nil }
+        defer { try? handle.close() }
+
+        var buffer = Data()
+        let newline = Character("\n").asciiValue!
+        var count = 0
+
+        while true {
+            guard let data = try? handle.read(upToCount: 64 * 1024), let data else { return nil }
+            if data.isEmpty { break }
+            buffer.append(data)
+
+            while let newlineIndex = buffer.firstIndex(of: newline) {
+                let lineData = buffer[..<newlineIndex]
+                if !lineData.isEmpty,
+                   let object = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                   object["type"] as? String == "message" {
+                    count += 1
+                }
+                buffer.removeSubrange(buffer.startIndex...newlineIndex)
+            }
+        }
+
+        if !buffer.isEmpty,
+           let object = try? JSONSerialization.jsonObject(with: buffer) as? [String: Any],
+           object["type"] as? String == "message" {
+            count += 1
+        }
+
+        return count
     }
 
     private func parseSessionLines(_ lines: [String]) -> ParsedSession {

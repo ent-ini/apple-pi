@@ -996,7 +996,11 @@ func parseSessionFile(path string) (parsedSession, error) {
 	if err != nil {
 		return parsedSession{}, err
 	}
-	return parseSessionLines(lines), nil
+	result := parseSessionLines(lines)
+	if messageCount, err := countMessageLines(path); err == nil {
+		result.MessageCount = messageCount
+	}
+	return result, nil
 }
 
 func parseSessionLines(lines []string) parsedSession {
@@ -1071,6 +1075,36 @@ func parseSessionLines(lines []string) parsedSession {
 	}
 	result.LabelCount = len(labelTargets)
 	return result
+}
+
+func countMessageLines(path string) (int, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	buffer := make([]byte, 0, 64*1024)
+	scanner.Buffer(buffer, 4*1024*1024)
+	count := 0
+	for scanner.Scan() {
+		trimmed := strings.TrimSpace(scanner.Text())
+		if trimmed == "" {
+			continue
+		}
+		var object map[string]any
+		if err := json.Unmarshal([]byte(trimmed), &object); err != nil {
+			continue
+		}
+		if typeValue, _ := object["type"].(string); typeValue == "message" {
+			count++
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 func readAllLines(path string) ([]string, error) {
