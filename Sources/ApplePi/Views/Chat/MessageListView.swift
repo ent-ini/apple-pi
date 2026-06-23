@@ -8,6 +8,7 @@ struct MessageListView: View {
     @ObservedObject var session: ChatSession
 
     @State private var isAnchoredToBottom = true
+    @State private var hasCompletedInitialPlacement = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -43,12 +44,14 @@ struct MessageListView: View {
                 .onChange(of: session.streamRevision) { _, _ in
                     scrollToBottomIfNeeded(using: scrollProxy)
                 }
+                .opacity(hasCompletedInitialPlacement ? 1 : 0)
                 .onChange(of: session.isLoading) { _, isLoading in
                     guard !isLoading else { return }
-                    scrollToBottomSettled(using: scrollProxy, animated: false)
+                    scrollToBottomSettled(using: scrollProxy, animated: false, completesInitialPlacement: false)
                 }
                 .onAppear {
-                    scrollToBottomSettled(using: scrollProxy, animated: false)
+                    hasCompletedInitialPlacement = false
+                    scrollToBottomSettled(using: scrollProxy, animated: false, completesInitialPlacement: true)
                 }
             }
         }
@@ -101,13 +104,16 @@ struct MessageListView: View {
         }
     }
 
-    private func scrollToBottomSettled(using scrollProxy: ScrollViewProxy, animated: Bool) {
+    private func scrollToBottomSettled(using scrollProxy: ScrollViewProxy, animated: Bool, completesInitialPlacement: Bool) {
         scrollToBottom(using: scrollProxy, animated: animated)
         DispatchQueue.main.async {
             scrollToBottom(using: scrollProxy, animated: false)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             scrollToBottom(using: scrollProxy, animated: false)
+            if completesInitialPlacement {
+                hasCompletedInitialPlacement = true
+            }
         }
     }
 }
