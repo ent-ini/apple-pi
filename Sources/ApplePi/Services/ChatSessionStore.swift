@@ -31,6 +31,10 @@ final class ChatSession: ObservableObject, Identifiable {
     private var transientUserEvent: SessionEvent?
     private var transientAssistantEvent: SessionEvent?
 
+    var lastPersistedLineIndex: Int {
+        persistedEvents.last?.lineIndex ?? -1
+    }
+
     init(
         key: String,
         title: String,
@@ -140,6 +144,14 @@ final class ChatSession: ObservableObject, Identifiable {
         transientUserEvent = nil
         transientAssistantEvent = nil
         rebuildEvents()
+    }
+
+    func appendPersistedEvents(_ newEvents: [SessionEvent]) {
+        let filtered = newEvents.filter { $0.lineIndex > lastPersistedLineIndex }
+        guard !filtered.isEmpty else { return }
+        persistedEvents.append(contentsOf: filtered)
+        rebuildEvents()
+        statusMessage = "\(persistedEvents.count) events"
     }
 
     /// Reload the session from disk or remote API. Safe to call multiple

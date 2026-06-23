@@ -68,6 +68,7 @@ final class PiAppState: ObservableObject {
     private var catalogRefreshID = UUID()
     private var remoteDirectoryRefreshID = UUID()
     private var catalogPollingTask: Task<Void, Never>?
+    private var selectedSessionPollingTask: Task<Void, Never>?
     private var activityObservers: [NSObjectProtocol] = []
     private var isApplicationActive = true
     /// Long-lived task that subscribes to the daemon's `/sessions/stream`
@@ -115,6 +116,7 @@ final class PiAppState: ObservableObject {
             startApplicationActivityObservers()
             startCatalogLiveUpdates()
             startCatalogAdaptivePolling()
+            startSelectedSessionEventPolling()
         }
     }
 
@@ -934,6 +936,7 @@ final class PiAppState: ObservableObject {
                     if self.host.usesRemoteDaemonTransport, !self.isLoadingCatalog {
                         self.refreshCatalog(quietly: true)
                     }
+                    await self.syncSelectedRemoteSessionDelta()
                 }
             }
         )
@@ -944,6 +947,54 @@ final class PiAppState: ObservableObject {
                 }
             }
         )
+    }
+
+    private func startSelectedSessionEventPolling() {
+        selectedSessionPollingTask?.cancel()
+        selectedSessionPollingTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                let interval: Duration = self.isApplicationActive ? .seconds(2) : .seconds(30)
+                try? await Task.sleep(for: interval)
+                if Task.isCancelled { return }
+                await self.syncSelectedRemoteSessionDelta()
+            }
+        }
+    }
+
+    private func syncSelectedRemoteSessionDelta() async {
+        guard host.usesRemoteDaemonTransport else { return }
+        guard let session = chatWorkspace.selectedTab,
+              let sessionID = session.sessionID?.nilIfBlank,
+              !session.isLoading,
+              !session.isSending else {
+            return
+        }
+
+        let after = session.lastPersistedLineIndex
+        guard after >= 0 else {
+            session.loadFromDisk(force: true)
+            return
+        }
+
+        let remoteHost = host
+        let selectedTabID = session.id
+        do {
+            let delta = try await RemoteDaemonClient().loadSessionEvents(
+                host: remoteHost,
+                sessionID: sessionID,
+                limit: nil,
+                after: after
+            )
+            guard self.host == remoteHost,
+                  self.chatWorkspace.selectedTab?.id == selectedTabID else {
+                return
+            }
+            session.appendPersistedEvents(delta)
+        } catch {
+            // Best-effort background sync: keep the current transcript and
+            // let catalog polling / manual reload recover.
+        }
     }
 
     /// Outer reconnect loop. On every successful snapshot the backoff
