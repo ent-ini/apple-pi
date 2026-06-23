@@ -134,11 +134,13 @@ private struct UserMessagePresentation {
         let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedPath.isEmpty else { return nil }
 
-        let displayName = URL(fileURLWithPath: trimmedPath).lastPathComponent
-        if includeImageTags, isImageAttachment(path: trimmedPath, body: body) {
+        let isImage = isImageAttachment(path: trimmedPath, body: body)
+        if isImage {
+            guard includeImageTags else { return nil }
             return UserVisibleAttachment(kind: .image(path: trimmedPath, mime: guessImageMimeType(from: trimmedPath)))
         }
 
+        let displayName = URL(fileURLWithPath: trimmedPath).lastPathComponent
         return UserVisibleAttachment(
             kind: .file(
                 path: trimmedPath,
