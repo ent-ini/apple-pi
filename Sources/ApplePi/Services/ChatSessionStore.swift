@@ -261,7 +261,7 @@ final class ChatSessionStore: ObservableObject {
             )
             existing.updateLaunchRequest(launchRequest)
             select(existing)
-            existing.loadFromDisk()
+            existing.loadFromDisk(force: true)
             return existing
         }
 
@@ -357,9 +357,6 @@ private enum SessionLoadWorker {
             let modificationDate: Date?
 
             if let eventLoader {
-                if !force && previousLoadedOnce {
-                    return .skipped
-                }
                 parsed = try await eventLoader()
                 modificationDate = nil
             } else if let sessionPath {
