@@ -259,6 +259,35 @@ import Testing
     #expect(state.selection == nil)
 }
 
+@MainActor
+@Test func sessionSearchCanMatchAcrossProjects() async throws {
+    let defaults = isolatedDefaults()
+    defaults.set(Date(), forKey: "ApplePi.updateCheck.lastCheckedAt")
+    let now = Date()
+    let snapshot = PiCatalogSnapshot(
+        projects: [
+            PiProject(id: "a", title: "Alpha", workingDirectory: "/tmp/a", sessionDirectory: "a", sessionCount: 1, lastActivity: now),
+            PiProject(id: "b", title: "Beta", workingDirectory: "/tmp/b", sessionDirectory: "b", sessionCount: 1, lastActivity: now)
+        ],
+        sessions: [
+            PiSessionSummary(id: "1", filePath: "/tmp/a/one.jsonl", projectID: "a", title: "Design Notes", workingDirectory: "/tmp/a", messageCount: 1, modifiedAt: now, displayName: nil, parentSession: nil, branchCount: 0, labelCount: 0, branchSummaryCount: 0, latestModel: nil),
+            PiSessionSummary(id: "2", filePath: "/tmp/b/two.jsonl", projectID: "b", title: "Design Review", workingDirectory: "/tmp/b", messageCount: 1, modifiedAt: now.addingTimeInterval(-60), displayName: nil, parentSession: nil, branchCount: 0, labelCount: 0, branchSummaryCount: 0, latestModel: nil)
+        ]
+    )
+    let state = PiAppState(
+        defaults: defaults,
+        configurationService: PiConfigurationService(environment: [:]),
+        catalogLoader: { _, _ in snapshot }
+    )
+    try await Task.sleep(for: .milliseconds(100))
+
+    state.sessionSearchText = "design"
+
+    let matched = state.filteredSessions(for: state.activeProject)
+
+    #expect(matched.map(\.id) == ["1", "2"])
+}
+
 @Test func sessionRootDefaultsToAgentSessions() throws {
     let temp = try TemporaryPiFixture()
     let host = PiHostConfiguration(agentDirectory: temp.agent.path)
@@ -743,6 +772,43 @@ private func isolatedDefaults() -> UserDefaults {
         return
     }
     #expect(lineIndex == 42)
+}
+
+@Test func shortcutPreferencesUseDefaultsAndSwapConflicts() {
+    var preferences = AppShortcutPreferences()
+
+    #expect(preferences.binding(for: .newSession).displayString == "⌘N")
+    #expect(preferences.binding(for: .findSessions).displayString == "⌘F")
+
+    preferences.set(AppShortcut(key: .character("f"), modifiers: .command), for: .newSession)
+
+    #expect(preferences.binding(for: .newSession).displayString == "⌘F")
+    #expect(preferences.binding(for: .findSessions).displayString == "⌘N")
+
+    preferences.set(AppShortcutAction.newSession.defaultShortcut, for: .newSession)
+
+    #expect(preferences.binding(for: .newSession).displayString == "⌘N")
+}
+
+@MainActor
+@Test func appStateCanRequestSessionSearchFocus() {
+    let state = PiAppState(
+        defaults: isolatedDefaults(),
+        configurationService: PiConfigurationService(environment: [:]),
+        startsBackgroundWork: false
+    )
+
+    #expect(state.pendingSessionSearchFocusRequest == false)
+    let previousID = state.sessionSearchFocusRequestID
+
+    state.requestSessionSearchFocus()
+
+    #expect(state.pendingSessionSearchFocusRequest)
+    #expect(state.sessionSearchFocusRequestID == previousID + 1)
+
+    state.consumeSessionSearchFocusRequest()
+
+    #expect(state.pendingSessionSearchFocusRequest == false)
 }
 
 // MARK: - Test helpers

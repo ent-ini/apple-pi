@@ -104,6 +104,9 @@ struct ContentView: View {
             guard activeResize == nil else { return }
             liveSessionListWidth = newValue
         }
+        .onChange(of: appState.sessionSearchFocusRequestID) { _, _ in
+            revealSessionListForSearch()
+        }
         .overlay(alignment: .topLeading) {
             WindowAppearanceConfigurator(appearance: appState.appearance)
                 .frame(width: 0, height: 0)
@@ -119,7 +122,6 @@ struct ContentView: View {
         }
         .animation(.snappy(duration: 0.22), value: appState.availableUpdate)
         .preferredColorScheme(appState.appearance.colorScheme.colorScheme)
-        .searchable(text: $appState.searchText, placement: .toolbar, prompt: "Search")
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
                 Button {
@@ -200,6 +202,17 @@ struct ContentView: View {
         }
         withAnimation(.snappy(duration: 0.18)) {
             wantsSessionList.toggle()
+        }
+    }
+
+    private func revealSessionListForSearch() {
+        if storedSessionListWidth <= PaneLayout.sessionListCollapseThreshold {
+            storedSessionListWidth = PaneLayout.sessionListReopenWidth
+            liveSessionListWidth = PaneLayout.sessionListReopenWidth
+        }
+        guard !wantsSessionList else { return }
+        withAnimation(.snappy(duration: 0.18)) {
+            wantsSessionList = true
         }
     }
 }
@@ -373,14 +386,6 @@ struct ProjectSidebarView: View {
                         action: { appState.refreshCatalog() }
                     )
                     .padding()
-                } else if appState.filteredProjects.isEmpty {
-                    EmptyCatalogView(
-                        title: "No Matches",
-                        systemImage: "magnifyingglass",
-                        message: appState.searchText,
-                        action: { appState.searchText = "" }
-                    )
-                        .padding()
                 }
             }
             Divider().opacity(0.35)
@@ -670,9 +675,47 @@ private struct PiContextMetric: View {
 struct SessionListView: View {
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var appState: PiAppState
+    @FocusState private var isSearchFieldFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Text("Sessions")
+                        .font(.headline.weight(.semibold))
+                    Spacer()
+                    if appState.isLoadingCatalog {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("Search sessions", text: $appState.sessionSearchText)
+                        .textFieldStyle(.plain)
+                        .focused($isSearchFieldFocused)
+                    if appState.hasActiveSessionSearch {
+                        Button {
+                            appState.sessionSearchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.tertiary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Clear search")
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(controlTint(for: colorScheme, opacity: 0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+            .padding(12)
+
+            Divider().opacity(0.24)
+
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(appState.filteredSessions(for: appState.activeProject)) { session in
@@ -693,13 +736,19 @@ struct SessionListView: View {
             }
             .overlay {
                 if !appState.isLoadingCatalog,
-                   appState.activeProject != nil,
+                   (appState.activeProject != nil || appState.hasActiveSessionSearch),
                    appState.filteredSessions(for: appState.activeProject).isEmpty {
                     EmptyCatalogView(
-                        title: "No Sessions",
-                        systemImage: "text.bubble",
-                        message: appState.statusMessage,
-                        action: { appState.refreshCatalog() }
+                        title: appState.hasActiveSessionSearch ? "No Matches" : "No Sessions",
+                        systemImage: appState.hasActiveSessionSearch ? "magnifyingglass" : "text.bubble",
+                        message: appState.hasActiveSessionSearch ? appState.sessionSearchText : appState.statusMessage,
+                        action: {
+                            if appState.hasActiveSessionSearch {
+                                appState.sessionSearchText = ""
+                            } else {
+                                appState.refreshCatalog()
+                            }
+                        }
                     )
                     .padding()
                 }
@@ -710,6 +759,20 @@ struct SessionListView: View {
             surfaceTint(for: colorScheme, opacity: appState.appearance.effectiveListOpacity)
                 .background(.thinMaterial)
         )
+        .onAppear {
+            applyPendingSearchFocus()
+        }
+        .onChange(of: appState.sessionSearchFocusRequestID) { _, _ in
+            applyPendingSearchFocus()
+        }
+    }
+
+    private func applyPendingSearchFocus() {
+        guard appState.pendingSessionSearchFocusRequest else { return }
+        DispatchQueue.main.async {
+            isSearchFieldFocused = true
+            appState.consumeSessionSearchFocusRequest()
+        }
     }
 }
 
@@ -804,6 +867,12 @@ private struct SessionListRow: View {
                 Text(session.title)
                     .font(.headline.weight(.semibold))
                     .lineLimit(1)
+
+                Text(session.subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
 
                 HStack(spacing: 8) {
                     Text(appState.effectiveLastActivity(for: session), style: .date)

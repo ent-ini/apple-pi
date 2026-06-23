@@ -29,7 +29,9 @@ final class PiAppState: ObservableObject {
     @Published private(set) var projects: [PiProject] = []
     @Published private(set) var sessions: [PiSessionSummary] = []
     @Published var selection: PiSelection?
-    @Published var searchText = ""
+    @Published var sessionSearchText = ""
+    @Published private(set) var pendingSessionSearchFocusRequest = false
+    @Published private(set) var sessionSearchFocusRequestID = 0
     @Published var statusMessage = "Ready"
     @Published var isLoadingCatalog = false
     @Published var showsNewSessionSheet = false
@@ -47,6 +49,12 @@ final class PiAppState: ObservableObject {
             saveAppearance()
         }
     }
+    @Published private(set) var shortcutPreferences = AppShortcutPreferences() {
+        didSet {
+            guard !isLoadingPersistedState else { return }
+            saveShortcutPreferences()
+        }
+    }
     @Published private(set) var availableUpdate: AvailableUpdate?
     @Published private(set) var sendingSessionKeys: Set<String> = []
     @Published private(set) var unreadSessionKeys: Set<String> = []
@@ -61,6 +69,7 @@ final class PiAppState: ObservableObject {
     private let defaults: UserDefaults
     private let hostDefaultsKey = "ApplePi.host"
     private let appearanceDefaultsKey = "ApplePi.appearance"
+    private let shortcutDefaultsKey = "ApplePi.shortcuts"
     private let lastUpdateCheckKey = "ApplePi.updateCheck.lastCheckedAt"
     private let updateCheckInterval: TimeInterval = 24 * 60 * 60
     private let startsBackgroundWork: Bool
@@ -100,6 +109,7 @@ final class PiAppState: ObservableObject {
         isLoadingPersistedState = true
         loadHost()
         loadAppearance()
+        loadShortcutPreferences()
         isLoadingPersistedState = false
 
         chatWorkspace.onSessionExit = { [weak self] in
@@ -160,13 +170,7 @@ final class PiAppState: ObservableObject {
     }
 
     var filteredProjects: [PiProject] {
-        guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return projects
-        }
-        return projects.filter { project in
-            project.title.localizedCaseInsensitiveContains(searchText) ||
-            (project.workingDirectory ?? "").localizedCaseInsensitiveContains(searchText)
-        }
+        projects
     }
 
     func sessions(for project: PiProject) -> [PiSessionSummary] {
@@ -176,11 +180,17 @@ final class PiAppState: ObservableObject {
     }
 
     func filteredSessions(for project: PiProject?) -> [PiSessionSummary] {
-        guard let project else { return [] }
-        let projectSessions = sessions(for: project)
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return projectSessions }
-        return projectSessions.filter { session in
+        let query = sessionSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseSessions: [PiSessionSummary]
+        if query.isEmpty {
+            guard let project else { return [] }
+            baseSessions = sessions(for: project)
+        } else {
+            baseSessions = sessions.sorted { effectiveLastActivity(for: $0) > effectiveLastActivity(for: $1) }
+        }
+
+        guard !query.isEmpty else { return baseSessions }
+        return baseSessions.filter { session in
             session.title.localizedCaseInsensitiveContains(query) ||
             session.subtitle.localizedCaseInsensitiveContains(query)
         }
@@ -200,6 +210,29 @@ final class PiAppState: ObservableObject {
 
     func hasUnreadIndicator(_ session: PiSessionSummary) -> Bool {
         !isSessionSending(session) && !unreadSessionKeys.isDisjoint(with: Set(sessionAliases(for: session)))
+    }
+
+    var hasActiveSessionSearch: Bool {
+        sessionSearchText.nilIfBlank != nil
+    }
+
+    func shortcut(for action: AppShortcutAction) -> AppShortcut {
+        shortcutPreferences.binding(for: action)
+    }
+
+    func updateShortcut(_ shortcut: AppShortcut, for action: AppShortcutAction) {
+        var next = shortcutPreferences
+        next.set(shortcut, for: action)
+        shortcutPreferences = next
+    }
+
+    func requestSessionSearchFocus() {
+        pendingSessionSearchFocusRequest = true
+        sessionSearchFocusRequestID &+= 1
+    }
+
+    func consumeSessionSearchFocusRequest() {
+        pendingSessionSearchFocusRequest = false
     }
 
     func updateAppearance(_ update: (inout AppAppearance) -> Void) {
@@ -1071,6 +1104,19 @@ final class PiAppState: ObservableObject {
     private func saveAppearance() {
         guard let data = try? JSONEncoder().encode(appearance) else { return }
         defaults.set(data, forKey: appearanceDefaultsKey)
+    }
+
+    private func loadShortcutPreferences() {
+        guard let data = defaults.data(forKey: shortcutDefaultsKey),
+              let decoded = try? JSONDecoder().decode(AppShortcutPreferences.self, from: data) else {
+            return
+        }
+        shortcutPreferences = decoded
+    }
+
+    private func saveShortcutPreferences() {
+        guard let data = try? JSONEncoder().encode(shortcutPreferences) else { return }
+        defaults.set(data, forKey: shortcutDefaultsKey)
     }
 
     private func openPath(_ path: String?) {

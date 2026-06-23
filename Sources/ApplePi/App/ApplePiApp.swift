@@ -68,28 +68,39 @@ struct ApplePiCommands: Commands {
     @ObservedObject var appState: PiAppState
 
     var body: some Commands {
+        CommandGroup(replacing: .find) {
+            Button("Find Sessions") {
+                appState.requestSessionSearchFocus()
+            }
+            .keyboardShortcut(shortcut(for: .findSessions).keyEquivalent, modifiers: shortcut(for: .findSessions).eventModifiers)
+        }
+
         CommandMenu("Pi") {
             Button("New Session") {
                 appState.openNewSessionInCurrentFolder()
             }
-            .keyboardShortcut("n", modifiers: [.command])
+            .keyboardShortcut(shortcut(for: .newSession).keyEquivalent, modifiers: shortcut(for: .newSession).eventModifiers)
 
             Button("New Temporary Session") {
                 appState.openTemporarySessionInCurrentFolder()
             }
-            .keyboardShortcut("n", modifiers: [.command, .shift])
+            .keyboardShortcut(shortcut(for: .newTemporarySession).keyEquivalent, modifiers: shortcut(for: .newTemporarySession).eventModifiers)
 
             Button("New Session in Folder...") {
                 appState.presentNewSessionInFolder()
             }
-            .keyboardShortcut("n", modifiers: [.command, .option])
+            .keyboardShortcut(shortcut(for: .newSessionInFolder).keyEquivalent, modifiers: shortcut(for: .newSessionInFolder).eventModifiers)
 
             Divider()
 
             Button("Refresh Sessions") {
                 appState.refreshCatalog()
             }
-            .keyboardShortcut("r", modifiers: [.command])
+            .keyboardShortcut(shortcut(for: .refreshSessions).keyEquivalent, modifiers: shortcut(for: .refreshSessions).eventModifiers)
         }
+    }
+
+    private func shortcut(for action: AppShortcutAction) -> AppShortcut {
+        appState.shortcut(for: action)
     }
 }

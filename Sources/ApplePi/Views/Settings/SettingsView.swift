@@ -22,6 +22,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             appearanceSection
+            shortcutsSection
             hostSections
             voiceSection
             Section("Notifications") {
@@ -186,6 +187,24 @@ struct SettingsView: View {
                     appState.updateAppearance { $0.emptyChatMessage = newValue }
                 }
             ))
+        }
+    }
+
+    @ViewBuilder
+    private var shortcutsSection: some View {
+        Section("Shortcuts") {
+            ForEach(AppShortcutAction.allCases) { action in
+                HStack(spacing: 16) {
+                    Text(action.title)
+                    Spacer()
+                    ShortcutRecorderField(shortcut: shortcutBinding(action))
+                        .frame(width: 160, height: 28)
+                }
+            }
+        } footer: {
+            Text("Click a shortcut, then press a new key combination. Esc cancels. If the combo is already used, shortcuts swap places.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -481,6 +500,15 @@ struct SettingsView: View {
     }
 
     // MARK: - Other bindings (unchanged from before)
+
+    private func shortcutBinding(_ action: AppShortcutAction) -> Binding<AppShortcut> {
+        Binding(
+            get: { appState.shortcut(for: action) },
+            set: { newValue in
+                appState.updateShortcut(newValue, for: action)
+            }
+        )
+    }
 
     private func opacitySlider(
         _ title: String,
