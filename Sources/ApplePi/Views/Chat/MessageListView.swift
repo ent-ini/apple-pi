@@ -46,11 +46,17 @@ struct MessageListView: View {
                 }
                 .opacity(hasCompletedInitialPlacement ? 1 : 0)
                 .onChange(of: session.isLoading) { _, isLoading in
-                    guard !isLoading else { return }
-                    scrollToBottomSettled(using: scrollProxy, animated: false, completesInitialPlacement: false)
+                    if isLoading {
+                        hasCompletedInitialPlacement = false
+                        return
+                    }
+                    scrollToBottomSettled(using: scrollProxy, animated: false, completesInitialPlacement: true)
                 }
                 .onAppear {
                     hasCompletedInitialPlacement = false
+                    if session.isLoading {
+                        return
+                    }
                     scrollToBottomSettled(using: scrollProxy, animated: false, completesInitialPlacement: true)
                 }
             }
