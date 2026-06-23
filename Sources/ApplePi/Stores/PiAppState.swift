@@ -67,6 +67,9 @@ final class PiAppState: ObservableObject {
     private var isLoadingPersistedState = false
     private var catalogRefreshID = UUID()
     private var remoteDirectoryRefreshID = UUID()
+    private var catalogPollingTask: Task<Void, Never>?
+    private var activityObservers: [NSObjectProtocol] = []
+    private var isApplicationActive = true
     /// Long-lived task that subscribes to the daemon's `/sessions/stream`
     /// SSE endpoint and pushes full catalog snapshots into `projects` /
     /// `sessions`. `nil` whenever the current host doesn't use the daemon
@@ -109,7 +112,9 @@ final class PiAppState: ObservableObject {
         // The live subscription is independent of the one-shot refresh:
         // it stays alive across app sessions for daemon-backed hosts.
         if startsBackgroundWork {
+            startApplicationActivityObservers()
             startCatalogLiveUpdates()
+            startCatalogAdaptivePolling()
         }
     }
 
@@ -222,7 +227,7 @@ final class PiAppState: ObservableObject {
         )
     }
 
-    func refreshCatalog(usesActiveProjectContext: Bool = true) {
+    func refreshCatalog(usesActiveProjectContext: Bool = true, quietly: Bool = false) {
         isLoadingCatalog = true
         let refreshID = UUID()
         catalogRefreshID = refreshID
@@ -237,7 +242,9 @@ final class PiAppState: ObservableObject {
                     self.projects = snapshot.projects
                     self.sessions = snapshot.sessions
                     self.isLoadingCatalog = false
-                    self.statusMessage = "Loaded \(snapshot.sessions.count) Pi sessions"
+                    if !quietly {
+                        self.statusMessage = "Loaded \(snapshot.sessions.count) Pi sessions"
+                    }
                     self.repairSelectionIfNeeded()
                     self.refreshConfigurationSummary()
                 }
@@ -245,12 +252,14 @@ final class PiAppState: ObservableObject {
                 await MainActor.run {
                     guard self.catalogRefreshID == refreshID else { return }
                     self.isLoadingCatalog = false
-                    self.statusMessage = error.localizedDescription
-                    // Drop the stale data so the user is not looking at the
-                    // old host's projects while the error banner is up.
-                    self.projects = []
-                    self.sessions = []
-                    self.selection = nil
+                    if !quietly {
+                        self.statusMessage = error.localizedDescription
+                        // Drop the stale data so the user is not looking at the
+                        // old host's projects while the error banner is up.
+                        self.projects = []
+                        self.sessions = []
+                        self.selection = nil
+                    }
                 }
             }
         }
@@ -892,6 +901,44 @@ final class PiAppState: ObservableObject {
     private func stopCatalogLiveUpdates() {
         catalogStreamTask?.cancel()
         catalogStreamTask = nil
+    }
+
+    private func startCatalogAdaptivePolling() {
+        catalogPollingTask?.cancel()
+        catalogPollingTask = Task { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                let interval: Duration = self.isApplicationActive ? .seconds(3) : .seconds(30)
+                try? await Task.sleep(for: interval)
+                if Task.isCancelled { return }
+                guard self.host.usesRemoteDaemonTransport, !self.isLoadingCatalog else { continue }
+                self.refreshCatalog(quietly: true)
+            }
+        }
+    }
+
+    private func stopCatalogAdaptivePolling() {
+        catalogPollingTask?.cancel()
+        catalogPollingTask = nil
+    }
+
+    private func startApplicationActivityObservers() {
+        guard activityObservers.isEmpty else { return }
+        isApplicationActive = NSApp?.isActive ?? true
+        let center = NotificationCenter.default
+        activityObservers.append(
+            center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.isApplicationActive = true
+                if let self, self.host.usesRemoteDaemonTransport, !self.isLoadingCatalog {
+                    self.refreshCatalog(quietly: true)
+                }
+            }
+        )
+        activityObservers.append(
+            center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.isApplicationActive = false
+            }
+        )
     }
 
     /// Outer reconnect loop. On every successful snapshot the backoff

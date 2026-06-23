@@ -868,8 +868,9 @@ func (s *server) refreshCatalogIfNeeded() error {
 }
 
 func (s *server) refreshCatalog(force bool) error {
+	ttl := s.catalogCacheTTL()
 	s.mu.RLock()
-	fresh := time.Since(s.lastRefresh) < 15*time.Second
+	fresh := time.Since(s.lastRefresh) < ttl
 	s.mu.RUnlock()
 	if fresh && !force {
 		return nil
@@ -877,7 +878,7 @@ func (s *server) refreshCatalog(force bool) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if time.Since(s.lastRefresh) < 15*time.Second && !force {
+	if time.Since(s.lastRefresh) < ttl && !force {
 		return nil
 	}
 	catalog, byID, err := buildCatalog(s.agentDir)
@@ -888,6 +889,13 @@ func (s *server) refreshCatalog(force bool) error {
 	s.sessionsByID = byID
 	s.lastRefresh = time.Now()
 	return nil
+}
+
+func (s *server) catalogCacheTTL() time.Duration {
+	if s.broker != nil && s.broker.subscriberCount() > 0 {
+		return 10 * time.Second
+	}
+	return 30 * time.Second
 }
 
 func buildCatalog(agentDir string) (catalogResponse, map[string]sessionRecord, error) {
@@ -1382,6 +1390,12 @@ func (b *catalogBroker) broadcast(snapshot catalogResponse) {
 		default:
 		}
 	}
+}
+
+func (b *catalogBroker) subscriberCount() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return len(b.subscribers)
 }
 
 // refreshAndBroadcast forces a fresh catalog rebuild and pushes the result
