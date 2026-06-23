@@ -43,6 +43,9 @@ final class PiAppState: ObservableObject {
         }
     }
     @Published private(set) var availableUpdate: AvailableUpdate?
+    @Published private(set) var sendingSessionKeys: Set<String> = []
+    @Published private(set) var unreadSessionKeys: Set<String> = []
+    @Published private(set) var sessionActivityOverrides: [String: Date] = [:]
 
     let chatWorkspace = ChatSessionStore()
 
@@ -143,7 +146,9 @@ final class PiAppState: ObservableObject {
     }
 
     func sessions(for project: PiProject) -> [PiSessionSummary] {
-        sessions.filter { $0.projectID == project.id }
+        sessions
+            .filter { $0.projectID == project.id }
+            .sorted { effectiveLastActivity(for: $0) > effectiveLastActivity(for: $1) }
     }
 
     func filteredSessions(for project: PiProject?) -> [PiSessionSummary] {
@@ -155,6 +160,22 @@ final class PiAppState: ObservableObject {
             session.title.localizedCaseInsensitiveContains(query) ||
             session.subtitle.localizedCaseInsensitiveContains(query)
         }
+    }
+
+    func effectiveLastActivity(for session: PiSessionSummary) -> Date {
+        sessionAliases(for: session)
+            .compactMap { sessionActivityOverrides[$0] }
+            .max()
+            .map { max($0, session.modifiedAt) }
+            ?? session.modifiedAt
+    }
+
+    func isSessionSending(_ session: PiSessionSummary) -> Bool {
+        !sendingSessionKeys.isDisjoint(with: Set(sessionAliases(for: session)))
+    }
+
+    func hasUnreadIndicator(_ session: PiSessionSummary) -> Bool {
+        !isSessionSending(session) && !unreadSessionKeys.isDisjoint(with: Set(sessionAliases(for: session)))
     }
 
     func updateAppearance(_ update: (inout AppAppearance) -> Void) {
@@ -220,6 +241,9 @@ final class PiAppState: ObservableObject {
 
     func select(_ selection: PiSelection) {
         self.selection = selection
+        if case .session = selection, let selectedSession {
+            markSessionRead(selectedSession)
+        }
         refreshConfigurationSummary()
         if case .session = selection, let selectedSession {
             resume(selectedSession)
@@ -435,11 +459,15 @@ final class PiAppState: ObservableObject {
         }
 
         session.beginSending(prompt: taggedPrompt, attachments: attachments)
+        let initialAliases = sessionAliases(for: session)
+        markSessionActive(initialAliases)
+        setSessionSending(true, aliases: initialAliases)
+        clearUnread(aliases: initialAliases)
         statusMessage = "Sending to Pi..."
 
         if host.usesRemoteDaemonTransport || host.mode == .remoteSSH {
-            Task { [weak self, weak session] in
-                guard let self, let session else { return }
+            Task { [weak self, session] in
+                guard let self else { return }
                 do {
                     let daemonAttachments = try await self.uploadAttachmentsIfNeeded(attachments)
                     if let sessionID = session.sessionID?.nilIfBlank {
@@ -448,8 +476,8 @@ final class PiAppState: ObservableObject {
                             sessionID: sessionID,
                             prompt: taggedPrompt,
                             attachments: daemonAttachments,
-                            onEvent: { [weak self, weak session] event in
-                                guard let self, let session else { return }
+                            onEvent: { [weak self, session] event in
+                                guard let self else { return }
                                 await MainActor.run {
                                     self.applyTurnStreamEvent(event, to: session)
                                 }
@@ -461,8 +489,8 @@ final class PiAppState: ObservableObject {
                             request: launchRequest,
                             prompt: taggedPrompt,
                             attachments: daemonAttachments,
-                            onEvent: { [weak self, weak session] event in
-                                guard let self, let session else { return }
+                            onEvent: { [weak self, session] event in
+                                guard let self else { return }
                                 await MainActor.run {
                                     self.applyTurnStreamEvent(event, to: session)
                                 }
@@ -474,12 +502,14 @@ final class PiAppState: ObservableObject {
 
                     await MainActor.run {
                         session.finishSendingAndReload()
+                        self.completeSend(for: session, fallbackAliases: initialAliases)
                         self.statusMessage = "Pi replied"
                         self.scheduleCatalogRefresh(after: .seconds(0.2))
                     }
                 } catch {
                     await MainActor.run {
                         session.finishSendingWithError(error.localizedDescription)
+                        self.setSessionSending(false, aliases: self.sessionAliases(for: session, fallback: initialAliases))
                         self.statusMessage = error.localizedDescription
                     }
                 }
@@ -500,8 +530,8 @@ final class PiAppState: ObservableObject {
             .roots
             .map { $0.expandingTilde }
 
-        Task { [weak self, weak session] in
-            guard let self, let session else { return }
+        Task { [weak self, session] in
+            guard let self else { return }
             do {
                 try await LocalPiTurnRunner().run(
                     host: self.host,
@@ -509,8 +539,8 @@ final class PiAppState: ObservableObject {
                     prompt: taggedPrompt,
                     attachments: attachments,
                     sessionRootCandidates: sessionRootCandidates,
-                    onEvent: { [weak self, weak session] event in
-                        guard let self, let session else { return }
+                    onEvent: { [weak self, session] event in
+                        guard let self else { return }
                         await MainActor.run {
                             self.applyTurnStreamEvent(event, to: session)
                         }
@@ -518,12 +548,14 @@ final class PiAppState: ObservableObject {
                 )
                 await MainActor.run {
                     session.finishSendingAndReload()
+                    self.completeSend(for: session, fallbackAliases: initialAliases)
                     self.statusMessage = "Pi replied"
                     self.scheduleCatalogRefresh(after: .seconds(0.2))
                 }
             } catch {
                 await MainActor.run {
                     session.finishSendingWithError(error.localizedDescription)
+                    self.setSessionSending(false, aliases: self.sessionAliases(for: session, fallback: initialAliases))
                     self.statusMessage = error.localizedDescription
                 }
             }
@@ -535,6 +567,7 @@ final class PiAppState: ObservableObject {
     private func applyTurnStreamEvent(_ event: PiTurnStreamEvent, to session: ChatSession) {
         switch event {
         case .sessionBound(let binding):
+            let previousAliases = sessionAliases(for: session)
             let title = binding.title == "Pi" ? session.title : binding.title
             let eventLoader = binding.sessionID.flatMap { remoteEventLoader(sessionID: $0) }
             session.bindToSession(
@@ -544,13 +577,16 @@ final class PiAppState: ObservableObject {
                 sessionPath: binding.sessionPath,
                 eventLoader: eventLoader
             )
+            migrateSessionState(from: previousAliases, to: sessionAliases(for: session))
         case .sessionHeader(let meta):
             if session.sessionID == nil {
+                let previousAliases = sessionAliases(for: session)
                 session.bindToSession(
                     sessionID: meta.id,
                     sessionPath: session.sessionPath,
                     eventLoader: session.sessionPath == nil ? remoteEventLoader(sessionID: meta.id) : nil
                 )
+                migrateSessionState(from: previousAliases, to: sessionAliases(for: session))
             }
         case .message(let message, let isFinal):
             if message.role == .assistant {
@@ -574,6 +610,7 @@ final class PiAppState: ObservableObject {
         do {
             try Foundation.FileManager().removeItem(atPath: session.filePath)
             sessions.removeAll { $0.filePath == session.filePath }
+            clearSessionState(for: session)
             if selectedSession?.filePath == session.filePath {
                 selection = projects.first(where: { $0.id == session.projectID }).map { .project($0.id) }
             }
@@ -798,6 +835,9 @@ final class PiAppState: ObservableObject {
         projects = []
         sessions = []
         selection = nil
+        sendingSessionKeys = []
+        unreadSessionKeys = []
+        sessionActivityOverrides = [:]
         // Open chat tabs reference `sessionPath` values from the previous
         // host, so close them. Without this the user sees stale
         // conversations after a host change.
@@ -862,6 +902,95 @@ final class PiAppState: ObservableObject {
             return text
         }
         return "\(tag)\n\(text)"
+    }
+
+    private func sessionAliases(for session: PiSessionSummary) -> [String] {
+        uniqueAliases([session.id, session.filePath])
+    }
+
+    private func sessionAliases(for session: ChatSession, fallback: [String] = []) -> [String] {
+        uniqueAliases([session.sessionID, session.sessionPath, session.key] + fallback.map(Optional.some))
+    }
+
+    private func uniqueAliases(_ aliases: [String?]) -> [String] {
+        var seen: Set<String> = []
+        var result: [String] = []
+        for rawAlias in aliases {
+            guard let rawAlias, let alias = rawAlias.nilIfBlank else { continue }
+            if seen.insert(alias).inserted {
+                result.append(alias)
+            }
+        }
+        return result
+    }
+
+    private func markSessionActive(_ aliases: [String], at date: Date = Date()) {
+        for alias in aliases {
+            sessionActivityOverrides[alias] = date
+        }
+    }
+
+    private func setSessionSending(_ isSending: Bool, aliases: [String]) {
+        guard !aliases.isEmpty else { return }
+        if isSending {
+            sendingSessionKeys.formUnion(aliases)
+        } else {
+            sendingSessionKeys.subtract(aliases)
+        }
+    }
+
+    private func clearUnread(aliases: [String]) {
+        unreadSessionKeys.subtract(aliases)
+    }
+
+    private func markUnread(aliases: [String]) {
+        unreadSessionKeys.formUnion(aliases)
+    }
+
+    private func markSessionRead(_ session: PiSessionSummary) {
+        clearUnread(aliases: sessionAliases(for: session))
+    }
+
+    private func clearSessionState(for session: PiSessionSummary) {
+        let aliases = sessionAliases(for: session)
+        sendingSessionKeys.subtract(aliases)
+        unreadSessionKeys.subtract(aliases)
+        for alias in aliases {
+            sessionActivityOverrides.removeValue(forKey: alias)
+        }
+    }
+
+    private func migrateSessionState(from oldAliases: [String], to newAliases: [String]) {
+        guard !oldAliases.isEmpty, !newAliases.isEmpty else { return }
+        let lastActivity = oldAliases.compactMap { sessionActivityOverrides[$0] }.max()
+        let wasSending = !sendingSessionKeys.isDisjoint(with: Set(oldAliases))
+        let wasUnread = !unreadSessionKeys.isDisjoint(with: Set(oldAliases))
+
+        if let lastActivity {
+            markSessionActive(newAliases, at: lastActivity)
+        }
+        if wasSending {
+            sendingSessionKeys.formUnion(newAliases)
+        }
+        if wasUnread {
+            unreadSessionKeys.formUnion(newAliases)
+        }
+    }
+
+    private func completeSend(for session: ChatSession, fallbackAliases: [String]) {
+        let aliases = sessionAliases(for: session, fallback: fallbackAliases)
+        setSessionSending(false, aliases: aliases)
+        markSessionActive(aliases)
+        if !isCurrentlyViewingSession(aliases: aliases) {
+            markUnread(aliases: aliases)
+        } else {
+            clearUnread(aliases: aliases)
+        }
+    }
+
+    private func isCurrentlyViewingSession(aliases: [String]) -> Bool {
+        guard let selectedSession else { return false }
+        return !Set(aliases).isDisjoint(with: Set(sessionAliases(for: selectedSession)))
     }
 
     private func uploadAttachmentsIfNeeded(_ attachments: [ChatAttachment]) async throws -> [UploadedAttachmentReference] {

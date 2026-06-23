@@ -138,22 +138,21 @@ struct ContentView: View {
             }
 
             ToolbarItemGroup(placement: .primaryAction) {
-                Menu {
-                    Button("New Session") {
-                        appState.openNewSessionInCurrentFolder()
-                    }
-                    Button("New Temporary Session") {
-                        appState.openTemporarySessionInCurrentFolder()
-                    }
-                    Button("New Session in Folder...") {
-                        appState.presentNewSessionInFolder()
-                    }
+                Button {
+                    appState.openNewSessionInCurrentFolder()
                 } label: {
                     Label("New", systemImage: "plus")
                 }
                 .help("New session")
 
                 Menu {
+                    Button("New Temporary Session") {
+                        appState.openTemporarySessionInCurrentFolder()
+                    }
+                    Button("New Session in Folder...") {
+                        appState.presentNewSessionInFolder()
+                    }
+                    Divider()
                     Button("Refresh Sessions") {
                         appState.refreshCatalog()
                     }
@@ -799,20 +798,30 @@ private struct SessionListRow: View {
     }
 
     private var content: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text(session.title)
-                .font(.headline.weight(.semibold))
-                .lineLimit(1)
-
-            HStack(spacing: 8) {
-                Text(session.modifiedAt, style: .date)
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 7) {
+                Text(session.title)
+                    .font(.headline.weight(.semibold))
                     .lineLimit(1)
-                if session.hasMetadata {
-                    SessionMetadataStrip(session: session)
+
+                HStack(spacing: 8) {
+                    Text(appState.effectiveLastActivity(for: session), style: .date)
+                        .lineLimit(1)
+                    if session.hasMetadata {
+                        SessionMetadataStrip(session: session)
+                    }
                 }
+                .font(.callout.weight(.medium))
+                .foregroundStyle(.secondary)
             }
-            .font(.callout.weight(.medium))
-            .foregroundStyle(.secondary)
+
+            Spacer(minLength: 0)
+
+            SessionActivityIndicator(
+                isSending: appState.isSessionSending(session),
+                showsUnread: appState.hasUnreadIndicator(session),
+                accentColor: appState.appearance.accentColor
+            )
         }
     }
 
@@ -823,6 +832,27 @@ private struct SessionListRow: View {
         } else {
             Color.clear
         }
+    }
+}
+
+private struct SessionActivityIndicator: View {
+    let isSending: Bool
+    let showsUnread: Bool
+    let accentColor: Color
+
+    var body: some View {
+        Group {
+            if isSending {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(accentColor)
+            } else if showsUnread {
+                Circle()
+                    .fill(accentColor)
+                    .frame(width: 9, height: 9)
+            }
+        }
+        .frame(width: 14, height: 14)
     }
 }
 

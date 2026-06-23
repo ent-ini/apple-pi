@@ -24,9 +24,9 @@ struct WindowAppearanceConfigurator: NSViewRepresentable {
         guard let window else { return }
         window.alphaValue = CGFloat(min(max(appearance.effectiveWindowOpacity, 0.55), 1.0))
         window.isOpaque = false
-        window.backgroundColor = .clear
-        window.titlebarAppearsTransparent = appearance.useTransparentTitlebar
-        window.styleMask.insert(.fullSizeContentView)
+        window.backgroundColor = .windowBackgroundColor
+        window.titlebarAppearsTransparent = false
+        window.styleMask.remove(.fullSizeContentView)
         window.toolbarStyle = .unified
         window.isMovableByWindowBackground = false
     }
