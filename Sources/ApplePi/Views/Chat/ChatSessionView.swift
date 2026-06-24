@@ -78,7 +78,7 @@ struct ChatSessionView: View {
 
             HStack(alignment: .bottom, spacing: 10) {
                 composerIconButton(
-                    systemName: "plus.circle.fill",
+                    systemName: "plus",
                     enabled: !audioRecorder.isRecording,
                     action: pickAttachments
                 )
@@ -87,7 +87,7 @@ struct ChatSessionView: View {
                 composerInputSurface(controlHeight: controlHeight)
 
                 composerIconButton(
-                    systemName: audioRecorder.isRecording ? "stop.circle.fill" : "mic.circle.fill",
+                    systemName: audioRecorder.isRecording ? "stop.fill" : "mic.fill",
                     enabled: true,
                     foreground: audioRecorder.isRecording ? .red : appState.appearance.accentColor,
                     action: handleMicrophoneTapped
@@ -95,7 +95,7 @@ struct ChatSessionView: View {
                 .help(audioRecorder.isRecording ? "Stop recording" : "Record voice note")
 
                 composerIconButton(
-                    systemName: "arrow.up.circle.fill",
+                    systemName: "arrow.up",
                     enabled: canSend,
                     action: handleSendTapped
                 )
@@ -132,47 +132,32 @@ struct ChatSessionView: View {
                     .lineLimit(1)
                     .frame(minWidth: 92, alignment: .leading)
 
-                ZStack(alignment: .bottom) {
-                    if showsModelPicker {
-                        modelPickerList
-                            .padding(.bottom, 34)
-                            .transition(.opacity.combined(with: .move(edge: .bottom)))
-                            .zIndex(1)
-                    }
-
-                    Button {
-                        withAnimation(.snappy(duration: 0.18)) {
-                            showsModelPicker.toggle()
-                        }
-                    } label: {
-                        HStack(spacing: 8) {
-                            Text(runtime?.modelDisplayName ?? "model")
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                            Spacer(minLength: 0)
-                            Image(systemName: "chevron.down")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.tertiary)
-                                .rotationEffect(.degrees(showsModelPicker ? 180 : 0))
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(
-                            Capsule(style: .continuous)
-                                .fill(Color.primary.opacity(0.06))
-                        )
-                        .overlay(
-                            Capsule(style: .continuous)
-                                .stroke(Color.primary.opacity(0.1), lineWidth: 1)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(session.sessionID == nil)
-                }
-                .frame(maxWidth: .infinity)
+                Spacer(minLength: 0)
 
                 Button {
+                    if session.availableModels.isEmpty {
+                        appState.refreshAvailableModels(for: session, force: true)
+                    }
+                    withAnimation(.snappy(duration: 0.18)) {
+                        showsModelPicker.toggle()
+                    }
+                } label: {
+                    statusPill(title: runtime?.modelDisplayName ?? "model", showsChevron: true, chevronExpanded: showsModelPicker)
+                }
+                .buttonStyle(.plain)
+                .disabled(session.sessionID == nil)
+                .overlay(alignment: .bottomTrailing) {
+                    if showsModelPicker {
+                        modelPickerList
+                            .offset(y: -30)
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
+                            .zIndex(5)
+                    }
+                }
+                .zIndex(5)
+
+                Button {
+                    showsModelPicker = false
                     appState.cycleThinkingLevel(in: session)
                 } label: {
                     statusPill(title: "thinking: \(runtime?.thinkingLevel ?? "off")")
@@ -201,55 +186,57 @@ struct ChatSessionView: View {
     }
 
     private var modelPickerList: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if groupedModels.isEmpty {
-                Text("Loading models…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-            } else {
-                ForEach(groupedModels, id: \.provider) { group in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(group.provider)
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.tertiary)
-                            .padding(.horizontal, 2)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 4) {
+                if groupedModels.isEmpty {
+                    Text("Loading models…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                } else {
+                    ForEach(groupedModels, id: \.provider) { group in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(group.provider)
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                                .padding(.horizontal, 2)
 
-                        ForEach(group.models) { model in
-                            Button {
-                                withAnimation(.snappy(duration: 0.18)) {
-                                    showsModelPicker = false
-                                }
-                                appState.selectModel(model, in: session)
-                            } label: {
-                                HStack(spacing: 8) {
-                                    Text(model.shortLabel)
-                                        .font(.caption.monospaced())
-                                        .foregroundStyle(isCurrentModel(model) ? appState.appearance.accentColor : .secondary)
-                                        .lineLimit(1)
-                                    Spacer(minLength: 0)
-                                    if isCurrentModel(model) {
-                                        Image(systemName: "checkmark")
-                                            .font(.caption2.weight(.bold))
-                                            .foregroundStyle(appState.appearance.accentColor)
+                            ForEach(group.models) { model in
+                                Button {
+                                    withAnimation(.snappy(duration: 0.18)) {
+                                        showsModelPicker = false
                                     }
+                                    appState.selectModel(model, in: session)
+                                } label: {
+                                    HStack(spacing: 8) {
+                                        Text(model.shortLabel)
+                                            .font(.caption.monospaced())
+                                            .foregroundStyle(isCurrentModel(model) ? appState.appearance.accentColor : .secondary)
+                                            .lineLimit(1)
+                                        Spacer(minLength: 0)
+                                        if isCurrentModel(model) {
+                                            Image(systemName: "checkmark")
+                                                .font(.caption2.weight(.bold))
+                                                .foregroundStyle(appState.appearance.accentColor)
+                                        }
+                                    }
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 5)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .fill(isCurrentModel(model) ? appState.appearance.accentColor.opacity(0.1) : Color.clear)
+                                    )
                                 }
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .fill(isCurrentModel(model) ? appState.appearance.accentColor.opacity(0.1) : Color.clear)
-                                )
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
             }
+            .padding(8)
         }
-        .padding(8)
-        .frame(maxWidth: 360, maxHeight: 220, alignment: .leading)
+        .frame(width: 220, maxHeight: 220, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(.regularMaterial)
@@ -265,21 +252,29 @@ struct ChatSessionView: View {
         session.runtimeState?.provider == model.provider && session.runtimeState?.modelID == model.modelID
     }
 
-    private func statusPill(title: String) -> some View {
-        Text(title)
-            .font(.caption.monospaced())
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(Color.primary.opacity(0.06))
-            )
-            .overlay(
-                Capsule(style: .continuous)
-                    .stroke(Color.primary.opacity(0.1), lineWidth: 1)
-            )
+    private func statusPill(title: String, showsChevron: Bool = false, chevronExpanded: Bool = false) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            if showsChevron {
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(chevronExpanded ? 180 : 0))
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.primary.opacity(0.06))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+        )
     }
 
     private func formatCompactTokenCount(_ value: Int?) -> String {
@@ -352,9 +347,11 @@ struct ChatSessionView: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 31, weight: .medium))
+                .font(.system(size: 21, weight: .semibold))
                 .foregroundStyle((foreground ?? appState.appearance.accentColor).opacity(enabled ? 1 : 0.28))
-                .frame(width: 32, height: 32)
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
+                .padding(2)
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
