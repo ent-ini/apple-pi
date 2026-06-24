@@ -177,79 +177,30 @@ struct ChatSessionView: View {
         return "↓\(formatCompactTokenCount(tokens.output)) ↑\(formatCompactTokenCount(tokens.input)) \(used)/\(window)"
     }
 
-    private var groupedModels: [(provider: String, models: [PiModelOption])] {
+    private var groupedModels: [ModelGroup] {
         Dictionary(grouping: session.availableModels, by: \.provider)
             .map { key, value in
-                (provider: key, models: value.sorted { $0.modelID.localizedCaseInsensitiveCompare($1.modelID) == .orderedAscending })
+                ModelGroup(
+                    provider: key,
+                    models: value.sorted { $0.modelID.localizedCaseInsensitiveCompare($1.modelID) == .orderedAscending }
+                )
             }
             .sorted { $0.provider.localizedCaseInsensitiveCompare($1.provider) == .orderedAscending }
     }
 
     private var modelPickerList: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 4) {
-                if groupedModels.isEmpty {
-                    Text("Loading models…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
-                } else {
-                    ForEach(groupedModels, id: \.provider) { group in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(group.provider)
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.tertiary)
-                                .padding(.horizontal, 2)
-
-                            ForEach(group.models) { model in
-                                Button {
-                                    withAnimation(.snappy(duration: 0.18)) {
-                                        showsModelPicker = false
-                                    }
-                                    appState.selectModel(model, in: session)
-                                } label: {
-                                    HStack(spacing: 8) {
-                                        Text(model.shortLabel)
-                                            .font(.caption.monospaced())
-                                            .foregroundStyle(isCurrentModel(model) ? appState.appearance.accentColor : .secondary)
-                                            .lineLimit(1)
-                                        Spacer(minLength: 0)
-                                        if isCurrentModel(model) {
-                                            Image(systemName: "checkmark")
-                                                .font(.caption2.weight(.bold))
-                                                .foregroundStyle(appState.appearance.accentColor)
-                                        }
-                                    }
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 5)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                            .fill(isCurrentModel(model) ? appState.appearance.accentColor.opacity(0.1) : Color.clear)
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
+        ModelPickerDropdown(
+            groupedModels: groupedModels,
+            accentColor: appState.appearance.accentColor,
+            currentProvider: session.runtimeState?.provider,
+            currentModelID: session.runtimeState?.modelID,
+            onSelect: { model in
+                withAnimation(.snappy(duration: 0.18)) {
+                    showsModelPicker = false
                 }
+                appState.selectModel(model, in: session)
             }
-            .padding(8)
-        }
-        .frame(width: 220, maxHeight: 220, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.regularMaterial)
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.primary.opacity(0.12), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.18), radius: 16, y: 8)
-    }
-
-    private func isCurrentModel(_ model: PiModelOption) -> Bool {
-        session.runtimeState?.provider == model.provider && session.runtimeState?.modelID == model.modelID
     }
 
     private func statusPill(title: String, showsChevron: Bool = false, chevronExpanded: Bool = false) -> some View {
@@ -548,6 +499,117 @@ struct ChatSessionView: View {
             return
         }
         NSWorkspace.shared.open(url)
+    }
+}
+
+private struct ModelGroup: Identifiable {
+    let provider: String
+    let models: [PiModelOption]
+
+    var id: String { provider }
+}
+
+private struct ModelPickerDropdown: View {
+    let groupedModels: [ModelGroup]
+    let accentColor: Color
+    let currentProvider: String?
+    let currentModelID: String?
+    let onSelect: (PiModelOption) -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 4) {
+                if groupedModels.isEmpty {
+                    Text("Loading models…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                } else {
+                    ForEach(groupedModels) { group in
+                        ModelPickerGroupSection(
+                            group: group,
+                            accentColor: accentColor,
+                            currentProvider: currentProvider,
+                            currentModelID: currentModelID,
+                            onSelect: onSelect
+                        )
+                    }
+                }
+            }
+            .padding(8)
+        }
+        .frame(width: 220, maxHeight: 220, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.regularMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.18), radius: 16, y: 8)
+    }
+}
+
+private struct ModelPickerGroupSection: View {
+    let group: ModelGroup
+    let accentColor: Color
+    let currentProvider: String?
+    let currentModelID: String?
+    let onSelect: (PiModelOption) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(group.provider)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 2)
+
+            ForEach(group.models) { model in
+                ModelPickerRow(
+                    model: model,
+                    accentColor: accentColor,
+                    isCurrent: isCurrent(model),
+                    onSelect: { onSelect(model) }
+                )
+            }
+        }
+    }
+
+    private func isCurrent(_ model: PiModelOption) -> Bool {
+        currentProvider == model.provider && currentModelID == model.modelID
+    }
+}
+
+private struct ModelPickerRow: View {
+    let model: PiModelOption
+    let accentColor: Color
+    let isCurrent: Bool
+    let onSelect: () -> Void
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 8) {
+                Text(model.shortLabel)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(isCurrent ? accentColor : .secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if isCurrent {
+                    Image(systemName: "checkmark")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(accentColor)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isCurrent ? accentColor.opacity(0.1) : Color.clear)
+            )
+        }
+        .buttonStyle(.plain)
     }
 }
 
