@@ -38,6 +38,7 @@ extension AppAppearance {
 /// onto a live `NSWindow`. Isolated from the decision logic so the
 /// decision is unit-testable in headless environments.
 enum AppAppearanceWindowApplier {
+    @MainActor
     static func apply(_ settings: WindowAppearanceSettings, to window: NSWindow) {
         window.alphaValue = settings.alpha
         window.isOpaque = settings.isOpaque
@@ -52,6 +53,7 @@ enum AppAppearanceWindowApplier {
         window.isMovableByWindowBackground = settings.isMovableByWindowBackground
     }
 
+    @MainActor
     static func apply(_ appearance: AppAppearance, to window: NSWindow) {
         apply(appearance.windowAppearanceSettings, to: window)
     }
@@ -79,8 +81,9 @@ struct WindowAppearanceConfigurator: NSViewRepresentable {
     }
 }
 
+@MainActor
 final class WindowAppearanceHostView: NSView {
-    var applyAppearance: ((NSWindow?) -> Void)?
+    var applyAppearance: (@MainActor (NSWindow?) -> Void)?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()

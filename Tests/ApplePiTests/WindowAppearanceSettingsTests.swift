@@ -37,6 +37,7 @@ import Testing
     #expect(settings.alpha <= 1.0)
 }
 
+@MainActor
 @Test func windowAppearanceSettingsApplyToWindowMutatesExpectedProperties() {
     let appearance = AppAppearance()
     let window = NSWindow(
@@ -55,6 +56,7 @@ import Testing
     #expect(window.isMovableByWindowBackground == false)
 }
 
+@MainActor
 @Test func windowAppearanceSettingsApplyToWindowTogglesFullSizeContentView() {
     let window = NSWindow(
         contentRect: NSRect(x: 0, y: 0, width: 200, height: 200),
