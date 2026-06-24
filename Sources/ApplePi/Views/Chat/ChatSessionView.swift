@@ -111,60 +111,46 @@ struct ChatSessionView: View {
     @ViewBuilder
     private var sessionStatusStrip: some View {
         let runtime = session.runtimeState
-        let contextPercent = max(0, min((runtime?.contextUsage?.percent ?? 0) / 100, 1))
 
-        VStack(alignment: .leading, spacing: 6) {
-            GeometryReader { proxy in
-                ZStack(alignment: .leading) {
-                    Capsule(style: .continuous)
-                        .fill(Color.primary.opacity(0.08))
-                    Capsule(style: .continuous)
-                        .fill(appState.appearance.accentColor.opacity(0.9))
-                        .frame(width: proxy.size.width * contextPercent)
+        HStack(alignment: .center, spacing: 8) {
+            Text(statusMetricsText)
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(minWidth: 92, alignment: .leading)
+
+            Spacer(minLength: 0)
+
+            Button {
+                if session.availableModels.isEmpty {
+                    appState.refreshAvailableModels(for: session, force: true)
+                }
+                withAnimation(.snappy(duration: 0.18)) {
+                    showsModelPicker.toggle()
+                }
+            } label: {
+                statusPill(title: runtime?.modelDisplayName ?? "model", showsChevron: true, chevronExpanded: showsModelPicker)
+            }
+            .buttonStyle(.plain)
+            .disabled(session.sessionID == nil)
+            .overlay(alignment: .bottomTrailing) {
+                if showsModelPicker {
+                    modelPickerList
+                        .offset(y: -30)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        .zIndex(5)
                 }
             }
-            .frame(height: 4)
+            .zIndex(5)
 
-            HStack(alignment: .center, spacing: 8) {
-                Text(statusMetricsText)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .frame(minWidth: 92, alignment: .leading)
-
-                Spacer(minLength: 0)
-
-                Button {
-                    if session.availableModels.isEmpty {
-                        appState.refreshAvailableModels(for: session, force: true)
-                    }
-                    withAnimation(.snappy(duration: 0.18)) {
-                        showsModelPicker.toggle()
-                    }
-                } label: {
-                    statusPill(title: runtime?.modelDisplayName ?? "model", showsChevron: true, chevronExpanded: showsModelPicker)
-                }
-                .buttonStyle(.plain)
-                .disabled(session.sessionID == nil)
-                .overlay(alignment: .bottomTrailing) {
-                    if showsModelPicker {
-                        modelPickerList
-                            .offset(y: -30)
-                            .transition(.opacity.combined(with: .move(edge: .bottom)))
-                            .zIndex(5)
-                    }
-                }
-                .zIndex(5)
-
-                Button {
-                    showsModelPicker = false
-                    appState.cycleThinkingLevel(in: session)
-                } label: {
-                    statusPill(title: "thinking: \(runtime?.thinkingLevel ?? "off")")
-                }
-                .buttonStyle(.plain)
-                .disabled(session.sessionID == nil)
+            Button {
+                showsModelPicker = false
+                appState.cycleThinkingLevel(in: session)
+            } label: {
+                statusPill(title: displayedThinkingLevel)
             }
+            .buttonStyle(.plain)
+            .disabled(session.sessionID == nil)
         }
     }
 
@@ -175,6 +161,11 @@ struct ChatSessionView: View {
         let used = formatCompactTokenCount(context?.tokens)
         let window = formatCompactTokenCount(context?.contextWindow)
         return "↓\(formatCompactTokenCount(tokens.output)) ↑\(formatCompactTokenCount(tokens.input)) \(used)/\(window)"
+    }
+
+    private var displayedThinkingLevel: String {
+        let level = session.runtimeState?.thinkingLevel ?? "off"
+        return level == "off" ? "none" : level
     }
 
     private var groupedModels: [ModelGroup] {
@@ -539,8 +530,8 @@ private struct ModelPickerDropdown: View {
             }
             .padding(8)
         }
-        .frame(width: 220)
-        .frame(maxHeight: 220, alignment: .leading)
+        .frame(width: 260)
+        .frame(maxHeight: 340, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(.regularMaterial)
