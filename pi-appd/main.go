@@ -105,12 +105,15 @@ type attachmentReference struct {
 }
 
 type createSessionRequest struct {
-	WorkingDirectory string                `json:"workingDirectory"`
-	SessionName      string                `json:"sessionName"`
-	IsTemporary      bool                  `json:"isTemporary"`
-	Prompt           string                `json:"prompt"`
-	ForkPath         string                `json:"forkPath"`
-	Attachments      []attachmentReference `json:"attachments"`
+	WorkingDirectory     string                `json:"workingDirectory"`
+	SessionName          string                `json:"sessionName"`
+	IsTemporary          bool                  `json:"isTemporary"`
+	Prompt               string                `json:"prompt"`
+	ForkPath             string                `json:"forkPath"`
+	Attachments          []attachmentReference `json:"attachments"`
+	InitialModelProvider string                `json:"initialModelProvider"`
+	InitialModelID       string                `json:"initialModelId"`
+	InitialThinkingLevel string                `json:"initialThinkingLevel"`
 }
 
 type sendSessionRequest struct {
@@ -188,6 +191,7 @@ type rpcSimpleCommand struct {
 	Type     string `json:"type"`
 	Provider string `json:"provider,omitempty"`
 	ModelID  string `json:"modelId,omitempty"`
+	Level    string `json:"level,omitempty"`
 }
 
 type rpcModelRecord struct {
@@ -228,6 +232,11 @@ type sessionRuntimeResponse struct {
 	ThinkingLevel string               `json:"thinkingLevel"`
 	Tokens        runtimeTokens        `json:"tokens"`
 	ContextUsage  *runtimeContextUsage `json:"contextUsage,omitempty"`
+}
+
+type sessionDefaultsResponse struct {
+	Runtime sessionRuntimeResponse `json:"runtime"`
+	Models  []rpcModelRecord       `json:"models"`
 }
 
 type parsedSession struct {
@@ -277,6 +286,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", srv.handleHealthz)
+	mux.HandleFunc("/runtime/defaults", srv.handleRuntimeDefaults)
 	mux.HandleFunc("/sessions", srv.handleSessions)
 	mux.HandleFunc("/sessions/", srv.handleSessionSubroutes)
 	mux.HandleFunc("/files", srv.handleFiles)
@@ -314,6 +324,24 @@ func (s *server) loggingMiddleware(next http.Handler) http.Handler {
 
 func (s *server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *server) handleRuntimeDefaults(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	cwd := strings.TrimSpace(r.URL.Query().Get("cwd"))
+	if cwd == "" {
+		cwd = os.Getenv("HOME")
+	}
+	cwd = expandHome(cwd)
+	payload, err := s.loadDefaultRuntime(cwd)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, payload)
 }
 
 func (s *server) handleSessions(w http.ResponseWriter, r *http.Request) {
@@ -625,9 +653,21 @@ func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	} else if strings.TrimSpace(request.SessionName) != "" {
 		args = append(args, "--name", strings.TrimSpace(request.SessionName))
 	}
+	prePromptCommands := make([]any, 0, 2)
+	if provider := strings.TrimSpace(request.InitialModelProvider); provider != "" {
+		modelID := strings.TrimSpace(request.InitialModelID)
+		if modelID == "" {
+			writeError(w, http.StatusBadRequest, "initialModelId is required when initialModelProvider is set")
+			return
+		}
+		prePromptCommands = append(prePromptCommands, rpcSimpleCommand{Type: "set_model", Provider: provider, ModelID: modelID})
+	}
+	if level := strings.TrimSpace(request.InitialThinkingLevel); level != "" {
+		prePromptCommands = append(prePromptCommands, rpcSimpleCommand{Type: "set_thinking_level", Level: level})
+	}
 
 	title := firstNonBlank(strings.TrimSpace(request.SessionName), filepath.Base(cwd), "Pi")
-	if err := s.streamPiRPCCommand(w, cwd, args, rpcPrompt, nil, title, cwd); err != nil {
+	if err := s.streamPiRPCCommand(w, cwd, args, rpcPrompt, prePromptCommands, nil, title, cwd); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -658,7 +698,7 @@ func (s *server) handleSessionSend(w http.ResponseWriter, r *http.Request, recor
 		return
 	}
 	args := []string{"--mode", "rpc", "--session", record.FilePath}
-	if err := s.streamPiRPCCommand(w, cwd, args, rpcPrompt, binding, record.Title, record.WorkingDirectory); err != nil {
+	if err := s.streamPiRPCCommand(w, cwd, args, rpcPrompt, nil, binding, record.Title, record.WorkingDirectory); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -839,6 +879,7 @@ func (s *server) streamPiRPCCommand(
 	cwd string,
 	args []string,
 	prompt rpcPromptCommand,
+	prePromptCommands []any,
 	binding *sessionBoundRecord,
 	fallbackTitle string,
 	fallbackWorkingDirectory string,
@@ -889,6 +930,18 @@ func (s *server) streamPiRPCCommand(
 		_ = cmd.Wait()
 		<-stderrDone
 		return nil
+	}
+	for _, command := range prePromptCommands {
+		if err := writeRPCCommand(stdin, command); err != nil {
+			writeNDJSON(w, streamErrorRecord{Type: "stream_error", Error: err.Error()})
+			if flusher != nil {
+				flusher.Flush()
+			}
+			_ = stdin.Close()
+			_ = cmd.Wait()
+			<-stderrDone
+			return nil
+		}
 	}
 	if err := writeRPCCommand(stdin, prompt); err != nil {
 		writeNDJSON(w, streamErrorRecord{Type: "stream_error", Error: err.Error()})
@@ -967,7 +1020,30 @@ func (s *server) loadSessionRuntime(record sessionRecord) (sessionRuntimeRespons
 	if err != nil {
 		return sessionRuntimeResponse{}, err
 	}
+	return decodeSessionRuntimeResponse(responses)
+}
 
+func (s *server) loadDefaultRuntime(cwd string) (sessionDefaultsResponse, error) {
+	responses, err := s.runPiRPCCommandsInContext(cwd, "", []any{
+		rpcSimpleCommand{Type: "get_state"},
+		rpcSimpleCommand{Type: "get_session_stats"},
+		rpcSimpleCommand{Type: "get_available_models"},
+	})
+	if err != nil {
+		return sessionDefaultsResponse{}, err
+	}
+	runtime, err := decodeSessionRuntimeResponse(responses)
+	if err != nil {
+		return sessionDefaultsResponse{}, err
+	}
+	var models rpcAvailableModelsResponse
+	if err := decodeRPCSuccessResponse(responses, "get_available_models", &models); err != nil {
+		return sessionDefaultsResponse{}, err
+	}
+	return sessionDefaultsResponse{Runtime: runtime, Models: models.Models}, nil
+}
+
+func decodeSessionRuntimeResponse(responses map[string]rpcResponseEnvelope) (sessionRuntimeResponse, error) {
 	var state struct {
 		SessionFile   string          `json:"sessionFile"`
 		SessionID     string          `json:"sessionId"`
@@ -998,7 +1074,14 @@ func (s *server) runPiRPCCommands(record sessionRecord, commands []any) (map[str
 	if strings.TrimSpace(cwd) == "" {
 		cwd = os.Getenv("HOME")
 	}
-	args := []string{"--mode", "rpc", "--session", record.FilePath}
+	return s.runPiRPCCommandsInContext(cwd, record.FilePath, commands)
+}
+
+func (s *server) runPiRPCCommandsInContext(cwd string, sessionFile string, commands []any) (map[string]rpcResponseEnvelope, error) {
+	args := []string{"--mode", "rpc"}
+	if strings.TrimSpace(sessionFile) != "" {
+		args = append(args, "--session", sessionFile)
+	}
 	cmd := exec.Command(s.piExecutable, args...)
 	cmd.Dir = expandHome(cwd)
 	cmd.Env = append(os.Environ(), "PI_CODING_AGENT_DIR="+s.agentDir)

@@ -219,6 +219,31 @@ struct PiLaunchRequest: Hashable, Sendable {
     var sessionName: String?
     var isEphemeral: Bool
     var initialPrompt: String?
+    var initialModelProvider: String?
+    var initialModelID: String?
+    var initialThinkingLevel: String?
+
+    init(
+        workingDirectory: String? = nil,
+        sessionPath: String? = nil,
+        forkPath: String? = nil,
+        sessionName: String? = nil,
+        isEphemeral: Bool = false,
+        initialPrompt: String? = nil,
+        initialModelProvider: String? = nil,
+        initialModelID: String? = nil,
+        initialThinkingLevel: String? = nil
+    ) {
+        self.workingDirectory = workingDirectory
+        self.sessionPath = sessionPath
+        self.forkPath = forkPath
+        self.sessionName = sessionName
+        self.isEphemeral = isEphemeral
+        self.initialPrompt = initialPrompt
+        self.initialModelProvider = initialModelProvider
+        self.initialModelID = initialModelID
+        self.initialThinkingLevel = initialThinkingLevel
+    }
 
     static func resume(_ session: PiSessionSummary) -> PiLaunchRequest {
         PiLaunchRequest(

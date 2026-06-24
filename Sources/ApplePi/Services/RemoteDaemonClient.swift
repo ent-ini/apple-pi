@@ -111,6 +111,19 @@ struct RemoteDaemonClient {
         return response.events.compactMap { SessionEventParser.decode(line: $0.raw, at: $0.line) }
     }
 
+    func loadSessionDefaults(host: PiHostConfiguration, workingDirectory: String?, tokenOverride: String? = nil) async throws -> SessionDefaultsSnapshot {
+        let response: SessionDefaultsResponse = try await send(
+            host: host,
+            path: "/runtime/defaults",
+            queryItems: workingDirectory?.nilIfBlank.map { [URLQueryItem(name: "cwd", value: $0)] } ?? [],
+            tokenOverride: tokenOverride
+        )
+        return SessionDefaultsSnapshot(
+            runtimeState: response.runtime.runtimeState,
+            availableModels: response.models.map(\.piModelOption)
+        )
+    }
+
     func loadSessionRuntime(host: PiHostConfiguration, sessionID: String, tokenOverride: String? = nil) async throws -> SessionRuntimeState {
         let response: SessionRuntimeResponse = try await send(
             host: host,
@@ -188,7 +201,10 @@ struct RemoteDaemonClient {
             isTemporary: request.isEphemeral,
             prompt: prompt,
             forkPath: request.forkPath,
-            attachments: attachments
+            attachments: attachments,
+            initialModelProvider: request.initialModelProvider,
+            initialModelId: request.initialModelID,
+            initialThinkingLevel: request.initialThinkingLevel
         )
         try await stream(
             host: host,
@@ -716,6 +732,16 @@ private struct RuntimeContextUsage: Decodable {
     let percent: Double?
 }
 
+struct SessionDefaultsSnapshot: Sendable {
+    let runtimeState: SessionRuntimeState
+    let availableModels: [PiModelOption]
+}
+
+private struct SessionDefaultsResponse: Decodable {
+    let runtime: SessionRuntimeResponse
+    let models: [RuntimeModelRecord]
+}
+
 private struct AvailableModelsResponse: Decodable {
     let models: [RuntimeModelRecord]
 }
@@ -734,6 +760,9 @@ private struct CreateSessionRequestBody: Encodable {
     let prompt: String
     let forkPath: String?
     let attachments: [UploadedAttachmentReference]
+    let initialModelProvider: String?
+    let initialModelId: String?
+    let initialThinkingLevel: String?
 }
 
 private struct SendSessionRequestBody: Encodable {

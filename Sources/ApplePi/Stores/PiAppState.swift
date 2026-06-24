@@ -489,12 +489,13 @@ final class PiAppState: ObservableObject {
             initialPrompt: nil
         )
         let key = "new:\(UUID().uuidString)"
-        chatWorkspace.openTab(
+        let tab = chatWorkspace.openTab(
             key: key,
             title: effectiveName,
             sessionPath: nil,
             launchRequest: request
         )
+        hydratePendingSessionDefaults(for: tab)
         statusMessage = isTemporary ? "Started temporary Pi session" : "Started new Pi session"
     }
 
@@ -799,10 +800,44 @@ final class PiAppState: ObservableObject {
         }
     }
 
-    func refreshSessionRuntime(for session: ChatSession, updatesStatus: Bool = false) {
+    func hydratePendingSessionDefaults(for session: ChatSession) {
         guard host.usesRemoteDaemonTransport,
-              let sessionID = session.sessionID?.nilIfBlank else {
+              session.sessionID == nil,
+              let launchRequest = session.launchRequest else { return }
+
+        let remoteHost = host
+        Task { [weak self, weak session] in
+            do {
+                let snapshot = try await RemoteDaemonClient().loadSessionDefaults(
+                    host: remoteHost,
+                    workingDirectory: launchRequest.workingDirectory
+                )
+                await MainActor.run {
+                    guard let self, let session, self.host == remoteHost, session.sessionID == nil else { return }
+                    var request = session.launchRequest ?? launchRequest
+                    if request.initialModelProvider == nil { request.initialModelProvider = snapshot.runtimeState.provider }
+                    if request.initialModelID == nil { request.initialModelID = snapshot.runtimeState.modelID }
+                    if request.initialThinkingLevel == nil { request.initialThinkingLevel = snapshot.runtimeState.thinkingLevel }
+                    session.updateLaunchRequest(request)
+                    session.updateRuntimeState(snapshot.runtimeState)
+                    session.updateAvailableModels(snapshot.availableModels)
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self else { return }
+                    self.statusMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func refreshSessionRuntime(for session: ChatSession, updatesStatus: Bool = false) {
+        guard host.usesRemoteDaemonTransport else {
             session.updateRuntimeState(nil)
+            return
+        }
+        guard let sessionID = session.sessionID?.nilIfBlank else {
+            hydratePendingSessionDefaults(for: session)
             return
         }
 
@@ -829,9 +864,12 @@ final class PiAppState: ObservableObject {
     }
 
     func refreshAvailableModels(for session: ChatSession, force: Bool = false) {
-        guard host.usesRemoteDaemonTransport,
-              let sessionID = session.sessionID?.nilIfBlank else {
+        guard host.usesRemoteDaemonTransport else {
             session.updateAvailableModels([])
+            return
+        }
+        guard let sessionID = session.sessionID?.nilIfBlank else {
+            hydratePendingSessionDefaults(for: session)
             return
         }
         if !force, !session.availableModels.isEmpty { return }
@@ -857,8 +895,36 @@ final class PiAppState: ObservableObject {
     }
 
     func selectModel(_ model: PiModelOption, in session: ChatSession) {
-        guard host.usesRemoteDaemonTransport,
-              let sessionID = session.sessionID?.nilIfBlank else {
+        guard host.usesRemoteDaemonTransport else {
+            statusMessage = "Model selection is unavailable for this host."
+            return
+        }
+
+        if session.sessionID == nil {
+            if var request = session.launchRequest {
+                request.initialModelProvider = model.provider
+                request.initialModelID = model.modelID
+                session.updateLaunchRequest(request)
+            }
+            if let current = session.runtimeState {
+                session.updateRuntimeState(
+                    SessionRuntimeState(
+                        sessionID: current.sessionID,
+                        sessionPath: current.sessionPath,
+                        provider: model.provider,
+                        modelID: model.modelID,
+                        modelName: model.name,
+                        thinkingLevel: current.thinkingLevel,
+                        tokens: current.tokens,
+                        contextUsage: current.contextUsage
+                    )
+                )
+            }
+            statusMessage = "Model: \(model.shortLabel)"
+            return
+        }
+
+        guard let sessionID = session.sessionID?.nilIfBlank else {
             statusMessage = "Model selection is available after the session starts."
             return
         }
@@ -904,8 +970,36 @@ final class PiAppState: ObservableObject {
     }
 
     func cycleThinkingLevel(in session: ChatSession) {
-        guard host.usesRemoteDaemonTransport,
-              let sessionID = session.sessionID?.nilIfBlank else {
+        guard host.usesRemoteDaemonTransport else {
+            statusMessage = "Thinking level is unavailable for this host."
+            return
+        }
+
+        if session.sessionID == nil {
+            let nextLevel = nextThinkingLevel(after: session.runtimeState?.thinkingLevel ?? "off")
+            if var request = session.launchRequest {
+                request.initialThinkingLevel = nextLevel
+                session.updateLaunchRequest(request)
+            }
+            if let current = session.runtimeState {
+                session.updateRuntimeState(
+                    SessionRuntimeState(
+                        sessionID: current.sessionID,
+                        sessionPath: current.sessionPath,
+                        provider: current.provider,
+                        modelID: current.modelID,
+                        modelName: current.modelName,
+                        thinkingLevel: nextLevel,
+                        tokens: current.tokens,
+                        contextUsage: current.contextUsage
+                    )
+                )
+            }
+            statusMessage = "Thinking: \(nextLevel)"
+            return
+        }
+
+        guard let sessionID = session.sessionID?.nilIfBlank else {
             statusMessage = "Thinking level is available after the session starts."
             return
         }

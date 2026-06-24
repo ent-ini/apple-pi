@@ -25,6 +25,10 @@ struct ChatSessionView: View {
         )
     }
 
+    private var canAdjustSessionOptions: Bool {
+        session.sessionID != nil || session.launchRequest != nil
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             MessageListView(session: session)
@@ -115,7 +119,7 @@ struct ChatSessionView: View {
         HStack(alignment: .center, spacing: 8) {
             Text(statusMetricsText)
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary)
                 .lineLimit(1)
                 .frame(minWidth: 92, alignment: .leading)
 
@@ -132,7 +136,7 @@ struct ChatSessionView: View {
                 statusPill(title: runtime?.modelDisplayName ?? "model", showsChevron: true, chevronExpanded: showsModelPicker)
             }
             .buttonStyle(.plain)
-            .disabled(session.sessionID == nil)
+            .disabled(!canAdjustSessionOptions)
             .overlay(alignment: .bottomTrailing) {
                 if showsModelPicker {
                     modelPickerList
@@ -150,7 +154,7 @@ struct ChatSessionView: View {
                 statusPill(title: displayedThinkingLevel)
             }
             .buttonStyle(.plain)
-            .disabled(session.sessionID == nil)
+            .disabled(!canAdjustSessionOptions)
         }
     }
 
@@ -198,7 +202,7 @@ struct ChatSessionView: View {
         HStack(spacing: 6) {
             Text(title)
                 .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary)
                 .lineLimit(1)
             if showsChevron {
                 Image(systemName: "chevron.down")
