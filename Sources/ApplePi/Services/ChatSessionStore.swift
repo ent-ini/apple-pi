@@ -16,6 +16,8 @@ final class ChatSession: ObservableObject, Identifiable {
     @Published private(set) var loadError: String?
     @Published private(set) var isSending: Bool = false
     @Published private(set) var streamRevision: Int = 0
+    @Published private(set) var runtimeState: SessionRuntimeState?
+    @Published private(set) var availableModels: [PiModelOption] = []
 
     /// Path to the on-disk jsonl, if this session is backed by a file. For
     /// brand-new sessions the path is assigned once the first turn creates it.
@@ -97,10 +99,20 @@ final class ChatSession: ObservableObject, Identifiable {
         self.sessionPath = sessionPath
         self.eventLoader = eventLoader
         self.launchRequest = nil
+        runtimeState = nil
+        availableModels = []
     }
 
     func updateLaunchRequest(_ launchRequest: PiLaunchRequest?) {
         self.launchRequest = launchRequest
+    }
+
+    func updateRuntimeState(_ runtimeState: SessionRuntimeState?) {
+        self.runtimeState = runtimeState
+    }
+
+    func updateAvailableModels(_ availableModels: [PiModelOption]) {
+        self.availableModels = availableModels
     }
 
     func beginSending(prompt: String, attachments: [ChatAttachment] = []) {

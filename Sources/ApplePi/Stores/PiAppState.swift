@@ -772,6 +772,8 @@ final class PiAppState: ObservableObject {
             // so the persisted tabs snapshot is now stale. Save again.
             schedulePersistedChatTabsSave()
             scheduleCatalogRefresh(after: .milliseconds(50))
+            refreshSessionRuntime(for: session, updatesStatus: false)
+            refreshAvailableModels(for: session)
         case .sessionHeader(let meta):
             if session.sessionID == nil {
                 let previousAliases = sessionAliases(for: session)
@@ -783,6 +785,8 @@ final class PiAppState: ObservableObject {
                 migrateSessionState(from: previousAliases, to: sessionAliases(for: session))
                 schedulePersistedChatTabsSave()
                 scheduleCatalogRefresh(after: .milliseconds(50))
+                refreshSessionRuntime(for: session, updatesStatus: false)
+                refreshAvailableModels(for: session)
             }
         case .message(let message, let isFinal):
             if message.role == .assistant {
@@ -790,6 +794,122 @@ final class PiAppState: ObservableObject {
             }
         case .streamError(let message):
             statusMessage = message
+        }
+    }
+
+    func refreshSessionRuntime(for session: ChatSession, updatesStatus: Bool = false) {
+        guard host.usesRemoteDaemonTransport,
+              let sessionID = session.sessionID?.nilIfBlank else {
+            session.updateRuntimeState(nil)
+            return
+        }
+
+        let remoteHost = host
+        Task { [weak self, weak session] in
+            do {
+                let runtime = try await RemoteDaemonClient().loadSessionRuntime(
+                    host: remoteHost,
+                    sessionID: sessionID
+                )
+                await MainActor.run {
+                    guard let self, let session, self.host == remoteHost else { return }
+                    session.updateRuntimeState(runtime)
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self else { return }
+                    if updatesStatus {
+                        self.statusMessage = error.localizedDescription
+                    }
+                }
+            }
+        }
+    }
+
+    func refreshAvailableModels(for session: ChatSession, force: Bool = false) {
+        guard host.usesRemoteDaemonTransport,
+              let sessionID = session.sessionID?.nilIfBlank else {
+            session.updateAvailableModels([])
+            return
+        }
+        if !force, !session.availableModels.isEmpty { return }
+
+        let remoteHost = host
+        Task { [weak self, weak session] in
+            do {
+                let models = try await RemoteDaemonClient().loadAvailableModels(
+                    host: remoteHost,
+                    sessionID: sessionID
+                )
+                await MainActor.run {
+                    guard let self, let session, self.host == remoteHost else { return }
+                    session.updateAvailableModels(models)
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self else { return }
+                    self.statusMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func selectModel(_ model: PiModelOption, in session: ChatSession) {
+        guard host.usesRemoteDaemonTransport,
+              let sessionID = session.sessionID?.nilIfBlank else {
+            statusMessage = "Model selection is available after the session starts."
+            return
+        }
+
+        let remoteHost = host
+        statusMessage = "Switching model..."
+        Task { [weak self, weak session] in
+            do {
+                let runtime = try await RemoteDaemonClient().setSessionModel(
+                    host: remoteHost,
+                    sessionID: sessionID,
+                    provider: model.provider,
+                    modelID: model.modelID
+                )
+                await MainActor.run {
+                    guard let self, let session, self.host == remoteHost else { return }
+                    session.updateRuntimeState(runtime)
+                    self.statusMessage = "Model: \(runtime.modelDisplayName)"
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self else { return }
+                    self.statusMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func cycleThinkingLevel(in session: ChatSession) {
+        guard host.usesRemoteDaemonTransport,
+              let sessionID = session.sessionID?.nilIfBlank else {
+            statusMessage = "Thinking level is available after the session starts."
+            return
+        }
+
+        let remoteHost = host
+        Task { [weak self, weak session] in
+            do {
+                let runtime = try await RemoteDaemonClient().cycleSessionThinkingLevel(
+                    host: remoteHost,
+                    sessionID: sessionID
+                )
+                await MainActor.run {
+                    guard let self, let session, self.host == remoteHost else { return }
+                    session.updateRuntimeState(runtime)
+                    self.statusMessage = "Thinking: \(runtime.thinkingLevel)"
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self else { return }
+                    self.statusMessage = error.localizedDescription
+                }
+            }
         }
     }
 
@@ -1146,17 +1266,29 @@ final class PiAppState: ObservableObject {
         let remoteHost = host
         let selectedTabID = session.id
         do {
-            let delta = try await RemoteDaemonClient().loadSessionEvents(
+            async let deltaTask = RemoteDaemonClient().loadSessionEvents(
                 host: remoteHost,
                 sessionID: sessionID,
                 limit: nil,
                 after: after
             )
+            async let runtimeTask = RemoteDaemonClient().loadSessionRuntime(
+                host: remoteHost,
+                sessionID: sessionID
+            )
+            let (delta, runtime) = try await (deltaTask, runtimeTask)
             guard self.host == remoteHost,
                   self.chatWorkspace.selectedTab?.id == selectedTabID else {
                 return
             }
             session.appendPersistedEvents(delta)
+            session.updateRuntimeState(runtime)
+            if session.availableModels.isEmpty {
+                Task { [weak self, weak session] in
+                    guard let self, let session else { return }
+                    self.refreshAvailableModels(for: session)
+                }
+            }
         } catch {
             // Best-effort background sync: keep the current transcript and
             // let catalog polling / manual reload recover.

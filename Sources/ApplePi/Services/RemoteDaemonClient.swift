@@ -111,6 +111,54 @@ struct RemoteDaemonClient {
         return response.events.compactMap { SessionEventParser.decode(line: $0.raw, at: $0.line) }
     }
 
+    func loadSessionRuntime(host: PiHostConfiguration, sessionID: String, tokenOverride: String? = nil) async throws -> SessionRuntimeState {
+        let response: SessionRuntimeResponse = try await send(
+            host: host,
+            path: "/sessions/\(encodedPathComponent(sessionID))/runtime",
+            tokenOverride: tokenOverride
+        )
+        return response.runtimeState
+    }
+
+    func loadAvailableModels(host: PiHostConfiguration, sessionID: String, tokenOverride: String? = nil) async throws -> [PiModelOption] {
+        let response: AvailableModelsResponse = try await send(
+            host: host,
+            path: "/sessions/\(encodedPathComponent(sessionID))/models",
+            tokenOverride: tokenOverride
+        )
+        return response.models.map(\.piModelOption)
+    }
+
+    func setSessionModel(
+        host: PiHostConfiguration,
+        sessionID: String,
+        provider: String,
+        modelID: String,
+        tokenOverride: String? = nil
+    ) async throws -> SessionRuntimeState {
+        let response: SessionRuntimeResponse = try await send(
+            host: host,
+            path: "/sessions/\(encodedPathComponent(sessionID))/model",
+            method: "POST",
+            tokenOverride: tokenOverride,
+            body: SetModelRequestBody(provider: provider, modelId: modelID),
+            accept: "application/json"
+        )
+        return response.runtimeState
+    }
+
+    func cycleSessionThinkingLevel(host: PiHostConfiguration, sessionID: String, tokenOverride: String? = nil) async throws -> SessionRuntimeState {
+        let response: SessionRuntimeResponse = try await send(
+            host: host,
+            path: "/sessions/\(encodedPathComponent(sessionID))/thinking/cycle",
+            method: "POST",
+            tokenOverride: tokenOverride,
+            body: EmptyRequestBody(),
+            accept: "application/json"
+        )
+        return response.runtimeState
+    }
+
     func listDirectories(host: PiHostConfiguration, path: String?, tokenOverride: String? = nil) async throws -> RemoteDirectoryListing {
         let response: FileListResponse = try await send(
             host: host,
@@ -246,6 +294,42 @@ struct RemoteDaemonClient {
             queryItems: queryItems,
             tokenOverride: tokenOverride,
             accept: "application/json"
+        )
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw RemoteDaemonError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let message = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw RemoteDaemonError.requestFailed(status: httpResponse.statusCode, body: message)
+        }
+
+        let decoder = Self.makeCatalogDecoder()
+        do {
+            return try decoder.decode(Response.self, from: data)
+        } catch {
+            throw RemoteDaemonError.decodingFailed(error.localizedDescription)
+        }
+    }
+
+    private func send<Response: Decodable, Body: Encodable>(
+        host: PiHostConfiguration,
+        path: String,
+        method: String,
+        queryItems: [URLQueryItem] = [],
+        tokenOverride: String? = nil,
+        body: Body,
+        accept: String
+    ) async throws -> Response {
+        let request = try makeRequest(
+            host: host,
+            path: path,
+            method: method,
+            queryItems: queryItems,
+            tokenOverride: tokenOverride,
+            body: body,
+            accept: accept
         )
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -566,6 +650,76 @@ private struct FileItemRecord: Decodable {
     let isDirectory: Bool
 }
 
+private struct SessionRuntimeResponse: Decodable {
+    let sessionId: String?
+    let sessionFile: String?
+    let model: RuntimeModelRecord?
+    let thinkingLevel: String
+    let tokens: RuntimeTokenTotals
+    let contextUsage: RuntimeContextUsage?
+
+    var runtimeState: SessionRuntimeState {
+        SessionRuntimeState(
+            sessionID: sessionId,
+            sessionPath: sessionFile,
+            provider: model?.provider,
+            modelID: model?.id,
+            modelName: model?.name,
+            thinkingLevel: thinkingLevel,
+            tokens: SessionTokenTotals(
+                input: tokens.input,
+                output: tokens.output,
+                cacheRead: tokens.cacheRead,
+                cacheWrite: tokens.cacheWrite,
+                total: tokens.total
+            ),
+            contextUsage: contextUsage.map {
+                SessionContextUsage(
+                    tokens: $0.tokens,
+                    contextWindow: $0.contextWindow,
+                    percent: $0.percent
+                )
+            }
+        )
+    }
+}
+
+private struct RuntimeModelRecord: Decodable {
+    let id: String
+    let name: String?
+    let provider: String
+    let reasoning: Bool?
+    let contextWindow: Int?
+
+    var piModelOption: PiModelOption {
+        PiModelOption(
+            provider: provider,
+            modelID: id,
+            name: name,
+            reasoning: reasoning ?? false,
+            contextWindow: contextWindow
+        )
+    }
+}
+
+private struct RuntimeTokenTotals: Decodable {
+    let input: Int
+    let output: Int
+    let cacheRead: Int
+    let cacheWrite: Int
+    let total: Int
+}
+
+private struct RuntimeContextUsage: Decodable {
+    let tokens: Int?
+    let contextWindow: Int?
+    let percent: Double?
+}
+
+private struct AvailableModelsResponse: Decodable {
+    let models: [RuntimeModelRecord]
+}
+
 struct UploadedAttachmentReference: Codable, Hashable, Sendable {
     let path: String
     let fileName: String
@@ -586,3 +740,10 @@ private struct SendSessionRequestBody: Encodable {
     let prompt: String
     let attachments: [UploadedAttachmentReference]
 }
+
+private struct SetModelRequestBody: Encodable {
+    let provider: String
+    let modelId: String
+}
+
+private struct EmptyRequestBody: Encodable {}

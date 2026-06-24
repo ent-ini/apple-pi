@@ -118,6 +118,11 @@ type sendSessionRequest struct {
 	Attachments []attachmentReference `json:"attachments"`
 }
 
+type setModelRequest struct {
+	Provider string `json:"provider"`
+	ModelID  string `json:"modelId"`
+}
+
 type sessionBoundRecord struct {
 	Type             string `json:"type"`
 	SessionID        string `json:"sessionId,omitempty"`
@@ -162,10 +167,67 @@ type rpcStateResponse struct {
 	Command string `json:"command"`
 	Success bool   `json:"success"`
 	Data    *struct {
-		SessionFile string `json:"sessionFile"`
-		SessionID   string `json:"sessionId"`
-		SessionName string `json:"sessionName"`
+		SessionFile string          `json:"sessionFile"`
+		SessionID   string          `json:"sessionId"`
+		SessionName string          `json:"sessionName"`
+		Model       *rpcModelRecord `json:"model"`
+		Thinking    string          `json:"thinkingLevel"`
 	} `json:"data"`
+}
+
+type rpcResponseEnvelope struct {
+	Type    string          `json:"type"`
+	Command string          `json:"command"`
+	Success bool            `json:"success"`
+	Data    json.RawMessage `json:"data,omitempty"`
+	Error   string          `json:"error,omitempty"`
+}
+
+type rpcSimpleCommand struct {
+	ID       string `json:"id,omitempty"`
+	Type     string `json:"type"`
+	Provider string `json:"provider,omitempty"`
+	ModelID  string `json:"modelId,omitempty"`
+}
+
+type rpcModelRecord struct {
+	ID            string `json:"id"`
+	Name          string `json:"name,omitempty"`
+	Provider      string `json:"provider"`
+	Reasoning     bool   `json:"reasoning,omitempty"`
+	ContextWindow int    `json:"contextWindow,omitempty"`
+}
+
+type rpcAvailableModelsResponse struct {
+	Models []rpcModelRecord `json:"models"`
+}
+
+type rpcSessionStatsResponse struct {
+	Tokens       runtimeTokens        `json:"tokens"`
+	ContextUsage *runtimeContextUsage `json:"contextUsage,omitempty"`
+}
+
+type runtimeTokens struct {
+	Input      int `json:"input"`
+	Output     int `json:"output"`
+	CacheRead  int `json:"cacheRead"`
+	CacheWrite int `json:"cacheWrite"`
+	Total      int `json:"total"`
+}
+
+type runtimeContextUsage struct {
+	Tokens        *int     `json:"tokens,omitempty"`
+	ContextWindow int      `json:"contextWindow"`
+	Percent       *float64 `json:"percent,omitempty"`
+}
+
+type sessionRuntimeResponse struct {
+	SessionID     string               `json:"sessionId,omitempty"`
+	SessionFile   string               `json:"sessionFile,omitempty"`
+	Model         *rpcModelRecord      `json:"model,omitempty"`
+	ThinkingLevel string               `json:"thinkingLevel"`
+	Tokens        runtimeTokens        `json:"tokens"`
+	ContextUsage  *runtimeContextUsage `json:"contextUsage,omitempty"`
 }
 
 type parsedSession struct {
@@ -327,7 +389,107 @@ func (s *server) handleSessionSubroutes(w http.ResponseWriter, r *http.Request) 
 		s.handleSessionSend(w, r, record)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "runtime" {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.handleSessionRuntime(w, r, record)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "models" {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.handleSessionModels(w, r, record)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "model" {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.handleSessionSetModel(w, r, record)
+		return
+	}
+	if len(parts) == 3 && parts[1] == "thinking" && parts[2] == "cycle" {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.handleSessionCycleThinking(w, r, record)
+		return
+	}
 	writeError(w, http.StatusNotFound, "not found")
+}
+
+func (s *server) handleSessionRuntime(w http.ResponseWriter, r *http.Request, record sessionRecord) {
+	runtime, err := s.loadSessionRuntime(record)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, runtime)
+}
+
+func (s *server) handleSessionModels(w http.ResponseWriter, r *http.Request, record sessionRecord) {
+	responses, err := s.runPiRPCCommands(record, []any{
+		rpcSimpleCommand{Type: "get_available_models"},
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var payload rpcAvailableModelsResponse
+	if err := decodeRPCSuccessResponse(responses, "get_available_models", &payload); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, payload)
+}
+
+func (s *server) handleSessionSetModel(w http.ResponseWriter, r *http.Request, record sessionRecord) {
+	var request setModelRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	request.Provider = strings.TrimSpace(request.Provider)
+	request.ModelID = strings.TrimSpace(request.ModelID)
+	if request.Provider == "" || request.ModelID == "" {
+		writeError(w, http.StatusBadRequest, "provider and modelId are required")
+		return
+	}
+	_, err := s.runPiRPCCommands(record, []any{
+		rpcSimpleCommand{Type: "set_model", Provider: request.Provider, ModelID: request.ModelID},
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	runtime, err := s.loadSessionRuntime(record)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, runtime)
+}
+
+func (s *server) handleSessionCycleThinking(w http.ResponseWriter, r *http.Request, record sessionRecord) {
+	_, err := s.runPiRPCCommands(record, []any{
+		rpcSimpleCommand{Type: "cycle_thinking_level"},
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	runtime, err := s.loadSessionRuntime(record)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, runtime)
 }
 
 func (s *server) handleSessionEvents(w http.ResponseWriter, r *http.Request, record sessionRecord) {
@@ -794,6 +956,155 @@ func (s *server) streamPiRPCCommand(
 	}
 
 	s.refreshAndBroadcast()
+	return nil
+}
+
+func (s *server) loadSessionRuntime(record sessionRecord) (sessionRuntimeResponse, error) {
+	responses, err := s.runPiRPCCommands(record, []any{
+		rpcSimpleCommand{Type: "get_state"},
+		rpcSimpleCommand{Type: "get_session_stats"},
+	})
+	if err != nil {
+		return sessionRuntimeResponse{}, err
+	}
+
+	var state struct {
+		SessionFile   string          `json:"sessionFile"`
+		SessionID     string          `json:"sessionId"`
+		ThinkingLevel string          `json:"thinkingLevel"`
+		Model         *rpcModelRecord `json:"model"`
+	}
+	if err := decodeRPCSuccessResponse(responses, "get_state", &state); err != nil {
+		return sessionRuntimeResponse{}, err
+	}
+
+	var stats rpcSessionStatsResponse
+	if err := decodeRPCSuccessResponse(responses, "get_session_stats", &stats); err != nil {
+		return sessionRuntimeResponse{}, err
+	}
+
+	return sessionRuntimeResponse{
+		SessionID:     state.SessionID,
+		SessionFile:   state.SessionFile,
+		Model:         state.Model,
+		ThinkingLevel: firstNonBlank(state.ThinkingLevel, "off"),
+		Tokens:        stats.Tokens,
+		ContextUsage:  stats.ContextUsage,
+	}, nil
+}
+
+func (s *server) runPiRPCCommands(record sessionRecord, commands []any) (map[string]rpcResponseEnvelope, error) {
+	cwd := record.WorkingDirectory
+	if strings.TrimSpace(cwd) == "" {
+		cwd = os.Getenv("HOME")
+	}
+	args := []string{"--mode", "rpc", "--session", record.FilePath}
+	cmd := exec.Command(s.piExecutable, args...)
+	cmd.Dir = expandHome(cwd)
+	cmd.Env = append(os.Environ(), "PI_CODING_AGENT_DIR="+s.agentDir)
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+
+	stderrDone := make(chan string, 1)
+	go func() {
+		data, _ := io.ReadAll(stderr)
+		stderrDone <- strings.TrimSpace(string(data))
+	}()
+
+	for _, command := range commands {
+		if err := writeRPCCommand(stdin, command); err != nil {
+			_ = stdin.Close()
+			_ = cmd.Wait()
+			<-stderrDone
+			return nil, err
+		}
+	}
+	_ = stdin.Close()
+
+	responses := make(map[string]rpcResponseEnvelope, len(commands))
+	reader := bufio.NewScanner(stdout)
+	reader.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for reader.Scan() {
+		raw := strings.TrimSpace(reader.Text())
+		if raw == "" || !isRPCResponseLine(raw) {
+			continue
+		}
+		var envelope rpcResponseEnvelope
+		if err := json.Unmarshal([]byte(raw), &envelope); err != nil {
+			continue
+		}
+		if envelope.Command != "" {
+			responses[envelope.Command] = envelope
+		}
+	}
+	if err := reader.Err(); err != nil {
+		_ = cmd.Wait()
+		<-stderrDone
+		return nil, err
+	}
+
+	waitErr := cmd.Wait()
+	stderrText := <-stderrDone
+	if waitErr != nil {
+		if stderrText != "" {
+			return nil, errors.New(stderrText)
+		}
+		return nil, waitErr
+	}
+
+	for _, command := range commands {
+		encoded, err := json.Marshal(command)
+		if err != nil {
+			continue
+		}
+		var header struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(encoded, &header); err != nil {
+			continue
+		}
+		if header.Type == "" {
+			continue
+		}
+		if _, ok := responses[header.Type]; !ok {
+			return nil, errors.New("missing rpc response for " + header.Type)
+		}
+		if !responses[header.Type].Success {
+			return nil, errors.New(firstNonBlank(strings.TrimSpace(responses[header.Type].Error), "rpc command failed: "+header.Type))
+		}
+	}
+
+	return responses, nil
+}
+
+func decodeRPCSuccessResponse(responses map[string]rpcResponseEnvelope, command string, target any) error {
+	response, ok := responses[command]
+	if !ok {
+		return errors.New("missing rpc response for " + command)
+	}
+	if !response.Success {
+		return errors.New(firstNonBlank(strings.TrimSpace(response.Error), "rpc command failed: "+command))
+	}
+	if target == nil || len(response.Data) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(response.Data, target); err != nil {
+		return err
+	}
 	return nil
 }
 

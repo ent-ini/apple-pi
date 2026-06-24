@@ -30,6 +30,14 @@ struct ChatSessionView: View {
             Divider().opacity(0.25)
             composerArea
         }
+        .onAppear {
+            appState.refreshSessionRuntime(for: session)
+            appState.refreshAvailableModels(for: session)
+        }
+        .onChange(of: session.sessionID) { _, _ in
+            appState.refreshSessionRuntime(for: session)
+            appState.refreshAvailableModels(for: session, force: true)
+        }
         .onDisappear {
             transcriptionTask?.cancel()
             transcriptionTask = nil
@@ -99,9 +107,119 @@ struct ChatSessionView: View {
                 )
                 .help("Send")
             }
+
+            sessionStatusStrip
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+    }
+
+    @ViewBuilder
+    private var sessionStatusStrip: some View {
+        let runtime = session.runtimeState
+        let contextPercent = max(0, min((runtime?.contextUsage?.percent ?? 0) / 100, 1))
+
+        VStack(alignment: .leading, spacing: 5) {
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule(style: .continuous)
+                        .fill(Color.primary.opacity(0.08))
+                    Capsule(style: .continuous)
+                        .fill(appState.appearance.accentColor.opacity(0.9))
+                        .frame(width: max(6, proxy.size.width * contextPercent))
+                }
+            }
+            .frame(height: 4)
+
+            HStack(alignment: .center, spacing: 10) {
+                Text(statusMetricsText)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                Menu {
+                    if session.availableModels.isEmpty {
+                        Button("No models yet") {}
+                            .disabled(true)
+                    } else {
+                        ForEach(groupedModels, id: \.provider) { group in
+                            Section(group.provider) {
+                                ForEach(group.models) { model in
+                                    Button {
+                                        appState.selectModel(model, in: session)
+                                    } label: {
+                                        if isCurrentModel(model) {
+                                            Label(model.shortLabel, systemImage: "checkmark")
+                                        } else {
+                                            Text(model.shortLabel)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    statusPill(title: runtime?.modelDisplayName ?? "model")
+                }
+                .disabled(session.sessionID == nil)
+
+                Button {
+                    appState.cycleThinkingLevel(in: session)
+                } label: {
+                    statusPill(title: "thinking: \(runtime?.thinkingLevel ?? "off")")
+                }
+                .buttonStyle(.plain)
+                .disabled(session.sessionID == nil)
+            }
+        }
+    }
+
+    private var statusMetricsText: String {
+        let runtime = session.runtimeState
+        let tokens = runtime?.tokens ?? .zero
+        let context = runtime?.contextUsage
+        let used = formatCompactTokenCount(context?.tokens)
+        let window = formatCompactTokenCount(context?.contextWindow)
+        return "↓\(formatCompactTokenCount(tokens.output)) ↑\(formatCompactTokenCount(tokens.input)) \(used)/\(window)"
+    }
+
+    private var groupedModels: [(provider: String, models: [PiModelOption])] {
+        Dictionary(grouping: session.availableModels, by: \.provider)
+            .map { key, value in
+                (provider: key, models: value.sorted { $0.modelID.localizedCaseInsensitiveCompare($1.modelID) == .orderedAscending })
+            }
+            .sorted { $0.provider.localizedCaseInsensitiveCompare($1.provider) == .orderedAscending }
+    }
+
+    private func isCurrentModel(_ model: PiModelOption) -> Bool {
+        session.runtimeState?.provider == model.provider && session.runtimeState?.modelID == model.modelID
+    }
+
+    private func statusPill(title: String) -> some View {
+        Text(title)
+            .font(.caption.monospaced())
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.primary.opacity(0.06))
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(Color.primary.opacity(0.1), lineWidth: 1)
+            )
+    }
+
+    private func formatCompactTokenCount(_ value: Int?) -> String {
+        guard let value else { return "?" }
+        if value < 1_000 { return "\(value)" }
+        if value < 10_000 { return String(format: "%.1fk", Double(value) / 1_000) }
+        if value < 1_000_000 { return "\(Int(round(Double(value) / 1_000)))k" }
+        return String(format: "%.1fM", Double(value) / 1_000_000)
     }
 
     @ViewBuilder
