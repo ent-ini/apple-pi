@@ -17,9 +17,9 @@ struct MessageListView: View {
             ScrollViewReader { scrollProxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
-                        ForEach(displayedEvents) { event in
-                            eventRow(for: event)
-                                .id(event.id)
+                        ForEach(displayedRows) { row in
+                            eventRow(for: row)
+                                .id(row.id)
                         }
                         if showsPendingAssistantPlaceholder {
                             HStack(alignment: .top, spacing: 0) {
@@ -61,41 +61,44 @@ struct MessageListView: View {
     }
 
     @ViewBuilder
-    private func eventRow(for event: SessionEvent) -> some View {
-        switch event {
-        case .message(let message, _):
-            MessageBubble(message: message)
-        case .toolCall(let call, _):
-            ToolEventRow(
-                kind: .toolCall(name: call.name, arguments: call.arguments)
-            )
-        case .toolResult(let result, _):
-            ToolEventRow(
-                kind: .toolResult(
-                    name: result.toolName,
-                    callId: result.callId,
-                    output: result.output,
-                    isError: result.isError
+    private func eventRow(for row: DisplayedSessionRow) -> some View {
+        switch row {
+        case .event(let event):
+            switch event {
+            case .message(let message, _):
+                MessageBubble(message: message)
+            case .toolCall(let call, _):
+                ToolInteractionRow(name: call.name, arguments: call.arguments, result: nil)
+            case .toolResult(let result, _):
+                ToolEventRow(
+                    kind: .toolResult(
+                        name: result.toolName,
+                        callId: result.callId,
+                        output: result.output,
+                        isError: result.isError
+                    )
                 )
-            )
-        case .meta(let meta, _):
-            ToolEventRow(
-                kind: .meta(
-                    displayName: meta.displayName,
-                    workingDirectory: meta.workingDirectory,
-                    parentSession: meta.parentSession
+            case .meta(let meta, _):
+                ToolEventRow(
+                    kind: .meta(
+                        displayName: meta.displayName,
+                        workingDirectory: meta.workingDirectory,
+                        parentSession: meta.parentSession
+                    )
                 )
-            )
-        case .other(let type, _):
-            ToolEventRow(kind: .other(type: type))
+            case .other(let type, _):
+                ToolEventRow(kind: .other(type: type))
+            }
+        case .toolInteraction(let call, let result, _):
+            ToolInteractionRow(name: call.name, arguments: call.arguments, result: result)
         }
     }
 
     private static let bottomAnchorID = "chat.list.bottom"
     private static let pendingAssistantAnchorID = "chat.list.pending.assistant"
 
-    private var displayedEvents: [SessionEvent] {
-        session.events
+    private var displayedRows: [DisplayedSessionRow] {
+        DisplayedSessionRow.groupingToolResults(in: session.events)
     }
 
     private var showsPendingAssistantPlaceholder: Bool {
@@ -156,6 +159,144 @@ struct MessageListView: View {
                 hasCompletedInitialPlacement = true
             }
         }
+    }
+}
+
+// MARK: - Display rows
+
+private enum DisplayedSessionRow: Identifiable {
+    case event(SessionEvent)
+    case toolInteraction(call: ToolCall, result: ToolResult?, lineIndex: Int)
+
+    var id: String {
+        switch self {
+        case .event(let event):
+            return event.id
+        case .toolInteraction(let call, let result, let lineIndex):
+            if let result {
+                return "toolInteraction:\(call.id):\(result.id):\(lineIndex)"
+            }
+            return "toolInteraction:\(call.id):pending:\(lineIndex)"
+        }
+    }
+
+    static func groupingToolResults(in events: [SessionEvent]) -> [DisplayedSessionRow] {
+        var resultByCallID: [String: ToolResult] = [:]
+        var callIDs = Set<String>()
+
+        for event in events {
+            switch event {
+            case .toolCall(let call, _):
+                callIDs.insert(call.id)
+            case .toolResult(let result, _):
+                guard !result.callId.isEmpty else { continue }
+                if resultByCallID[result.callId] == nil {
+                    resultByCallID[result.callId] = result
+                }
+            case .message, .meta, .other:
+                continue
+            }
+        }
+
+        let pairedResultIDs = Set(callIDs.compactMap { resultByCallID[$0]?.id })
+        return events.compactMap { event in
+            switch event {
+            case .toolCall(let call, let lineIndex):
+                return .toolInteraction(call: call, result: resultByCallID[call.id], lineIndex: lineIndex)
+            case .toolResult(let result, _):
+                if pairedResultIDs.contains(result.id) { return nil }
+                return .event(event)
+            case .message, .meta, .other:
+                return .event(event)
+            }
+        }
+    }
+}
+
+// MARK: - ToolInteractionRow
+
+/// Paired tool invocation and response. Shows the model's call arguments
+/// first, then the tool output underneath, so a transcript reads like:
+///
+///     tool · bash
+///     Call      {"command":"crontab -l"}
+///     Response  Current crontab: ...
+struct ToolInteractionRow: View {
+    let name: String
+    let arguments: String
+    let result: ToolResult?
+
+    @State private var isExpanded = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    withAnimation(.snappy(duration: 0.18)) {
+                        isExpanded.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: result?.isError == true ? "exclamationmark.triangle" : "wrench.and.screwdriver")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(result?.isError == true ? .red : .secondary)
+                        Text(result?.isError == true ? "tool · \(name) · error" : "tool · \(name)")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                            .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(isExpanded ? "Collapse long tool details" : "Expand full tool call and response")
+
+                toolSection(title: "Call", text: arguments, fallback: "(no arguments)")
+                if let result {
+                    toolSection(title: "Response", text: result.output, fallback: "(empty)")
+                } else {
+                    toolSection(title: "Response", text: "", fallback: "(waiting for tool result)")
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: 560, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.primary.opacity(0.04))
+            )
+            Spacer(minLength: 60)
+        }
+    }
+
+    @ViewBuilder
+    private func toolSection(title: String, text: String, fallback: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
+            Text(displayText(text, fallback: fallback))
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .lineLimit(isExpanded ? nil : 4)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.primary.opacity(0.035))
+                )
+        }
+    }
+
+    private func displayText(_ text: String, fallback: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? fallback : trimmed
     }
 }
 

@@ -64,10 +64,9 @@ struct SessionEventParserToolResultTests {
     }
 
     @Test
-    func toolResultRoleMessageRendersStructuredContentAsJSON() {
-        // Some tools return `content` as an array of typed blocks (text
-        // + image, or multi-text). The parser collapses them into a JSON
-        // string for stable display.
+    func toolResultRoleMessageRendersStructuredTextContentAsPlainOutput() {
+        // Some tools return `content` as an array of typed text blocks.
+        // The UI should show the tool's actual text output, not raw JSON.
         let raw = #"""
         {"type":"message","id":"a2","message":{"role":"toolResult","toolCallId":"call-3","toolName":"ls","content":[{"type":"text","text":"a.txt"},{"type":"text","text":"b.txt"}],"isError":false}}
         """#
@@ -78,8 +77,7 @@ struct SessionEventParserToolResultTests {
             Issue.record("Expected .toolResult")
             return
         }
-        #expect(result.output.contains("a.txt"))
-        #expect(result.output.contains("b.txt"))
+        #expect(result.output == "a.txt\nb.txt")
     }
 
     @Test

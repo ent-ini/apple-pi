@@ -249,6 +249,15 @@ enum SessionEventParser {
         if let text = value as? String {
             return text
         }
+        if let blocks = value as? [[String: Any]] {
+            let textBlocks = blocks.compactMap { block -> String? in
+                guard (block["type"] as? String) == "text" else { return nil }
+                return block["text"] as? String
+            }
+            if !textBlocks.isEmpty {
+                return textBlocks.joined(separator: "\n")
+            }
+        }
         if let data = try? JSONSerialization.data(
             withJSONObject: value,
             options: [.fragmentsAllowed, .prettyPrinted, .sortedKeys]
