@@ -539,7 +539,8 @@ private struct ModelPickerDropdown: View {
             }
             .padding(8)
         }
-        .frame(width: 220, maxHeight: 220, alignment: .leading)
+        .frame(width: 220)
+        .frame(maxHeight: 220, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(.regularMaterial)
