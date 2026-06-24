@@ -5,6 +5,7 @@ import SwiftUI
 /// top tab strip is intentionally removed.
 struct ChatWorkspaceView: View {
     @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var appState: PiAppState
     @ObservedObject var workspace: ChatSessionStore
     let appearance: AppAppearance
 
@@ -25,6 +26,11 @@ struct ChatWorkspaceView: View {
             }
         }
         .background(workspaceSurfaceTint(opacity: appearance.effectiveChatOpacity * 0.78))
+        .onChange(of: workspace.selectedTabID) { _, _ in
+            guard let tab = workspace.selectedTab else { return }
+            appState.refreshSessionRuntime(for: tab)
+            appState.refreshAvailableModels(for: tab)
+        }
     }
 
     private func workspaceSurfaceTint(opacity: Double) -> Color {

@@ -509,13 +509,15 @@ final class PiAppState: ObservableObject {
     }
 
     func resume(_ session: PiSessionSummary) {
-        chatWorkspace.openOrSelectTab(
+        let tab = chatWorkspace.openOrSelectTab(
             key: session.filePath,
             title: session.title,
             sessionID: session.id,
             sessionPath: session.filePath,
             eventLoader: eventLoader(for: session)
         )
+        refreshSessionRuntime(for: tab)
+        refreshAvailableModels(for: tab)
         statusMessage = "Resumed \(session.title)"
     }
 
@@ -861,6 +863,21 @@ final class PiAppState: ObservableObject {
             return
         }
 
+        if let current = session.runtimeState {
+            session.updateRuntimeState(
+                SessionRuntimeState(
+                    sessionID: current.sessionID,
+                    sessionPath: current.sessionPath,
+                    provider: model.provider,
+                    modelID: model.modelID,
+                    modelName: model.name,
+                    thinkingLevel: current.thinkingLevel,
+                    tokens: current.tokens,
+                    contextUsage: current.contextUsage
+                )
+            )
+        }
+
         let remoteHost = host
         statusMessage = "Switching model..."
         Task { [weak self, weak session] in
@@ -878,8 +895,9 @@ final class PiAppState: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
-                    guard let self else { return }
+                    guard let self, let session else { return }
                     self.statusMessage = error.localizedDescription
+                    self.refreshSessionRuntime(for: session, updatesStatus: false)
                 }
             }
         }
@@ -890,6 +908,21 @@ final class PiAppState: ObservableObject {
               let sessionID = session.sessionID?.nilIfBlank else {
             statusMessage = "Thinking level is available after the session starts."
             return
+        }
+
+        if let current = session.runtimeState {
+            session.updateRuntimeState(
+                SessionRuntimeState(
+                    sessionID: current.sessionID,
+                    sessionPath: current.sessionPath,
+                    provider: current.provider,
+                    modelID: current.modelID,
+                    modelName: current.modelName,
+                    thinkingLevel: nextThinkingLevel(after: current.thinkingLevel),
+                    tokens: current.tokens,
+                    contextUsage: current.contextUsage
+                )
+            )
         }
 
         let remoteHost = host
@@ -906,11 +939,21 @@ final class PiAppState: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
-                    guard let self else { return }
+                    guard let self, let session else { return }
                     self.statusMessage = error.localizedDescription
+                    self.refreshSessionRuntime(for: session, updatesStatus: false)
                 }
             }
         }
+    }
+
+    private func nextThinkingLevel(after currentLevel: String) -> String {
+        let levels = ["off", "minimal", "low", "medium", "high", "xhigh"]
+        let normalized = currentLevel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let index = levels.firstIndex(of: normalized) else {
+            return "off"
+        }
+        return levels[(index + 1) % levels.count]
     }
 
     func delete(_ session: PiSessionSummary) {
