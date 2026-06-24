@@ -276,8 +276,7 @@ struct MessageBubble: View {
                 userAttachmentView(attachment)
             }
             if !presentation.text.isEmpty {
-                Text(presentation.text)
-                    .textSelection(.enabled)
+                MarkdownText(presentation.text)
                     .font(.body)
             }
         }
@@ -327,8 +326,7 @@ struct MessageBubble: View {
                     isLastVisibleBlock: isLastVisibleBlock,
                     prefersCompactWidth: prefersCompactWidth(for: text)
                 ) {
-                    Text(text)
-                        .textSelection(.enabled)
+                    MarkdownText(text)
                         .font(.body)
                 }
             }
