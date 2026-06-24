@@ -206,11 +206,11 @@ struct MarkdownText: View {
         return blocks
     }
 
-    private static func fenceInfo(from trimmedLine: String) -> (language: String?)? {
+    private static func fenceInfo(from trimmedLine: String) -> MarkdownFenceInfo? {
         guard trimmedLine.hasPrefix("```") else { return nil }
         let language = String(trimmedLine.dropFirst(3))
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (language.nilIfBlank)
+        return MarkdownFenceInfo(language: language.nilIfBlank)
     }
 
     private static func headingInfo(from trimmedLine: String) -> (level: Int, text: String)? {
@@ -264,6 +264,10 @@ struct MarkdownText: View {
             || withoutSpaces.allSatisfy { $0 == "*" }
             || withoutSpaces.allSatisfy { $0 == "_" }
     }
+}
+
+private struct MarkdownFenceInfo: Sendable {
+    let language: String?
 }
 
 struct MarkdownBlock: Identifiable, Equatable, Sendable {
