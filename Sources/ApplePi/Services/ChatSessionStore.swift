@@ -99,8 +99,6 @@ final class ChatSession: ObservableObject, Identifiable {
         self.sessionPath = sessionPath
         self.eventLoader = eventLoader
         self.launchRequest = nil
-        runtimeState = nil
-        availableModels = []
     }
 
     func updateLaunchRequest(_ launchRequest: PiLaunchRequest?) {
