@@ -234,15 +234,19 @@ private struct UserMessagePresentation {
 struct MessageBubble: View {
     @EnvironmentObject private var appState: PiAppState
     let message: Message
+    var showsStreamingPlaceholder = false
 
+    @ViewBuilder
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
-            if message.role == .user {
-                Spacer(minLength: 90)
-                bubbleColumn(alignment: .trailing)
-            } else {
-                bubbleColumn(alignment: .leading)
-                Spacer(minLength: 90)
+        if shouldRenderRow {
+            HStack(alignment: .top, spacing: 0) {
+                if message.role == .user {
+                    Spacer(minLength: 90)
+                    bubbleColumn(alignment: .trailing)
+                } else {
+                    bubbleColumn(alignment: .leading)
+                    Spacer(minLength: 90)
+                }
             }
         }
     }
@@ -261,7 +265,7 @@ struct MessageBubble: View {
                 ) {
                     userPresentationView(presentation)
                 }
-            } else if message.role == .assistant && visibleBlocks.isEmpty {
+            } else if showsStreamingPlaceholder {
                 bubbleSurface(isLastVisibleBlock: true, prefersCompactWidth: true) {
                     BouncingDotsView()
                 }
@@ -405,6 +409,12 @@ struct MessageBubble: View {
         guard message.role == .user else { return nil }
         let presentation = UserMessagePresentation.build(from: message.content)
         return presentation.hasAttachments ? presentation : nil
+    }
+
+    private var shouldRenderRow: Bool {
+        if showsStreamingPlaceholder { return true }
+        if message.role != .assistant { return true }
+        return !thinkingText.isEmpty || !visibleBlocks.isEmpty || userPresentation != nil
     }
 
     private var thinkingText: String {

@@ -21,6 +21,13 @@ struct MessageListView: View {
                             eventRow(for: row)
                                 .id(row.id)
                         }
+                        if session.isSending {
+                            MessageBubble(
+                                message: pendingAssistantMessage,
+                                showsStreamingPlaceholder: true
+                            )
+                            .id(Self.pendingAssistantBubbleID)
+                        }
                         Color.clear
                             .frame(height: 1)
                             .background {
@@ -103,10 +110,22 @@ struct MessageListView: View {
     }
 
     private static let bottomAnchorID = "chat.list.bottom"
+    private static let pendingAssistantBubbleID = "chat.list.pending.assistant"
     private static let scrollCoordinateSpaceName = "chat.list.scroll"
 
     private var displayedRows: [DisplayedSessionRow] {
         DisplayedSessionRow.groupingToolResults(in: session.events)
+    }
+
+    private var pendingAssistantMessage: Message {
+        Message(
+            id: Self.pendingAssistantBubbleID,
+            role: .assistant,
+            content: [],
+            model: nil,
+            timestamp: nil,
+            parentId: nil
+        )
     }
 
     private func scrollToBottomIfNeeded(using scrollProxy: ScrollViewProxy) {
