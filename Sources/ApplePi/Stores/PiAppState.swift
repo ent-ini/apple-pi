@@ -374,13 +374,29 @@ final class PiAppState: ObservableObject {
         sessionDefaultsCache[sessionDefaultsCacheKey(for: workingDirectory)] = snapshot
     }
 
+    private func liveSessionDefaultsForCurrentContext(targetWorkingDirectory: String?) -> SessionDefaultsSnapshot? {
+        guard let selectedTab = chatWorkspace.selectedTab,
+              let runtime = selectedTab.runtimeState else {
+            return nil
+        }
+        let targetKey = sessionDefaultsCacheKey(for: targetWorkingDirectory)
+        let currentKey = sessionDefaultsCacheKey(for: selectedWorkingDirectory)
+        guard targetKey == currentKey else { return nil }
+        return SessionDefaultsSnapshot(runtimeState: runtime, availableModels: selectedTab.availableModels)
+    }
+
     @discardableResult
-    private func applyCachedSessionDefaults(to session: ChatSession) -> Bool {
+    private func applyBestKnownSessionDefaults(to session: ChatSession) -> Bool {
         guard session.sessionID == nil,
-              let request = session.launchRequest,
-              let snapshot = sessionDefaultsCache[sessionDefaultsCacheKey(for: request.workingDirectory)] else {
+              let request = session.launchRequest else {
             return false
         }
+
+        let snapshot = sessionDefaultsCache[sessionDefaultsCacheKey(for: request.workingDirectory)]
+            ?? liveSessionDefaultsForCurrentContext(targetWorkingDirectory: request.workingDirectory)
+        guard let snapshot else { return false }
+
+        cacheSessionDefaults(snapshot, for: request.workingDirectory)
 
         var nextRequest = request
         if nextRequest.initialModelProvider == nil { nextRequest.initialModelProvider = snapshot.runtimeState.provider }
@@ -550,7 +566,7 @@ final class PiAppState: ObservableObject {
             sessionPath: nil,
             launchRequest: request
         )
-        _ = applyCachedSessionDefaults(to: tab)
+        _ = applyBestKnownSessionDefaults(to: tab)
         hydratePendingSessionDefaults(for: tab)
         statusMessage = isTemporary ? "Started temporary Pi session" : "Started new Pi session"
     }
@@ -861,7 +877,7 @@ final class PiAppState: ObservableObject {
               session.sessionID == nil,
               let launchRequest = session.launchRequest else { return }
 
-        _ = applyCachedSessionDefaults(to: session)
+        _ = applyBestKnownSessionDefaults(to: session)
 
         let remoteHost = host
         Task { [weak self, weak session] in
