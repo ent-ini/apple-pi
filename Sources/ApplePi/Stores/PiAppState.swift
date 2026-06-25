@@ -638,6 +638,7 @@ final class PiAppState: ObservableObject {
         markSessionActive(initialAliases)
         setSessionSending(true, aliases: initialAliases)
         clearUnread(aliases: initialAliases)
+        insertOptimisticSidebarSession(for: session, fallbackAliases: initialAliases)
         statusMessage = "Sending to Pi..."
 
         if host.usesRemoteDaemonTransport || host.mode == .remoteSSH {
@@ -766,10 +767,12 @@ final class PiAppState: ObservableObject {
             // Reset the composer without surfacing an error.
             session.finishSendingCancelled()
             appState?.setSessionSending(false, aliases: initialAliases)
+            appState?.removeOptimisticSidebarSessionIfNeeded(matching: initialAliases)
         case .failure(let message):
             session.finishSendingWithError(message)
             let aliases = appState?.sessionAliases(for: session, fallback: initialAliases) ?? initialAliases
             appState?.setSessionSending(false, aliases: aliases)
+            appState?.removeOptimisticSidebarSessionIfNeeded(matching: initialAliases)
             appState?.statusMessage = message
         }
     }
@@ -843,6 +846,7 @@ final class PiAppState: ObservableObject {
                 eventLoader: eventLoader
             )
             migrateSessionState(from: previousAliases, to: sessionAliases(for: session))
+            upsertSidebarSession(for: session, previousAliases: previousAliases, fallbackWorkingDirectory: binding.workingDirectory)
             // The key changed from `new:<UUID>` to the real file path,
             // so the persisted tabs snapshot is now stale. Save again.
             schedulePersistedChatTabsSave()
@@ -858,6 +862,7 @@ final class PiAppState: ObservableObject {
                     eventLoader: session.sessionPath == nil ? remoteEventLoader(sessionID: meta.id) : nil
                 )
                 migrateSessionState(from: previousAliases, to: sessionAliases(for: session))
+                upsertSidebarSession(for: session, previousAliases: previousAliases, fallbackWorkingDirectory: meta.workingDirectory)
                 schedulePersistedChatTabsSave()
                 scheduleCatalogRefresh(after: .milliseconds(50))
                 refreshSessionRuntime(for: session, updatesStatus: false)
@@ -1755,6 +1760,138 @@ final class PiAppState: ObservableObject {
         return "\(tag)\n\(text)"
     }
 
+    private func insertOptimisticSidebarSession(for session: ChatSession, fallbackAliases: [String]) {
+        guard !Self.isPersistedTabKey(session.key) else { return }
+        upsertSidebarSession(for: session, previousAliases: fallbackAliases)
+    }
+
+    private func removeOptimisticSidebarSessionIfNeeded(matching aliases: [String]) {
+        let optimisticAliases = aliases.filter { !Self.isPersistedTabKey($0) }
+        guard !optimisticAliases.isEmpty else { return }
+
+        var affectedProjectIDs = Set<String>()
+        sessions.removeAll { summary in
+            let matches = !Set(sessionAliases(for: summary)).isDisjoint(with: Set(optimisticAliases))
+            if matches {
+                affectedProjectIDs.insert(summary.projectID)
+            }
+            return matches
+        }
+        for projectID in affectedProjectIDs {
+            reconcileSidebarProject(projectID)
+        }
+    }
+
+    private func upsertSidebarSession(
+        for session: ChatSession,
+        previousAliases: [String] = [],
+        fallbackWorkingDirectory: String? = nil
+    ) {
+        guard let summary = sidebarSessionSummary(
+            for: session,
+            previousAliases: previousAliases,
+            fallbackWorkingDirectory: fallbackWorkingDirectory
+        ) else {
+            return
+        }
+
+        let matchingAliases = Set(previousAliases + sessionAliases(for: session))
+        let previousProjectID = sessions.first(where: {
+            !matchingAliases.isDisjoint(with: Set(sessionAliases(for: $0)))
+        })?.projectID
+
+        if let index = sessions.firstIndex(where: { !matchingAliases.isDisjoint(with: Set(sessionAliases(for: $0))) }) {
+            sessions[index] = summary
+        } else {
+            sessions.append(summary)
+        }
+
+        reconcileSidebarProject(summary.projectID)
+        if let previousProjectID, previousProjectID != summary.projectID {
+            reconcileSidebarProject(previousProjectID)
+        }
+    }
+
+    private func sidebarSessionSummary(
+        for session: ChatSession,
+        previousAliases: [String] = [],
+        fallbackWorkingDirectory: String? = nil
+    ) -> PiSessionSummary? {
+        let workingDirectory = fallbackWorkingDirectory?.nilIfBlank
+            ?? session.launchRequest?.workingDirectory?.nilIfBlank
+            ?? selectedWorkingDirectory?.nilIfBlank
+        let filePath = session.sessionPath?.nilIfBlank
+            ?? session.sessionID?.nilIfBlank
+            ?? previousAliases.first(where: { !$0.isEmpty })
+            ?? session.key.nilIfBlank
+        guard let filePath else { return nil }
+
+        let id = session.sessionID?.nilIfBlank ?? filePath
+        let aliases = uniqueAliases([session.sessionID, session.sessionPath, session.key] + previousAliases.map(Optional.some))
+        let modifiedAt = aliases.compactMap { sessionActivityOverrides[$0] }.max() ?? Date()
+        let projectID = sidebarProjectID(for: workingDirectory)
+
+        return PiSessionSummary(
+            id: id,
+            filePath: filePath,
+            projectID: projectID,
+            title: session.title,
+            workingDirectory: workingDirectory,
+            messageCount: 0,
+            modifiedAt: modifiedAt,
+            displayName: nil,
+            parentSession: nil,
+            branchCount: 0,
+            labelCount: 0,
+            branchSummaryCount: 0,
+            latestModel: session.runtimeState?.modelDisplayName.nilIfBlank
+        )
+    }
+
+    private func sidebarProjectID(for workingDirectory: String?) -> String {
+        guard let workingDirectory = workingDirectory?.nilIfBlank else {
+            return activeProject?.id ?? "sessions"
+        }
+        let standardizedPath = (workingDirectory as NSString).standardizingPath
+        let components = URL(fileURLWithPath: standardizedPath)
+            .pathComponents
+            .filter { $0 != "/" && !$0.isEmpty }
+        guard !components.isEmpty else { return "--root--" }
+        return "--\(components.joined(separator: "-"))--"
+    }
+
+    private func reconcileSidebarProject(_ projectID: String) {
+        let projectSessions = sessions.filter { $0.projectID == projectID }
+        guard !projectSessions.isEmpty else {
+            projects.removeAll { $0.id == projectID }
+            return
+        }
+
+        let workingDirectory = projectSessions.compactMap(\.workingDirectory).first
+        let title = projects.first(where: { $0.id == projectID })?.title
+            ?? workingDirectory.map { URL(fileURLWithPath: $0).lastPathComponent }
+            ?? "Sessions"
+        let lastActivity = projectSessions
+            .map { effectiveLastActivity(for: $0) }
+            .max()
+
+        let updated = PiProject(
+            id: projectID,
+            title: title,
+            workingDirectory: workingDirectory,
+            sessionDirectory: projectID,
+            sessionCount: projectSessions.count,
+            lastActivity: lastActivity
+        )
+
+        if let index = projects.firstIndex(where: { $0.id == projectID }) {
+            projects[index] = updated
+        } else {
+            projects.append(updated)
+        }
+        projects.sort { ($0.lastActivity ?? .distantPast) > ($1.lastActivity ?? .distantPast) }
+    }
+
     private func sessionAliases(for session: PiSessionSummary) -> [String] {
         uniqueAliases([session.id, session.filePath])
     }
@@ -1840,8 +1977,16 @@ final class PiAppState: ObservableObject {
     }
 
     private func isCurrentlyViewingSession(aliases: [String]) -> Bool {
-        guard let selectedSession else { return false }
-        return !Set(aliases).isDisjoint(with: Set(sessionAliases(for: selectedSession)))
+        let targetAliases = Set(aliases)
+        if let selectedSession,
+           !targetAliases.isDisjoint(with: Set(sessionAliases(for: selectedSession))) {
+            return true
+        }
+        if let selectedTab = chatWorkspace.selectedTab,
+           !targetAliases.isDisjoint(with: Set(sessionAliases(for: selectedTab))) {
+            return true
+        }
+        return false
     }
 
     private func uploadAttachmentsIfNeeded(_ attachments: [ChatAttachment]) async throws -> [UploadedAttachmentReference] {
