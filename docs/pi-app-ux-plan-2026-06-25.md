@@ -11,30 +11,35 @@ Plan for the next ApplePi/pi-app UX fixes after the new-session sidebar work.
 - Do not let the bouncing-dots / streaming bubble disappear and reappear during thinking/tool calls.
 - Stream content into the same visible assistant area instead of visually resetting it.
 
-### 2. Auto-scroll behavior
+### 2. Live thinking / tool-call streaming visibility
+- Show thinking blocks and tool calls in real time as they are emitted.
+- Do not wait until the end of the turn and then dump the whole list at once.
+- The chat should visibly grow step by step while the assistant is thinking and calling tools.
+
+### 3. Auto-scroll behavior
 - If the user is at the bottom of the chat, keep auto-scrolling on new assistant text, thinking, and tool events.
 - If the user scrolls up, never yank them back down on streaming updates.
 - Add a reliable "am I near bottom" tracker instead of always assuming anchored-to-bottom.
 
-### 3. Composer text overflow
+### 4. Composer text overflow
 - Fix the composer text layout so long text never renders past the right edge.
 - Recheck text container insets, wrapping, intrinsic width, and scroll behavior.
 
-### 4. Taller composer
+### 5. Taller composer
 - Increase composer max height from roughly 8 lines to about 20 lines.
 - Keep compact default height, only expand as content grows.
 
-### 5. Send button -> Stop button while assistant is responding
+### 6. Send button -> Stop button while assistant is responding
 - If the draft is empty and the session is currently sending, replace the send icon with a stop icon.
 - Stop should abort the in-flight task/stream immediately.
 - No text label, icon only.
 
-### 6. Composer editing while streaming
+### 7. Composer editing while streaming
 - Make editing in the message field smooth while assistant output is streaming.
 - Scrolling and cursor movement inside the composer must not fight with chat updates.
 - Chat auto-scroll logic must not interfere with composer focus/scroll.
 
-### 7. Steer message during response
+### 8. Steer message during response
 - While the assistant is responding, if the user has typed text in the composer, the send button should stay enabled.
 - This should allow a new steer message during the active run, similar to Telegram behavior.
 - Need to confirm the exact backend interruption/continue semantics for pi-app remote flow.
@@ -74,14 +79,15 @@ Plan for the next ApplePi/pi-app UX fixes after the new-session sidebar work.
 
 ### Phase 1 — chat stability and scrolling
 1. Stable streaming assistant bubble
-2. Correct bottom-anchor detection and non-jumping scroll
-3. Composer overflow fix
-4. Composer max height increase
+2. Live thinking / tool-call streaming visibility
+3. Correct bottom-anchor detection and non-jumping scroll
+4. Composer overflow fix
+5. Composer max height increase
 
 ### Phase 2 — active-run controls
-5. Stop button state
-6. Smooth composer editing while streaming
-7. Steer-message support during active response
+6. Stop button state
+7. Smooth composer editing while streaming
+8. Steer-message support during active response
 
 ### Phase 3 — subagents and layout
 8. Session-scoped subagent model/store
@@ -96,6 +102,11 @@ Plan for the next ApplePi/pi-app UX fixes after the new-session sidebar work.
 - Revisit `ChatSession` transient event handling.
 - Thinking/tool updates should not temporarily remove the assistant placeholder.
 - Prefer one stable in-flight assistant presentation over swapping between placeholder and persisted rows.
+
+### Live thinking / tools
+- Need incremental rendering for thinking/tool events, not post-turn replay only.
+- Inspect current stream parsing and whether tool/thinking data is only persisted to jsonl and shown after reload.
+- Prefer appending visible rows immediately from the live stream path.
 
 ### Scroll behavior
 - `MessageListView` currently behaves as if it is always anchored to bottom.
@@ -116,6 +127,7 @@ Plan for the next ApplePi/pi-app UX fixes after the new-session sidebar work.
 ## Acceptance criteria
 
 - Streaming assistant area no longer flickers/disappears during one turn.
+- Thinking and tool-call rows appear live during the turn, not only after completion.
 - Scrolling up in chat is respected during streaming.
 - Composer text always wraps correctly.
 - Composer can grow to ~20 lines.
