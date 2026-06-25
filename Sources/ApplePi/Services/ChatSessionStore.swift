@@ -162,14 +162,8 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     func finishSendingAndReload() {
-        isSending = false
         statusMessage = "Refreshing session..."
-        Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(150))
-            await MainActor.run {
-                self?.loadFromDisk(force: true)
-            }
-        }
+        loadFromDisk(force: true)
     }
 
     /// Mark the current send as cancelled without showing an error to
@@ -198,6 +192,7 @@ final class ChatSession: ObservableObject, Identifiable {
         let filtered = newEvents.filter { $0.lineIndex > lastPersistedLineIndex }
         guard !filtered.isEmpty else { return }
         persistedEvents.append(contentsOf: filtered)
+        reconcileTransientEvents(with: persistedEvents)
         rebuildEvents()
         statusMessage = "\(persistedEvents.count) events"
     }
@@ -230,15 +225,16 @@ final class ChatSession: ObservableObject, Identifiable {
             switch outcome {
             case .skipped:
                 isLoading = false
+                isSending = false
                 loadTask = nil
             case .notBackedByFile:
                 statusMessage = "Session is not backed by a file yet."
                 isLoading = false
+                isSending = false
                 loadTask = nil
             case .loaded(let parsed, let modificationDate):
                 persistedEvents = parsed
-                transientUserEvent = nil
-                transientAssistantEvent = nil
+                reconcileTransientEvents(with: parsed)
                 rebuildEvents()
                 statusMessage = parsed.isEmpty ? "Session is empty." : "\(parsed.count) events"
                 hasLoadedOnce = true
@@ -266,6 +262,43 @@ final class ChatSession: ObservableObject, Identifiable {
     private func rebuildEvents() {
         events = persistedEvents + [transientUserEvent, transientAssistantEvent].compactMap { $0 }
         streamRevision &+= 1
+    }
+
+    private func reconcileTransientEvents(with persisted: [SessionEvent]) {
+        if let transientUserEvent,
+           latestPersistedMessage(matches: transientUserEvent, in: persisted) {
+            self.transientUserEvent = nil
+        }
+        if let transientAssistantEvent,
+           latestPersistedMessage(matches: transientAssistantEvent, in: persisted) {
+            self.transientAssistantEvent = nil
+        }
+    }
+
+    private func latestPersistedMessage(matches transientEvent: SessionEvent, in persisted: [SessionEvent]) -> Bool {
+        guard case .message(let transientMessage, _) = transientEvent else { return false }
+        guard let persistedMessage = persisted.reversed().compactMap({ event -> Message? in
+            guard case .message(let message, let lineIndex) = event,
+                  lineIndex < Self.transientUserLineIndex,
+                  message.role == transientMessage.role else {
+                return nil
+            }
+            return message
+        }).first else {
+            return false
+        }
+
+        if persistedMessage.id == transientMessage.id {
+            return true
+        }
+        guard persistedMessage.content == transientMessage.content else {
+            return false
+        }
+        if let transientTimestamp = transientMessage.timestamp,
+           let persistedTimestamp = persistedMessage.timestamp {
+            return abs(persistedTimestamp.timeIntervalSince(transientTimestamp)) < 30
+        }
+        return persistedMessage.parentId == transientMessage.parentId
     }
 
     private static let transientUserLineIndex = Int.max - 1
@@ -328,7 +361,9 @@ final class ChatSessionStore: ObservableObject {
             )
             existing.updateLaunchRequest(launchRequest)
             select(existing)
-            existing.loadFromDisk(force: true)
+            if sessionPath != nil || eventLoader != nil {
+                existing.loadFromDisk(force: true)
+            }
             return existing
         }
 
@@ -345,7 +380,9 @@ final class ChatSessionStore: ObservableObject {
         )
         tabs.append(session)
         select(session)
-        session.loadFromDisk()
+        if sessionPath != nil || eventLoader != nil {
+            session.loadFromDisk()
+        }
         onTabsChanged?()
         return session
     }

@@ -28,9 +28,12 @@ struct ChatWorkspaceView: View {
         .background(workspaceSurfaceTint(opacity: appearance.effectiveChatOpacity * 0.78))
         .onChange(of: workspace.selectedTabID) { _, _ in
             guard let tab = workspace.selectedTab else { return }
-            appState.refreshSessionRuntime(for: tab)
-            appState.refreshAvailableModels(for: tab)
-            appState.hydratePendingSessionDefaults(for: tab)
+            if tab.sessionID != nil {
+                appState.refreshSessionRuntime(for: tab)
+                appState.refreshAvailableModels(for: tab)
+            } else {
+                appState.hydratePendingSessionDefaults(for: tab)
+            }
         }
     }
 

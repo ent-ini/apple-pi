@@ -36,8 +36,12 @@ struct ChatSessionView: View {
             composerArea
         }
         .onAppear {
-            appState.refreshSessionRuntime(for: session)
-            appState.refreshAvailableModels(for: session)
+            if session.sessionID != nil {
+                appState.refreshSessionRuntime(for: session)
+                appState.refreshAvailableModels(for: session)
+            } else {
+                appState.hydratePendingSessionDefaults(for: session)
+            }
         }
         .onChange(of: session.sessionID) { _, _ in
             showsModelPicker = false
