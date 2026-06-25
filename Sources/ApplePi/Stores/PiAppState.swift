@@ -868,10 +868,8 @@ final class PiAppState: ObservableObject {
                 refreshSessionRuntime(for: session, updatesStatus: false)
                 refreshAvailableModels(for: session)
             }
-        case .message(let message, let isFinal):
-            if message.role == .assistant {
-                session.applyStreamingMessage(message, isFinal: isFinal)
-            }
+        case .sessionEvents(let events, let isFinal):
+            session.applyStreamingEvents(events, isFinal: isFinal)
         case .streamError(let message):
             statusMessage = message
         }

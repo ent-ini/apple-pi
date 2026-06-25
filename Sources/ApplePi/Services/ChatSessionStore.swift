@@ -40,6 +40,7 @@ final class ChatSession: ObservableObject, Identifiable {
     private var persistedEvents: [SessionEvent] = []
     private var transientUserEvent: SessionEvent?
     private var transientAssistantEvent: SessionEvent?
+    private var transientStreamEvents: [SessionEvent] = []
 
     var lastPersistedLineIndex: Int {
         persistedEvents.last?.lineIndex ?? -1
@@ -158,15 +159,33 @@ final class ChatSession: ObservableObject, Identifiable {
             ),
             lineIndex: Self.transientAssistantLineIndex
         )
+        transientStreamEvents = []
         rebuildEvents()
     }
 
-    func applyStreamingMessage(_ message: Message, isFinal: Bool) {
-        guard message.role == .assistant else { return }
-        transientAssistantEvent = .message(
-            message,
-            lineIndex: Self.transientAssistantLineIndex
-        )
+    func applyStreamingEvents(_ events: [SessionEvent], isFinal: Bool) {
+        var nextStreamEvents = transientStreamEvents
+
+        for event in events {
+            switch event {
+            case .message(let message, _):
+                guard message.role == .assistant else { continue }
+                transientAssistantEvent = .message(
+                    message,
+                    lineIndex: Self.transientAssistantLineIndex
+                )
+            case .toolCall(let call, _):
+                let transientEvent = SessionEvent.toolCall(call, lineIndex: nextTransientLineIndex(for: nextStreamEvents.count))
+                upsertTransientStreamEvent(transientEvent, into: &nextStreamEvents)
+            case .toolResult(let result, _):
+                let transientEvent = SessionEvent.toolResult(result, lineIndex: nextTransientLineIndex(for: nextStreamEvents.count))
+                upsertTransientStreamEvent(transientEvent, into: &nextStreamEvents)
+            case .meta, .other:
+                continue
+            }
+        }
+
+        transientStreamEvents = nextStreamEvents
         statusMessage = isFinal ? "Finishing..." : "Streaming response..."
         rebuildEvents()
     }
@@ -186,6 +205,7 @@ final class ChatSession: ObservableObject, Identifiable {
         statusMessage = ""
         transientUserEvent = nil
         transientAssistantEvent = nil
+        transientStreamEvents = []
         rebuildEvents()
     }
 
@@ -195,6 +215,7 @@ final class ChatSession: ObservableObject, Identifiable {
         statusMessage = message
         transientUserEvent = nil
         transientAssistantEvent = nil
+        transientStreamEvents = []
         rebuildEvents()
     }
 
@@ -275,13 +296,30 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     private var visibleTransientEvents: [SessionEvent] {
-        [transientUserEvent, transientAssistantEvent]
-            .compactMap { $0 }
+        ([transientUserEvent, transientAssistantEvent].compactMap { $0 } + transientStreamEvents)
             .filter { shouldDisplayTransientEvent($0) }
     }
 
     private func shouldDisplayTransientEvent(_ transientEvent: SessionEvent) -> Bool {
-        !latestPersistedMessage(matches: transientEvent, in: persistedEvents)
+        switch transientEvent {
+        case .message:
+            return !latestPersistedMessage(matches: transientEvent, in: persistedEvents)
+        case .toolCall(let call, _):
+            return !persistedEvents.contains { event in
+                guard case .toolCall(let persistedCall, _) = event else { return false }
+                return persistedCall.id == call.id
+            }
+        case .toolResult(let result, _):
+            return !persistedEvents.contains { event in
+                guard case .toolResult(let persistedResult, _) = event else { return false }
+                return persistedResult.id == result.id
+                    || (!result.callId.isEmpty
+                        && persistedResult.callId == result.callId
+                        && persistedResult.output == result.output)
+            }
+        case .meta, .other:
+            return true
+        }
     }
 
     private func reconcileTransientEvents(with persisted: [SessionEvent]) {
@@ -293,6 +331,49 @@ final class ChatSession: ObservableObject, Identifiable {
            latestPersistedMessage(matches: transientAssistantEvent, in: persisted) {
             self.transientAssistantEvent = nil
         }
+        transientStreamEvents.removeAll { event in
+            switch event {
+            case .message:
+                return latestPersistedMessage(matches: event, in: persisted)
+            case .toolCall(let call, _):
+                return persisted.contains { persistedEvent in
+                    guard case .toolCall(let persistedCall, _) = persistedEvent else { return false }
+                    return persistedCall.id == call.id
+                }
+            case .toolResult(let result, _):
+                return persisted.contains { persistedEvent in
+                    guard case .toolResult(let persistedResult, _) = persistedEvent else { return false }
+                    return persistedResult.id == result.id
+                        || (!result.callId.isEmpty
+                            && persistedResult.callId == result.callId
+                            && persistedResult.output == result.output)
+                }
+            case .meta, .other:
+                return false
+            }
+        }
+    }
+
+    private func upsertTransientStreamEvent(_ event: SessionEvent, into events: inout [SessionEvent]) {
+        let matches: (SessionEvent) -> Bool = {
+            switch (event, $0) {
+            case (.toolCall(let lhs, _), .toolCall(let rhs, _)):
+                return lhs.id == rhs.id
+            case (.toolResult(let lhs, _), .toolResult(let rhs, _)):
+                return lhs.id == rhs.id || (!lhs.callId.isEmpty && lhs.callId == rhs.callId)
+            default:
+                return false
+            }
+        }
+        if let index = events.firstIndex(where: matches) {
+            events[index] = event
+        } else {
+            events.append(event)
+        }
+    }
+
+    private func nextTransientLineIndex(for offset: Int) -> Int {
+        Self.transientStreamLineIndexBase + offset
     }
 
     private func latestPersistedMessage(matches transientEvent: SessionEvent, in persisted: [SessionEvent]) -> Bool {
@@ -321,6 +402,7 @@ final class ChatSession: ObservableObject, Identifiable {
         return persistedMessage.parentId == transientMessage.parentId
     }
 
+    private static let transientStreamLineIndexBase = Int.max - 1_000
     private static let transientUserLineIndex = Int.max - 1
     private static let transientAssistantLineIndex = Int.max
 }
