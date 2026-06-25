@@ -15,6 +15,7 @@ enum PiTurnStreamEvent: Sendable {
     case sessionBound(PiSessionBinding)
     case sessionHeader(SessionMeta)
     case sessionEvents([SessionEvent], isFinal: Bool)
+    case turnEnd
     case streamError(String)
 }
 
@@ -44,9 +45,16 @@ enum PiTurnStreamParser {
             guard let meta = SessionEventParser.decodeSessionMeta(from: object) else { return nil }
             return .sessionHeader(meta)
         case "message_update", "message_end":
+            guard let payload = object["message"] as? [String: Any],
+                  let role = payload["role"] as? String,
+                  role != "toolResult" else {
+                return nil
+            }
             let events = SessionEventParser.decodeMessageEvents(from: object, lineIndex: 0)
             guard !events.isEmpty else { return nil }
-            return .sessionEvents(events, isFinal: type == "message_end")
+            return .sessionEvents(events, isFinal: false)
+        case "turn_end":
+            return .turnEnd
         case "tool_use", "tool_call", "tool_result", "message":
             let events = SessionEventParser.decodeAll(line: trimmed, at: 0)
             guard !events.isEmpty else { return nil }

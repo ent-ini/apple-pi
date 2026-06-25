@@ -71,6 +71,35 @@ import Testing
     #expect(session.statusMessage.isEmpty)
 }
 
+@MainActor
+@Test func chatSessionShowsPlaceholderOnlyBeforeAssistantContentArrives() {
+    let session = ChatSession(key: "test", title: "Test")
+    session.beginSending(prompt: "hello")
+
+    #expect(session.pendingAssistantMessageForDisplay != nil)
+    #expect(session.shouldShowPendingAssistantPlaceholder)
+
+    session.applyStreamingEvents(
+        [
+            .message(
+                Message(
+                    id: "assistant-1",
+                    role: .assistant,
+                    content: [.text("Hi there")],
+                    model: nil,
+                    timestamp: nil,
+                    parentId: nil
+                ),
+                lineIndex: 0
+            )
+        ],
+        isFinal: false
+    )
+
+    #expect(session.pendingAssistantMessageForDisplay != nil)
+    #expect(session.shouldShowPendingAssistantPlaceholder == false)
+}
+
 // MARK: - ChatSessionStore close/closeAll cancellation
 
 @MainActor

@@ -870,6 +870,8 @@ final class PiAppState: ObservableObject {
             }
         case .sessionEvents(let events, let isFinal):
             session.applyStreamingEvents(events, isFinal: isFinal)
+        case .turnEnd:
+            break
         case .streamError(let message):
             statusMessage = message
         }

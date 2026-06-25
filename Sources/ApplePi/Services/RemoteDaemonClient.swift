@@ -398,8 +398,13 @@ struct RemoteDaemonClient {
         for try await line in bytes.lines {
             if let event = PiTurnStreamParser.parseLine(line) {
                 await onEvent(event)
-                if case .streamError(let message) = event {
+                switch event {
+                case .streamError(let message):
                     throw RemoteDaemonError.requestFailed(status: 0, body: message)
+                case .turnEnd:
+                    return
+                case .sessionBound, .sessionHeader, .sessionEvents:
+                    break
                 }
             }
         }

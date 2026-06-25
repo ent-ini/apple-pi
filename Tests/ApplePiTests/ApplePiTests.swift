@@ -933,6 +933,30 @@ private func isolatedDefaults() -> UserDefaults {
     #expect(lineIndex == 42)
 }
 
+@Test func piTurnStreamParserIgnoresFinalToolResultMessageEvents() {
+    let raw = #"{"type":"message_end","message":{"role":"toolResult","toolCallId":"call-1","content":"done","isError":false}}"#
+
+    let event = PiTurnStreamParser.parseLine(raw)
+
+    #expect(event == nil)
+}
+
+@Test func piTurnStreamParserRecognizesTurnEnd() {
+    let raw = #"{"type":"turn_end","message":{"role":"assistant","content":"done"},"toolResults":[]}"#
+
+    let event = PiTurnStreamParser.parseLine(raw)
+
+    guard let event else {
+        Issue.record("Expected a turn-end event")
+        return
+    }
+    if case .turnEnd = event {
+        // ok
+    } else {
+        Issue.record("Expected .turnEnd")
+    }
+}
+
 @Test func shortcutPreferencesUseDefaultsAndSwapConflicts() {
     var preferences = AppShortcutPreferences()
 

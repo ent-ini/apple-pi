@@ -21,10 +21,10 @@ struct MessageListView: View {
                             eventRow(for: row)
                                 .id(row.id)
                         }
-                        if session.isSending {
+                        if let pendingAssistantMessage = session.pendingAssistantMessageForDisplay {
                             MessageBubble(
                                 message: pendingAssistantMessage,
-                                showsStreamingPlaceholder: true
+                                showsStreamingPlaceholder: session.shouldShowPendingAssistantPlaceholder
                             )
                             .id(Self.pendingAssistantBubbleID)
                         }
@@ -115,17 +115,6 @@ struct MessageListView: View {
 
     private var displayedRows: [DisplayedSessionRow] {
         DisplayedSessionRow.groupingToolResults(in: session.events)
-    }
-
-    private var pendingAssistantMessage: Message {
-        Message(
-            id: Self.pendingAssistantBubbleID,
-            role: .assistant,
-            content: [],
-            model: nil,
-            timestamp: nil,
-            parentId: nil
-        )
     }
 
     private func scrollToBottomIfNeeded(using scrollProxy: ScrollViewProxy) {
