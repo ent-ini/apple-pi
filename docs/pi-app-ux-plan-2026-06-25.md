@@ -46,7 +46,7 @@ Plan for the next ApplePi/pi-app UX fixes after the new-session sidebar work.
 
 ### 9. Recent transcript cache while switching sessions
 - Keep recent chat content cached when jumping between sessions.
-- Target: at least the last ~40 recently used session tabs stay hot in memory.
+- Target: at least the last ~40 recent messages for recently visited sessions should stay hot/visible instantly.
 - Switching back to a recently opened session should feel instant instead of waiting for a fresh reload every time.
 
 ## P1 — subagent UX

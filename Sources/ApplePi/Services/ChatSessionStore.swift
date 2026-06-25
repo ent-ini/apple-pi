@@ -270,8 +270,18 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     private func rebuildEvents() {
-        events = persistedEvents + [transientUserEvent, transientAssistantEvent].compactMap { $0 }
+        events = persistedEvents + visibleTransientEvents
         streamRevision &+= 1
+    }
+
+    private var visibleTransientEvents: [SessionEvent] {
+        [transientUserEvent, transientAssistantEvent]
+            .compactMap { $0 }
+            .filter { shouldDisplayTransientEvent($0) }
+    }
+
+    private func shouldDisplayTransientEvent(_ transientEvent: SessionEvent) -> Bool {
+        !latestPersistedMessage(matches: transientEvent, in: persistedEvents)
     }
 
     private func reconcileTransientEvents(with persisted: [SessionEvent]) {
