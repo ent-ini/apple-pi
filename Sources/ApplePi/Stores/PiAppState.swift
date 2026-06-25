@@ -90,6 +90,7 @@ final class PiAppState: ObservableObject {
     /// Pending debounced save for the chat tabs snapshot. A single task
     /// is reused so a burst of mutations only writes once.
     private var chatTabsSaveTask: Task<Void, Never>?
+    private var sessionDefaultsCache: [String: SessionDefaultsSnapshot] = [:]
 
     init(
         defaults: UserDefaults = Foundation.UserDefaults(suiteName: nil) ?? Foundation.UserDefaults(),
@@ -321,6 +322,7 @@ final class PiAppState: ObservableObject {
                     }
                     self.repairSelectionIfNeeded()
                     self.refreshConfigurationSummary()
+                    self.prefetchSessionDefaultsForCurrentContext()
                 }
             } catch {
                 await MainActor.run {
@@ -345,6 +347,7 @@ final class PiAppState: ObservableObject {
             markSessionRead(selectedSession)
         }
         refreshConfigurationSummary()
+        prefetchSessionDefaultsForCurrentContext()
         if case .session = selection, let selectedSession {
             resume(selectedSession)
         }
@@ -360,6 +363,58 @@ final class PiAppState: ObservableObject {
 
     private var preferredWorkingDirectory: String {
         selectedWorkingDirectory?.nilIfBlank ?? fallbackWorkingDirectory
+    }
+
+    private func sessionDefaultsCacheKey(for workingDirectory: String?) -> String {
+        let raw = workingDirectory?.nilIfBlank ?? fallbackWorkingDirectory
+        return (raw as NSString).expandingTildeInPath
+    }
+
+    private func cacheSessionDefaults(_ snapshot: SessionDefaultsSnapshot, for workingDirectory: String?) {
+        sessionDefaultsCache[sessionDefaultsCacheKey(for: workingDirectory)] = snapshot
+    }
+
+    @discardableResult
+    private func applyCachedSessionDefaults(to session: ChatSession) -> Bool {
+        guard session.sessionID == nil,
+              let request = session.launchRequest,
+              let snapshot = sessionDefaultsCache[sessionDefaultsCacheKey(for: request.workingDirectory)] else {
+            return false
+        }
+
+        var nextRequest = request
+        if nextRequest.initialModelProvider == nil { nextRequest.initialModelProvider = snapshot.runtimeState.provider }
+        if nextRequest.initialModelID == nil { nextRequest.initialModelID = snapshot.runtimeState.modelID }
+        if nextRequest.initialThinkingLevel == nil { nextRequest.initialThinkingLevel = snapshot.runtimeState.thinkingLevel }
+        session.updateLaunchRequest(nextRequest)
+        session.updateRuntimeState(snapshot.runtimeState)
+        if session.availableModels.isEmpty {
+            session.updateAvailableModels(snapshot.availableModels)
+        }
+        return true
+    }
+
+    private func prefetchSessionDefaultsForCurrentContext() {
+        guard host.usesRemoteDaemonTransport else { return }
+        let workingDirectory = preferredWorkingDirectory
+        let cacheKey = sessionDefaultsCacheKey(for: workingDirectory)
+        if sessionDefaultsCache[cacheKey] != nil { return }
+
+        let remoteHost = host
+        Task { [weak self] in
+            do {
+                let snapshot = try await RemoteDaemonClient().loadSessionDefaults(
+                    host: remoteHost,
+                    workingDirectory: workingDirectory
+                )
+                await MainActor.run {
+                    guard let self, self.host == remoteHost else { return }
+                    self.cacheSessionDefaults(snapshot, for: workingDirectory)
+                }
+            } catch {
+                // Best-effort warmup only.
+            }
+        }
     }
 
     func presentNewSessionInFolder(isTemporary: Bool = false) {
@@ -495,6 +550,7 @@ final class PiAppState: ObservableObject {
             sessionPath: nil,
             launchRequest: request
         )
+        _ = applyCachedSessionDefaults(to: tab)
         hydratePendingSessionDefaults(for: tab)
         statusMessage = isTemporary ? "Started temporary Pi session" : "Started new Pi session"
     }
@@ -805,6 +861,8 @@ final class PiAppState: ObservableObject {
               session.sessionID == nil,
               let launchRequest = session.launchRequest else { return }
 
+        _ = applyCachedSessionDefaults(to: session)
+
         let remoteHost = host
         Task { [weak self, weak session] in
             do {
@@ -814,6 +872,7 @@ final class PiAppState: ObservableObject {
                 )
                 await MainActor.run {
                     guard let self, let session, self.host == remoteHost, session.sessionID == nil else { return }
+                    self.cacheSessionDefaults(snapshot, for: launchRequest.workingDirectory)
                     var request = session.launchRequest ?? launchRequest
                     if request.initialModelProvider == nil { request.initialModelProvider = snapshot.runtimeState.provider }
                     if request.initialModelID == nil { request.initialModelID = snapshot.runtimeState.modelID }
@@ -851,6 +910,10 @@ final class PiAppState: ObservableObject {
                 await MainActor.run {
                     guard let self, let session, self.host == remoteHost else { return }
                     session.updateRuntimeState(runtime)
+                    self.cacheSessionDefaults(
+                        SessionDefaultsSnapshot(runtimeState: runtime, availableModels: session.availableModels),
+                        for: session.launchRequest?.workingDirectory
+                    )
                 }
             } catch {
                 await MainActor.run {
@@ -884,6 +947,12 @@ final class PiAppState: ObservableObject {
                 await MainActor.run {
                     guard let self, let session, self.host == remoteHost else { return }
                     session.updateAvailableModels(models)
+                    if let runtime = session.runtimeState {
+                        self.cacheSessionDefaults(
+                            SessionDefaultsSnapshot(runtimeState: runtime, availableModels: models),
+                            for: session.launchRequest?.workingDirectory
+                        )
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -1291,6 +1360,7 @@ final class PiAppState: ObservableObject {
         sendingSessionKeys = []
         unreadSessionKeys = []
         sessionActivityOverrides = [:]
+        sessionDefaultsCache = [:]
         // Open chat tabs reference `sessionPath` values from the previous
         // host, so close them. Without this the user sees stale
         // conversations after a host change.
