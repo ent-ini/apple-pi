@@ -44,6 +44,11 @@ Plan for the next ApplePi/pi-app UX fixes after the new-session sidebar work.
 - This should allow a new steer message during the active run, similar to Telegram behavior.
 - Need to confirm the exact backend interruption/continue semantics for pi-app remote flow.
 
+### 9. Recent transcript cache while switching sessions
+- Keep recent chat content cached when jumping between sessions.
+- Target: at least the last ~40 recently used session tabs stay hot in memory.
+- Switching back to a recently opened session should feel instant instead of waiting for a fresh reload every time.
+
 ## P1 — subagent UX
 
 ### Right sidebar for subagents
@@ -88,13 +93,14 @@ Plan for the next ApplePi/pi-app UX fixes after the new-session sidebar work.
 6. Stop button state
 7. Smooth composer editing while streaming
 8. Steer-message support during active response
+9. Recent transcript cache while switching sessions
 
 ### Phase 3 — subagents and layout
-8. Session-scoped subagent model/store
-9. Right sidebar shell + open/close behavior
-10. Inline "subagent running" rows in main chat
-11. Subagent detail read-only transcript
-12. Remove directory browser UI
+10. Session-scoped subagent model/store
+11. Right sidebar shell + open/close behavior
+12. Inline "subagent running" rows in main chat
+13. Subagent detail read-only transcript
+14. Remove directory browser UI
 
 ## Notes / technical hints
 
@@ -120,6 +126,11 @@ Plan for the next ApplePi/pi-app UX fixes after the new-session sidebar work.
   - steer is appended as another user message while stream is active.
 - Mirror Telegram behavior as closely as practical.
 
+### Recent transcript cache
+- Current session switching should prefer hot in-memory tabs over forced reload.
+- Keep an LRU-style cap so memory does not grow forever.
+- If a hot session is selected again, show cached transcript immediately and refresh lazily only when needed.
+
 ### Subagents
 - Need to inspect how subagent output is represented in current Pi stream/session model and what must be added to pi-appd/client parsing.
 - Parallel subagents must be grouped per parent session with their own detail transcripts.
@@ -133,5 +144,6 @@ Plan for the next ApplePi/pi-app UX fixes after the new-session sidebar work.
 - Composer can grow to ~20 lines.
 - Empty composer + active run => stop icon.
 - Non-empty composer + active run => send remains available for steer.
+- Jumping back to a recently opened session feels instant from cache.
 - Right sidebar shows subagents for current session and opens automatically when they start.
 - Directory browser UI is gone from the main layout.

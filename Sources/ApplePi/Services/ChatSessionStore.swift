@@ -328,6 +328,8 @@ private extension String {
 /// currently selected tab. Replaces the old `TerminalWorkspaceStore`.
 @MainActor
 final class ChatSessionStore: ObservableObject {
+    private let maximumCachedTabs = 40
+
     @Published private(set) var tabs: [ChatSession] = []
     @Published var selectedTabID: ChatSession.ID?
 
@@ -371,8 +373,8 @@ final class ChatSessionStore: ObservableObject {
             )
             existing.updateLaunchRequest(launchRequest)
             select(existing)
-            if sessionPath != nil || eventLoader != nil {
-                existing.loadFromDisk(force: true)
+            if existing.events.isEmpty, (sessionPath != nil || eventLoader != nil) {
+                existing.loadFromDisk()
             }
             return existing
         }
@@ -393,6 +395,7 @@ final class ChatSessionStore: ObservableObject {
         if sessionPath != nil || eventLoader != nil {
             session.loadFromDisk()
         }
+        trimCachedTabsIfNeeded()
         onTabsChanged?()
         return session
     }
@@ -462,7 +465,20 @@ final class ChatSessionStore: ObservableObject {
 
     func select(_ tab: ChatSession) {
         selectedTabID = tab.id
+        if let index = tabs.firstIndex(where: { $0.id == tab.id }), index != tabs.count - 1 {
+            let cached = tabs.remove(at: index)
+            tabs.append(cached)
+        }
         onTabsChanged?()
+    }
+
+    private func trimCachedTabsIfNeeded() {
+        while tabs.count > maximumCachedTabs {
+            guard let index = tabs.firstIndex(where: { $0.id != selectedTabID && !$0.hasActiveSend }) else {
+                break
+            }
+            tabs.remove(at: index)
+        }
     }
 }
 

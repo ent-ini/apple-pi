@@ -141,7 +141,7 @@ struct MessageListView: View {
 // MARK: - Display rows
 
 private struct BottomAnchorMaxYPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = .greatestFiniteMagnitude
+    static let defaultValue: CGFloat = .greatestFiniteMagnitude
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
