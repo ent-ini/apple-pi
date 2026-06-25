@@ -191,6 +191,7 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     func finishSendingAndReload() {
+        isSending = false
         statusMessage = "Refreshing session..."
         loadFromDisk(force: true)
     }
@@ -296,7 +297,7 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     private var visibleTransientEvents: [SessionEvent] {
-        ([transientUserEvent, transientAssistantEvent].compactMap { $0 } + transientStreamEvents)
+        ([transientUserEvent].compactMap { $0 } + transientStreamEvents + [transientAssistantEvent].compactMap { $0 })
             .filter { shouldDisplayTransientEvent($0) }
     }
 
