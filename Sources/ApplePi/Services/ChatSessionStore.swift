@@ -392,6 +392,13 @@ final class ChatSession: ObservableObject, Identifiable {
         if persistedMessage.id == transientMessage.id {
             return true
         }
+
+        let transientSignature = messageSignature(for: transientMessage)
+        let persistedSignature = messageSignature(for: persistedMessage)
+        if !transientSignature.isEmpty, transientSignature == persistedSignature {
+            return true
+        }
+
         guard persistedMessage.content == transientMessage.content else {
             return false
         }
@@ -400,6 +407,23 @@ final class ChatSession: ObservableObject, Identifiable {
             return abs(persistedTimestamp.timeIntervalSince(transientTimestamp)) < 30
         }
         return persistedMessage.parentId == transientMessage.parentId
+    }
+
+    private func messageSignature(for message: Message) -> String {
+        message.content.compactMap { block -> String? in
+            switch block {
+            case .text(let text):
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            case .thinking(let text, _):
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : "[thinking]\(trimmed)"
+            case .image(let path, _):
+                let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : "[image]\(trimmed)"
+            }
+        }
+        .joined(separator: "\n")
     }
 
     private static let transientStreamLineIndexBase = Int.max - 1_000
