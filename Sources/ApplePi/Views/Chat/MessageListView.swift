@@ -21,19 +21,25 @@ struct MessageListView: View {
                             eventRow(for: row)
                                 .id(row.id)
                         }
-                        if showsPendingAssistantPlaceholder {
-                            HStack(alignment: .top, spacing: 0) {
-                                BouncingDotsView()
-                                Spacer(minLength: 60)
-                            }
-                            .id(Self.pendingAssistantAnchorID)
-                        }
                         Color.clear
                             .frame(height: 1)
+                            .background {
+                                GeometryReader { anchorProxy in
+                                    Color.clear
+                                        .preference(
+                                            key: BottomAnchorMaxYPreferenceKey.self,
+                                            value: anchorProxy.frame(in: .named(Self.scrollCoordinateSpaceName)).maxY
+                                        )
+                                }
+                            }
                             .id(Self.bottomAnchorID)
                     }
                     .padding(20)
                     .frame(minHeight: proxy.size.height, alignment: .top)
+                }
+                .coordinateSpace(name: Self.scrollCoordinateSpaceName)
+                .onPreferenceChange(BottomAnchorMaxYPreferenceKey.self) { bottomMaxY in
+                    isAnchoredToBottom = bottomMaxY <= proxy.size.height + 72
                 }
                 .onChange(of: session.events.count) { _, _ in
                     scrollToBottomIfNeeded(using: scrollProxy)
@@ -41,13 +47,15 @@ struct MessageListView: View {
                 .onChange(of: session.streamRevision) { _, _ in
                     scrollToBottomIfNeeded(using: scrollProxy)
                 }
-                .opacity(hasCompletedInitialPlacement ? 1 : 0)
                 .onChange(of: session.isLoading) { _, isLoading in
-                    if isLoading {
-                        hasCompletedInitialPlacement = false
-                        return
+                    guard !isLoading else { return }
+                    if !hasCompletedInitialPlacement || isAnchoredToBottom {
+                        scrollToBottomSettled(
+                            using: scrollProxy,
+                            animated: false,
+                            completesInitialPlacement: !hasCompletedInitialPlacement
+                        )
                     }
-                    scrollToBottomSettled(using: scrollProxy, animated: false, completesInitialPlacement: true)
                 }
                 .onAppear {
                     hasCompletedInitialPlacement = false
@@ -95,42 +103,10 @@ struct MessageListView: View {
     }
 
     private static let bottomAnchorID = "chat.list.bottom"
-    private static let pendingAssistantAnchorID = "chat.list.pending.assistant"
+    private static let scrollCoordinateSpaceName = "chat.list.scroll"
 
     private var displayedRows: [DisplayedSessionRow] {
         DisplayedSessionRow.groupingToolResults(in: session.events)
-    }
-
-    private var showsPendingAssistantPlaceholder: Bool {
-        guard session.isSending else { return false }
-        guard let lastMessageEvent = lastMessageEvent else { return true }
-        guard case .message(let message, let lineIndex) = lastMessageEvent else { return true }
-
-        if message.role == .user, lineIndex == Int.max - 1 {
-            return true
-        }
-
-        guard message.role == .assistant, lineIndex == Int.max else { return false }
-        return !message.content.contains { block in
-            switch block {
-            case .text(let text):
-                return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case .thinking(let text, _):
-                return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case .image:
-                return true
-            }
-        }
-    }
-
-    /// Last message event ignoring tool/meta/other rows, so streaming
-    /// activity drives the bouncing-dots placeholder the same way it did
-    /// before tool rows started rendering.
-    private var lastMessageEvent: SessionEvent? {
-        for event in session.events.reversed() {
-            if case .message = event { return event }
-        }
-        return nil
     }
 
     private func scrollToBottomIfNeeded(using scrollProxy: ScrollViewProxy) {
@@ -163,6 +139,14 @@ struct MessageListView: View {
 }
 
 // MARK: - Display rows
+
+private struct BottomAnchorMaxYPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = .greatestFiniteMagnitude
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
 
 private enum DisplayedSessionRow: Identifiable {
     case event(SessionEvent)

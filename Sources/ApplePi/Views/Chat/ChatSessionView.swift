@@ -742,8 +742,9 @@ private struct ComposerTextView: NSViewRepresentable {
         textView.insertionPointColor = .labelColor
         textView.textContainerInset = NSSize(width: 10, height: 6)
         textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.lineBreakMode = .byCharWrapping
         textView.textContainer?.widthTracksTextView = true
-        textView.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.containerSize = NSSize(width: max(scrollView.contentView.bounds.width - 20, 1), height: CGFloat.greatestFiniteMagnitude)
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
@@ -813,7 +814,7 @@ private struct ComposerTextView: NSViewRepresentable {
                   let textContainer = textView.textContainer else { return }
             layoutManager.ensureLayout(for: textContainer)
             let usedRect = layoutManager.usedRect(for: textContainer)
-            let next = min(max(usedRect.height + textView.textContainerInset.height * 2, 30), 140)
+            let next = min(max(usedRect.height + textView.textContainerInset.height * 2, 30), 340)
             if abs(dynamicHeight - next) > 0.5 {
                 dynamicHeight = next
             }
@@ -833,7 +834,8 @@ private final class ComposerScrollView: NSScrollView {
         let visibleWidth = contentView.bounds.width
         guard visibleWidth > 0 else { return }
 
-        textContainer.containerSize = NSSize(width: visibleWidth, height: CGFloat.greatestFiniteMagnitude)
+        let textContainerWidth = max(visibleWidth - (textView.textContainerInset.width * 2), 1)
+        textContainer.containerSize = NSSize(width: textContainerWidth, height: CGFloat.greatestFiniteMagnitude)
         layoutManager.ensureLayout(for: textContainer)
 
         let usedRect = layoutManager.usedRect(for: textContainer)

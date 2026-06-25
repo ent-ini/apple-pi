@@ -147,7 +147,17 @@ final class ChatSession: ObservableObject, Identifiable {
             ),
             lineIndex: Self.transientUserLineIndex
         )
-        transientAssistantEvent = nil
+        transientAssistantEvent = .message(
+            Message(
+                id: UUID().uuidString,
+                role: .assistant,
+                content: [],
+                model: nil,
+                timestamp: nil,
+                parentId: nil
+            ),
+            lineIndex: Self.transientAssistantLineIndex
+        )
         rebuildEvents()
     }
 

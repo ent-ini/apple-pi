@@ -261,6 +261,10 @@ struct MessageBubble: View {
                 ) {
                     userPresentationView(presentation)
                 }
+            } else if message.role == .assistant && visibleBlocks.isEmpty {
+                bubbleSurface(isLastVisibleBlock: true, prefersCompactWidth: true) {
+                    BouncingDotsView()
+                }
             } else {
                 ForEach(Array(visibleBlocks.enumerated()), id: \.offset) { index, block in
                     blockView(block, isLastVisibleBlock: index == visibleBlocks.count - 1)
