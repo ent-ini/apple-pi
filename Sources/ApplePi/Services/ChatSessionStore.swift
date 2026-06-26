@@ -532,8 +532,8 @@ final class ChatSession: ObservableObject, Identifiable {
             case (.message(let lhs, _), .message(let rhs, _)):
                 if lhs.id == rhs.id { return true }
                 return lhs.role == rhs.role
-                    && !messageSignature(for: lhs).isEmpty
-                    && messageSignature(for: lhs) == messageSignature(for: rhs)
+                    && !self.messageSignature(for: lhs).isEmpty
+                    && self.messageSignature(for: lhs) == self.messageSignature(for: rhs)
             case (.toolCall(let lhs, _), .toolCall(let rhs, _)):
                 return lhs.id == rhs.id
             case (.toolResult(let lhs, _), .toolResult(let rhs, _)):
