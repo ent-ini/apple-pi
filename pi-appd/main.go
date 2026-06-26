@@ -413,6 +413,14 @@ func (s *server) handleSessionSubroutes(w http.ResponseWriter, r *http.Request) 
 		s.handleSessionEvents(w, r, record)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "stream" {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.handleSessionEventStream(w, r, record)
+		return
+	}
 	if len(parts) == 2 && parts[1] == "send" {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -674,6 +682,147 @@ func (s *server) handleSessionEvents(w http.ResponseWriter, r *http.Request, rec
 		page.LastLine = events[len(events)-1].Line
 	}
 	writeJSON(w, http.StatusOK, eventsResponse{Events: events, Page: page})
+}
+
+func (s *server) handleSessionEventStream(w http.ResponseWriter, r *http.Request, record sessionRecord) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+	after, hasAfter, err := optionalInt(r.URL.Query().Get("after"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid after")
+		return
+	}
+	if !hasAfter {
+		after = -1
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		writeSSEError(w, flusher, err.Error())
+		return
+	}
+	defer watcher.Close()
+
+	sessionPath := filepath.Clean(record.FilePath)
+	resolvedSessionPath := sessionPath
+	if resolved, err := filepath.EvalSymlinks(sessionPath); err == nil {
+		resolvedSessionPath = filepath.Clean(resolved)
+	}
+	if err := watcher.Add(filepath.Dir(resolvedSessionPath)); err != nil {
+		writeSSEError(w, flusher, err.Error())
+		return
+	}
+
+	cursor := after
+	sendAfterCursor := func() bool {
+		records, err := readEventRecordsAfter(record.FilePath, cursor)
+		if err != nil {
+			writeSSEError(w, flusher, err.Error())
+			return false
+		}
+		for _, event := range records {
+			if !writeSSE(w, flusher, "event", event) {
+				return false
+			}
+			cursor = event.Line
+		}
+		return true
+	}
+	if !sendAfterCursor() {
+		return
+	}
+
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+
+	debounce := time.NewTimer(time.Hour)
+	if !debounce.Stop() {
+		<-debounce.C
+	}
+	defer debounce.Stop()
+	scheduleRead := func() {
+		if !debounce.Stop() {
+			select {
+			case <-debounce.C:
+			default:
+			}
+		}
+		debounce.Reset(100 * time.Millisecond)
+	}
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-heartbeat.C:
+			if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		case <-debounce.C:
+			if !sendAfterCursor() {
+				return
+			}
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			eventPath := filepath.Clean(event.Name)
+			if eventPath != sessionPath && eventPath != resolvedSessionPath {
+				continue
+			}
+			if event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
+				writeSSEError(w, flusher, "session file was removed")
+				return
+			}
+			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Chmod) != 0 {
+				scheduleRead()
+			}
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			writeSSEError(w, flusher, err.Error())
+			return
+		}
+	}
+}
+
+func readEventRecordsAfter(path string, after int) ([]rawEventRecord, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	lines := splitJSONLLines(data)
+	// The streaming endpoint must only advance its cursor over complete JSONL
+	// records. If we observe a partial trailing write without a newline, keep
+	// it for the next fsnotify tick instead of emitting and losing the final
+	// completed line at the same index.
+	if len(data) > 0 && data[len(data)-1] != '\n' && len(lines) > 0 {
+		lines = lines[:len(lines)-1]
+	}
+	start := after + 1
+	if start < 0 {
+		start = 0
+	}
+	if start > len(lines) {
+		start = len(lines)
+	}
+	records := make([]rawEventRecord, 0, len(lines)-start)
+	for i := start; i < len(lines); i++ {
+		records = append(records, rawEventRecord{Line: i, Raw: lines[i]})
+	}
+	return records, nil
 }
 
 func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {

@@ -19,6 +19,33 @@ func TestSplitJSONLLinesDropsOnlyTrailingEmptyLine(t *testing.T) {
 	}
 }
 
+func TestReadEventRecordsAfterReturnsCatchUpRecords(t *testing.T) {
+	path := writeTempSessionFile(t, "a\nb\nc\n")
+
+	records, err := readEventRecordsAfter(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("len(records) = %d, want 2", len(records))
+	}
+	if records[0].Line != 1 || records[0].Raw != "b" || records[1].Line != 2 || records[1].Raw != "c" {
+		t.Fatalf("records = %#v", records)
+	}
+}
+
+func TestReadEventRecordsAfterSkipsPartialTrailingLine(t *testing.T) {
+	path := writeTempSessionFile(t, "a\nb")
+
+	records, err := readEventRecordsAfter(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("records = %#v, want no partial trailing line", records)
+	}
+}
+
 func TestReadLastLinesTrimsTrailingEmptyLineAndPreservesLineNumbers(t *testing.T) {
 	path := writeTempSessionFile(t, "a\nb\nc\n")
 

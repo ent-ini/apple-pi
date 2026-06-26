@@ -77,6 +77,86 @@ struct RemoteDaemonClient {
         return catalogSnapshot(from: response)
     }
 
+    /// Live subscription to a single session's persisted JSONL tail. The
+    /// daemon first replays all records after `after`, then keeps the SSE
+    /// connection open and emits every newly appended JSONL line as an
+    /// `event` frame. The caller still owns history pagination (`before`) and
+    /// reconnect cadence; this stream is the fast path for live catch-up.
+    func streamSessionEventPages(
+        host: PiHostConfiguration,
+        sessionID: String,
+        after: Int,
+        tokenOverride: String? = nil
+    ) -> AsyncThrowingStream<SessionEventsPage, Error> {
+        AsyncThrowingStream { continuation in
+            let worker = Task {
+                do {
+                    let request = try self.makeLiveRequest(
+                        host: host,
+                        path: "/sessions/\(encodedPathComponent(sessionID))/stream",
+                        queryItems: [URLQueryItem(name: "after", value: String(after))],
+                        tokenOverride: tokenOverride,
+                        accept: "text/event-stream"
+                    )
+                    let (bytes, response) = try await Self.liveSession.bytes(for: request)
+                    guard let http = response as? HTTPURLResponse else {
+                        throw RemoteDaemonError.invalidResponse
+                    }
+                    guard (200..<300).contains(http.statusCode) else {
+                        var bodyData = Data()
+                        for try await byte in bytes {
+                            bodyData.append(byte)
+                        }
+                        let message = String(data: bodyData, encoding: .utf8)?
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        throw RemoteDaemonError.requestFailed(status: http.statusCode, body: message)
+                    }
+
+                    let parser = SSECatalogEventParser()
+                    let decoder = JSONDecoder()
+                    for try await line in bytes.lines {
+                        if Task.isCancelled { break }
+                        guard let event = parser.feed(line) else { continue }
+                        if event.event == "error" {
+                            let message = Self.decodeSSEErrorMessage(from: event.data) ?? "Session stream failed."
+                            throw RemoteDaemonError.requestFailed(status: 0, body: message)
+                        }
+                        guard event.event == "event",
+                              let data = event.data.data(using: .utf8),
+                              let record = try? decoder.decode(RawEventRecord.self, from: data) else {
+                            continue
+                        }
+                        let events = SessionEventParser.decodeAll(line: record.raw, at: record.line)
+                        guard !events.isEmpty else { continue }
+                        continuation.yield(
+                            SessionEventsPage(
+                                events: events,
+                                firstLine: record.line,
+                                lastLine: record.line,
+                                hasMoreBefore: record.line > 0,
+                                hasMoreAfter: false
+                            )
+                        )
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in
+                worker.cancel()
+            }
+        }
+    }
+
+    private static func decodeSSEErrorMessage(from data: String) -> String? {
+        guard let payload = data.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: payload) as? [String: Any] else {
+            return data.nilIfBlank
+        }
+        return (object["error"] as? String)?.nilIfBlank ?? data.nilIfBlank
+    }
+
     func loadCatalog(host: PiHostConfiguration, activeProjectDirectory: String?, tokenOverride: String? = nil) async throws -> PiCatalogSnapshot {
         let response: CatalogResponse = try await send(
             host: host,

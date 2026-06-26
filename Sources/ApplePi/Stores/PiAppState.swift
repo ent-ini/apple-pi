@@ -80,6 +80,7 @@ final class PiAppState: ObservableObject {
     private var remoteDirectoryRefreshID = UUID()
     private var catalogPollingTask: Task<Void, Never>?
     private var selectedSessionPollingTask: Task<Void, Never>?
+    private var selectedSessionStreamTask: Task<Void, Never>?
     private var activityObservers: [NSObjectProtocol] = []
     private var isApplicationActive = true
     /// Long-lived task that subscribes to the daemon's `/sessions/stream`
@@ -133,6 +134,7 @@ final class PiAppState: ObservableObject {
         // events only writes once.
         chatWorkspace.onTabsChanged = { [weak self] in
             self?.schedulePersistedChatTabsSave()
+            self?.restartSelectedSessionEventStream()
         }
         // Restore previously open tabs before kicking off the catalog
         // refresh. A fingerprint mismatch (different host) is a no-op
@@ -150,6 +152,7 @@ final class PiAppState: ObservableObject {
             startCatalogLiveUpdates()
             startCatalogAdaptivePolling()
             startSelectedSessionEventPolling()
+            restartSelectedSessionEventStream()
         }
     }
 
@@ -167,6 +170,7 @@ final class PiAppState: ObservableObject {
         stopCatalogAdaptivePolling()
         selectedSessionPollingTask?.cancel()
         selectedSessionPollingTask = nil
+        stopSelectedSessionEventStream()
         savePersistedChatTabs()
         for tab in chatWorkspace.tabs {
             tab.cancelSend()
@@ -879,6 +883,7 @@ final class PiAppState: ObservableObject {
             // The key changed from `new:<UUID>` to the real file path,
             // so the persisted tabs snapshot is now stale. Save again.
             schedulePersistedChatTabsSave()
+            restartSelectedSessionEventStream()
             scheduleCatalogRefresh(after: .milliseconds(50))
             refreshSessionRuntime(for: session, updatesStatus: false)
             refreshAvailableModels(for: session)
@@ -894,6 +899,7 @@ final class PiAppState: ObservableObject {
                 migrateSessionState(from: previousAliases, to: sessionAliases(for: session))
                 upsertSidebarSession(for: session, previousAliases: previousAliases, fallbackWorkingDirectory: meta.workingDirectory)
                 schedulePersistedChatTabsSave()
+                restartSelectedSessionEventStream()
                 scheduleCatalogRefresh(after: .milliseconds(50))
                 refreshSessionRuntime(for: session, updatesStatus: false)
                 refreshAvailableModels(for: session)
@@ -1475,7 +1481,8 @@ final class PiAppState: ObservableObject {
         remoteDirectoryParent = nil
         remoteDirectoryStatus = ""
         newSessionWorkingDirectory = ""
-        // Stop the live SSE subscription — it is tied to the old host.
+        // Stop live SSE subscriptions — they are tied to the old host.
+        stopSelectedSessionEventStream()
         stopCatalogLiveUpdates()
     }
 
@@ -1544,12 +1551,108 @@ final class PiAppState: ObservableObject {
         )
     }
 
+    private func restartSelectedSessionEventStream() {
+        stopSelectedSessionEventStream()
+        guard startsBackgroundWork,
+              host.usesRemoteDaemonTransport,
+              let session = chatWorkspace.selectedTab,
+              let sessionID = session.sessionID?.nilIfBlank else { return }
+
+        let streamHost = host
+        let selectedTabID = session.id
+        selectedSessionStreamTask = Task { [weak self] in
+            await self?.runSelectedSessionEventStream(
+                host: streamHost,
+                sessionID: sessionID,
+                selectedTabID: selectedTabID
+            )
+        }
+    }
+
+    private func stopSelectedSessionEventStream() {
+        selectedSessionStreamTask?.cancel()
+        selectedSessionStreamTask = nil
+    }
+
+    private func runSelectedSessionEventStream(
+        host streamHost: PiHostConfiguration,
+        sessionID: String,
+        selectedTabID: ChatSession.ID
+    ) async {
+        let client = RemoteDaemonClient()
+        var backoff = Duration.seconds(1)
+        let maxBackoff = Duration.seconds(30)
+
+        while !Task.isCancelled {
+            guard host == streamHost,
+                  let session = chatWorkspace.selectedTab,
+                  session.id == selectedTabID,
+                  session.sessionID?.nilIfBlank == sessionID else {
+                return
+            }
+
+            let after = session.lastPersistedLineIndex
+            let stream = client.streamSessionEventPages(
+                host: streamHost,
+                sessionID: sessionID,
+                after: after
+            )
+            var receivedEvent = false
+            do {
+                for try await page in stream {
+                    receivedEvent = true
+                    backoff = .seconds(1)
+                    guard host == streamHost,
+                          let currentSession = chatWorkspace.selectedTab,
+                          currentSession.id == selectedTabID,
+                          currentSession.sessionID?.nilIfBlank == sessionID else {
+                        return
+                    }
+                    applySessionStreamPage(page, to: currentSession)
+                }
+                if Task.isCancelled { return }
+                try? await Task.sleep(for: backoff)
+            } catch is CancellationError {
+                return
+            } catch {
+                if Task.isCancelled { return }
+                let nsError = error as NSError
+                if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
+                    return
+                }
+                if !receivedEvent {
+                    statusMessage = "Live session stream lost: \(error.localizedDescription). Retrying…"
+                }
+                try? await Task.sleep(for: backoff)
+                backoff = min(backoff * 2, maxBackoff)
+            }
+        }
+    }
+
+    private func applySessionStreamPage(_ page: SessionEventsPage, to session: ChatSession) {
+        guard !session.isLoading else { return }
+        // While the user is actively sending, the POST NDJSON stream owns the
+        // optimistic timeline. The final output_complete reload reconciles the
+        // persisted log; the session SSE stream is the production live path for
+        // non-local writes and reconnect catch-up.
+        guard !session.isSending else { return }
+        let after = session.lastPersistedLineIndex
+        if let firstLine = page.firstLine,
+           !page.events.isEmpty,
+           firstLine <= after {
+            return
+        }
+        session.appendPersistedPage(page)
+    }
+
     private func startSelectedSessionEventPolling() {
         selectedSessionPollingTask?.cancel()
         selectedSessionPollingTask = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
-                let interval: Duration = self.isApplicationActive ? .seconds(2) : .seconds(30)
+                let interval: Duration = self.selectedSessionStreamTask == nil && self.isApplicationActive
+                    ? .seconds(2)
+                    : .seconds(30)
                 try? await Task.sleep(for: interval)
                 if Task.isCancelled { return }
                 await self.syncSelectedRemoteSessionDelta()
