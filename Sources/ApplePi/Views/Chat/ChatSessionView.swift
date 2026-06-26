@@ -18,11 +18,16 @@ struct ChatSessionView: View {
 
     private let attachmentStagingService = AttachmentStagingService()
 
+    private var hasDraftContent: Bool {
+        !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftAttachments.isEmpty
+    }
+
     private var canSend: Bool {
-        !session.isSending && !audioRecorder.isRecording && !isTranscribingAudio && (
-            !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-            !draftAttachments.isEmpty
-        )
+        !session.isSending && !audioRecorder.isRecording && !isTranscribingAudio && hasDraftContent
+    }
+
+    private var canSteer: Bool {
+        session.isSending && !audioRecorder.isRecording && !isTranscribingAudio && hasDraftContent
     }
 
     private var canAdjustSessionOptions: Bool {
@@ -100,7 +105,14 @@ struct ChatSessionView: View {
                 )
                 .help(audioRecorder.isRecording ? "Stop recording" : "Record voice note")
 
-                if session.isSending {
+                if canSteer {
+                    composerIconButton(
+                        systemName: "arrow.up",
+                        enabled: true,
+                        action: handleSteerTapped
+                    )
+                    .help("Send steering message")
+                } else if session.isSending {
                     if session.isAwaitingTurnCommit {
                         ProgressView()
                             .controlSize(.small)
@@ -285,7 +297,7 @@ struct ChatSessionView: View {
             ComposerTextView(
                 text: $draftText,
                 dynamicHeight: $draftHeight,
-                onSubmit: handleSendTapped,
+                onSubmit: handleComposerSubmit,
                 onPasteAttachments: handlePasteAttachments
             )
             .frame(maxWidth: .infinity, minHeight: controlHeight, maxHeight: controlHeight)
@@ -321,10 +333,28 @@ struct ChatSessionView: View {
         .disabled(!enabled)
     }
 
+    private func handleComposerSubmit() {
+        if canSteer {
+            handleSteerTapped()
+        } else {
+            handleSendTapped()
+        }
+    }
+
     private func handleSendTapped() {
         let prompt = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSend else { return }
         if appState.sendMessage(prompt, attachments: draftAttachments, in: session) {
+            draftText = ""
+            draftHeight = 30
+            draftAttachments = []
+        }
+    }
+
+    private func handleSteerTapped() {
+        let prompt = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard canSteer else { return }
+        if appState.steerMessage(prompt, attachments: draftAttachments, in: session) {
             draftText = ""
             draftHeight = 30
             draftAttachments = []

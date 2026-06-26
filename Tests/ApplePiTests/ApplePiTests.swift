@@ -1058,6 +1058,22 @@ private func isolatedDefaults() -> UserDefaults {
     }
 }
 
+@Test func piTurnStreamParserRecognizesAbort() {
+    let raw = #"{"type":"abort"}"#
+
+    let event = PiTurnStreamParser.parseLine(raw)
+
+    guard let event else {
+        Issue.record("Expected an abort event")
+        return
+    }
+    if case .abort = event {
+        // ok
+    } else {
+        Issue.record("Expected .abort")
+    }
+}
+
 @Test func shortcutPreferencesUseDefaultsAndSwapConflicts() {
     var preferences = AppShortcutPreferences()
 

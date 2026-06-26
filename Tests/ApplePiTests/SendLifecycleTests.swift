@@ -72,6 +72,37 @@ import Testing
 }
 
 @MainActor
+@Test func chatSessionAbortPreservesTransientTranscriptAndAddsAbortEvent() {
+    let session = ChatSession(key: "test", title: "Test")
+    session.beginSending(prompt: "hello")
+    session.applyStreamingEvents(
+        [
+            .message(
+                Message(id: "assistant-1", role: .assistant, content: [.text("partial")], model: nil, timestamp: nil, parentId: nil),
+                lineIndex: 0
+            )
+        ],
+        isFinal: false
+    )
+
+    session.abortSend()
+
+    #expect(session.isSending == false)
+    #expect(session.events.contains { event in
+        if case .message(let message, _) = event { return message.role == .user }
+        return false
+    })
+    #expect(session.events.contains { event in
+        if case .message(let message, _) = event { return message.role == .assistant && message.content == [.text("partial")] }
+        return false
+    })
+    #expect(session.events.contains { event in
+        if case .other(let type, _) = event { return type == "abort" }
+        return false
+    })
+}
+
+@MainActor
 @Test func chatSessionShowsPlaceholderOnlyBeforeStreamEventsArrive() {
     let session = ChatSession(key: "test", title: "Test")
     session.beginSending(prompt: "hello")

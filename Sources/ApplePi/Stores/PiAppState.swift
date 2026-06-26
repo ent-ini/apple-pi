@@ -640,7 +640,50 @@ final class PiAppState: ObservableObject {
     func cancelSend(in session: ChatSession) {
         guard session.hasActiveSend else { return }
         statusMessage = "Stopping Pi..."
-        session.cancelSend()
+        let remoteHost = host
+        let sessionID = session.sessionID?.nilIfBlank
+        if host.usesRemoteDaemonTransport, let sessionID {
+            Task {
+                try? await RemoteDaemonClient().abortSession(host: remoteHost, sessionID: sessionID)
+            }
+        }
+        session.abortSend()
+        let aliases = sessionAliases(for: session)
+        setSessionSending(false, aliases: aliases)
+    }
+
+    @discardableResult
+    func steerMessage(_ prompt: String, attachments: [ChatAttachment] = [], in session: ChatSession) -> Bool {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard session.isSending else { return sendMessage(prompt, attachments: attachments, in: session) }
+        guard !trimmed.isEmpty || !attachments.isEmpty else { return false }
+        guard host.usesRemoteDaemonTransport, let sessionID = session.sessionID?.nilIfBlank else {
+            statusMessage = "Steering is available after the remote session is created."
+            return false
+        }
+        let effectivePrompt = trimmed.isEmpty ? "Please inspect the attached item(s)." : trimmed
+        let taggedPrompt = sourceTaggedAppPrompt(effectivePrompt)
+        session.appendSteeringPrompt(taggedPrompt, attachments: attachments)
+        statusMessage = "Steering Pi..."
+        let remoteHost = host
+        Task { [weak self, weak session] in
+            do {
+                let daemonAttachments = try await self?.uploadAttachmentsIfNeeded(attachments) ?? []
+                try await RemoteDaemonClient().steerSession(
+                    host: remoteHost,
+                    sessionID: sessionID,
+                    prompt: taggedPrompt,
+                    attachments: daemonAttachments
+                )
+            } catch {
+                await MainActor.run {
+                    guard let self, let session else { return }
+                    self.statusMessage = error.localizedDescription
+                    session.applyStreamingEvents([.other(type: "steer_error", lineIndex: session.lastPersistedLineIndex + 1)], isFinal: false)
+                }
+            }
+        }
+        return true
     }
 
     @discardableResult
@@ -803,11 +846,15 @@ final class PiAppState: ObservableObject {
             appState?.scheduleCatalogRefresh(after: .seconds(0.2))
         case .cancelled:
             // Cancellation is an expected user action (closing the
-            // tab, switching hosts, hitting a future "stop" button).
-            // Reset the composer without surfacing an error.
+            // tab or switching hosts). Explicit user abort preserves
+            // the optimistic transcript instead of clearing it.
+            let wasAborted = session.hasAbortedCurrentSend
             session.finishSendingCancelled()
-            appState?.setSessionSending(false, aliases: initialAliases)
-            appState?.removeOptimisticSidebarSessionIfNeeded(matching: initialAliases)
+            let aliases = appState?.sessionAliases(for: session, fallback: initialAliases) ?? initialAliases
+            appState?.setSessionSending(false, aliases: aliases)
+            if !wasAborted {
+                appState?.removeOptimisticSidebarSessionIfNeeded(matching: initialAliases)
+            }
         case .failure(let message):
             session.finishSendingWithError(message)
             let aliases = appState?.sessionAliases(for: session, fallback: initialAliases) ?? initialAliases
@@ -923,8 +970,13 @@ final class PiAppState: ObservableObject {
             session.markTurnOutputComplete()
         case .agentEnd:
             session.applyStreamingEvents([], isFinal: true)
+        case .abort:
+            session.finishSendingAborted()
+            setSessionSending(false, aliases: sessionAliases(for: session))
         case .outputComplete:
-            session.finishSendingAndReload()
+            if !session.hasAbortedCurrentSend {
+                session.finishSendingAndReload()
+            }
             restartSelectedSessionEventStream()
             scheduleCatalogRefresh(after: .milliseconds(50))
             refreshSessionRuntime(for: session, updatesStatus: false)

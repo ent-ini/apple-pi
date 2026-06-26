@@ -368,6 +368,34 @@ struct RemoteDaemonClient {
         )
     }
 
+    func abortSession(host: PiHostConfiguration, sessionID: String, tokenOverride: String? = nil) async throws {
+        let _: EmptyOKResponse = try await send(
+            host: host,
+            path: "/sessions/\(encodedPathComponent(sessionID))/abort",
+            method: "POST",
+            tokenOverride: tokenOverride,
+            body: EmptyRequestBody(),
+            accept: "application/json"
+        )
+    }
+
+    func steerSession(
+        host: PiHostConfiguration,
+        sessionID: String,
+        prompt: String,
+        attachments: [UploadedAttachmentReference] = [],
+        tokenOverride: String? = nil
+    ) async throws {
+        let _: EmptyOKResponse = try await send(
+            host: host,
+            path: "/sessions/\(encodedPathComponent(sessionID))/steer",
+            method: "POST",
+            tokenOverride: tokenOverride,
+            body: SendSessionRequestBody(prompt: prompt, attachments: attachments),
+            accept: "application/json"
+        )
+    }
+
     func uploadAttachment(host: PiHostConfiguration, attachment: ChatAttachment) async throws -> UploadedAttachmentReference {
         let boundary = "ApplePiBoundary-\(UUID().uuidString)"
         var request = try makeRequest(
@@ -537,7 +565,7 @@ struct RemoteDaemonClient {
                 switch event {
                 case .streamError(let message):
                     throw RemoteDaemonError.requestFailed(status: 0, body: message)
-                case .turnEnd, .agentEnd, .outputComplete:
+                case .turnEnd, .agentEnd, .abort, .outputComplete:
                     continue
                 case .sessionBound, .sessionHeader, .sessionEvents:
                     break
@@ -756,6 +784,10 @@ enum RemoteDaemonError: LocalizedError {
 
 private struct HealthResponse: Decodable {
     let ok: Bool
+}
+
+private struct EmptyOKResponse: Decodable {
+    let ok: Bool?
 }
 
 private struct CatalogResponse: Decodable {

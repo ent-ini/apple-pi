@@ -67,6 +67,7 @@ final class ChatSession: ObservableObject, Identifiable {
     private var transientUserEvent: SessionEvent?
     private var transientAssistantEvent: SessionEvent?
     private var transientStreamEvents: [SessionEvent] = []
+    private var didAbortCurrentSend = false
 
     var lastPersistedLineIndex: Int {
         persistedEvents.last?.lineIndex ?? -1
@@ -111,6 +112,8 @@ final class ChatSession: ObservableObject, Identifiable {
     /// cancel work in flight.
     var hasActiveSend: Bool { sendTask != nil }
 
+    var hasAbortedCurrentSend: Bool { didAbortCurrentSend }
+
     var pendingAssistantMessageForDisplay: Message? {
         guard isSending,
               transientStreamEvents.isEmpty,
@@ -135,6 +138,15 @@ final class ChatSession: ObservableObject, Identifiable {
             task.cancel()
         }
         sendTask = nil
+    }
+
+    func abortSend() {
+        didAbortCurrentSend = true
+        if let task = sendTask {
+            task.cancel()
+        }
+        sendTask = nil
+        finishSendingAborted()
     }
 
     func bindToSession(
@@ -177,6 +189,7 @@ final class ChatSession: ObservableObject, Identifiable {
     func beginSending(prompt: String, attachments: [ChatAttachment] = []) {
         loadError = nil
         sendGeneration &+= 1
+        didAbortCurrentSend = false
         pendingSendCompletionGeneration = nil
         isSending = true
         isAwaitingTurnCommit = false
@@ -268,12 +281,47 @@ final class ChatSession: ObservableObject, Identifiable {
         loadFromDisk(force: true)
     }
 
+    func appendSteeringPrompt(_ prompt: String, attachments: [ChatAttachment] = []) {
+        var content: [ContentBlock] = attachments.map { attachment in
+            switch attachment.kind {
+            case .image:
+                return .image(path: attachment.filePath, mime: attachment.mimeType)
+            case .file:
+                return .text("<file name=\"\(attachment.filePath.xmlEscapedForPrompt)\">[Binary file attached: \(attachment.displayName.xmlEscapedForPrompt)]</file>")
+            case .audio:
+                return .text("<file name=\"\(attachment.filePath.xmlEscapedForPrompt)\">[Audio attachment: \(attachment.displayName.xmlEscapedForPrompt)]</file>")
+            }
+        }
+        if !prompt.isEmpty {
+            content.append(.text(prompt))
+        }
+        let event = SessionEvent.message(
+            Message(
+                id: UUID().uuidString,
+                role: .user,
+                content: content,
+                model: nil,
+                timestamp: Date(),
+                parentId: nil
+            ),
+            lineIndex: nextTransientLineIndex(for: transientStreamEvents.count)
+        )
+        upsertTransientStreamEvent(event, into: &transientStreamEvents)
+        statusMessage = "Steering..."
+        rebuildEvents()
+    }
+
     /// Mark the current send as cancelled without showing an error to
     /// the user. Called from `PiAppState.sendMessage` when the task
     /// body observes `CancellationError` (e.g. the tab was closed
     /// mid-send). Clears transient UI state so the composer is usable
-    /// again.
+    /// again unless this was an explicit user abort, in which case the
+    /// partial transcript is preserved.
     func finishSendingCancelled() {
+        if didAbortCurrentSend {
+            finishSendingAborted()
+            return
+        }
         pendingSendCompletionGeneration = nil
         isSending = false
         isAwaitingTurnCommit = false
@@ -281,6 +329,20 @@ final class ChatSession: ObservableObject, Identifiable {
         transientUserEvent = nil
         transientAssistantEvent = nil
         transientStreamEvents = []
+        rebuildEvents()
+    }
+
+    func finishSendingAborted() {
+        pendingSendCompletionGeneration = nil
+        isSending = false
+        isAwaitingTurnCommit = false
+        statusMessage = "Aborted"
+        if !transientStreamEvents.contains(where: { event in
+            if case .other(let type, _) = event { return type == "abort" }
+            return false
+        }) {
+            transientStreamEvents.append(.other(type: "abort", lineIndex: nextTransientLineIndex(for: transientStreamEvents.count)))
+        }
         rebuildEvents()
     }
 

@@ -17,6 +17,7 @@ enum PiTurnStreamEvent: Sendable {
     case sessionEvents([SessionEvent], isFinal: Bool)
     case turnEnd
     case agentEnd
+    case abort
     case outputComplete
     case streamError(String)
 }
@@ -54,6 +55,8 @@ enum PiTurnStreamParser {
             return .turnEnd
         case "agent_end":
             return .agentEnd
+        case "abort":
+            return .abort
         case "output_complete":
             return .outputComplete
         case "tool_use", "tool_call", "tool_result", "message":

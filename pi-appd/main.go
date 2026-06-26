@@ -28,6 +28,9 @@ type server struct {
 	token        string
 	piExecutable string
 
+	activeRunsMu sync.Mutex
+	activeRuns   map[string]*activeRun
+
 	mu           sync.RWMutex
 	lastRefresh  time.Time
 	snapshot     catalogResponse
@@ -40,6 +43,31 @@ type server struct {
 	modelsInflight       chan struct{}
 
 	broker *catalogBroker
+}
+
+type activeRun struct {
+	mu     sync.Mutex
+	stdin  io.WriteCloser
+	closed bool
+}
+
+func (r *activeRun) write(payload any) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return errors.New("active run is closed")
+	}
+	return writeRPCCommand(r.stdin, payload)
+}
+
+func (r *activeRun) close() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return
+	}
+	_ = r.stdin.Close()
+	r.closed = true
 }
 
 type catalogResponse struct {
@@ -202,6 +230,7 @@ type rpcSimpleCommand struct {
 	Provider string `json:"provider,omitempty"`
 	ModelID  string `json:"modelId,omitempty"`
 	Level    string `json:"level,omitempty"`
+	Message  string `json:"message,omitempty"`
 }
 
 type rpcModelRecord struct {
@@ -411,6 +440,22 @@ func (s *server) handleSessionSubroutes(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	sessionID := parts[0]
+	if len(parts) == 2 && parts[1] == "abort" {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.handleSessionAbort(w, r, sessionID)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "steer" {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.handleSessionSteer(w, r, sessionID)
+		return
+	}
 	record, ok, err := s.lookupSessionRecord(sessionID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -902,7 +947,7 @@ func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	title := firstNonBlank(strings.TrimSpace(request.SessionName), filepath.Base(cwd), "Pi")
-	if err := s.streamPiRPCCommand(w, cwd, args, rpcPrompt, prePromptCommands, nil, title, cwd); err != nil {
+	if err := s.streamPiRPCCommand(w, r.Context().Done(), cwd, args, rpcPrompt, prePromptCommands, nil, title, cwd); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -933,10 +978,53 @@ func (s *server) handleSessionSend(w http.ResponseWriter, r *http.Request, recor
 		return
 	}
 	args := []string{"--mode", "rpc", "--session", record.FilePath}
-	if err := s.streamPiRPCCommand(w, cwd, args, rpcPrompt, nil, binding, record.Title, record.WorkingDirectory); err != nil {
+	if err := s.streamPiRPCCommand(w, r.Context().Done(), cwd, args, rpcPrompt, nil, binding, record.Title, record.WorkingDirectory); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+}
+
+func (s *server) handleSessionAbort(w http.ResponseWriter, r *http.Request, sessionID string) {
+	run := s.activeRunForSession(sessionID)
+	if run == nil {
+		writeError(w, http.StatusConflict, "session is not currently streaming")
+		return
+	}
+	if err := run.write(rpcSimpleCommand{ID: "pi-appd-abort", Type: "abort"}); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *server) handleSessionSteer(w http.ResponseWriter, r *http.Request, sessionID string) {
+	var request sendSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	prompt := strings.TrimSpace(request.Prompt)
+	if prompt == "" {
+		writeError(w, http.StatusBadRequest, "prompt is required")
+		return
+	}
+	run := s.activeRunForSession(sessionID)
+	if run == nil {
+		writeError(w, http.StatusConflict, "session is not currently streaming")
+		return
+	}
+	rpcPrompt, err := s.buildRPCPromptPayload(prompt, request.Attachments)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	rpcPrompt.ID = "pi-appd-steer"
+	rpcPrompt.StreamingBehavior = "steer"
+	if err := run.write(rpcPrompt); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *server) handleFiles(w http.ResponseWriter, r *http.Request) {
@@ -1109,8 +1197,44 @@ func (s *server) resolveAttachmentPaths(attachments []attachmentReference) ([]at
 	return resolved, nil
 }
 
+func (s *server) registerActiveRun(sessionID string, run *activeRun) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || run == nil {
+		return
+	}
+	s.activeRunsMu.Lock()
+	if s.activeRuns == nil {
+		s.activeRuns = map[string]*activeRun{}
+	}
+	s.activeRuns[sessionID] = run
+	s.activeRunsMu.Unlock()
+}
+
+func (s *server) unregisterActiveRun(sessionID string, run *activeRun) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || run == nil {
+		return
+	}
+	s.activeRunsMu.Lock()
+	if current := s.activeRuns[sessionID]; current == run {
+		delete(s.activeRuns, sessionID)
+	}
+	s.activeRunsMu.Unlock()
+}
+
+func (s *server) activeRunForSession(sessionID string) *activeRun {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
+	}
+	s.activeRunsMu.Lock()
+	defer s.activeRunsMu.Unlock()
+	return s.activeRuns[sessionID]
+}
+
 func (s *server) streamPiRPCCommand(
 	w http.ResponseWriter,
+	requestDone <-chan struct{},
 	cwd string,
 	args []string,
 	prompt rpcPromptCommand,
@@ -1139,11 +1263,33 @@ func (s *server) streamPiRPCCommand(
 		return err
 	}
 
+	run := &activeRun{stdin: stdin}
+	activeSessionID := ""
+	registerBinding := func(candidate *sessionBoundRecord) {
+		if candidate == nil || strings.TrimSpace(candidate.SessionID) == "" {
+			return
+		}
+		if activeSessionID == candidate.SessionID {
+			return
+		}
+		if activeSessionID != "" {
+			s.unregisterActiveRun(activeSessionID, run)
+		}
+		activeSessionID = candidate.SessionID
+		s.registerActiveRun(activeSessionID, run)
+	}
+	defer func() {
+		if activeSessionID != "" {
+			s.unregisterActiveRun(activeSessionID, run)
+		}
+	}()
+
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
 	flusher, _ := w.(http.Flusher)
 	if binding != nil {
+		registerBinding(binding)
 		writeNDJSON(w, binding)
 		if flusher != nil {
 			flusher.Flush()
@@ -1156,46 +1302,44 @@ func (s *server) streamPiRPCCommand(
 		stderrDone <- strings.TrimSpace(string(data))
 	}()
 
-	if err := writeRPCCommand(stdin, rpcGetStateCommand{ID: "pi-appd-state", Type: "get_state"}); err != nil {
+	if err := run.write(rpcGetStateCommand{ID: "pi-appd-state", Type: "get_state"}); err != nil {
 		writeNDJSON(w, streamErrorRecord{Type: "stream_error", Error: err.Error()})
 		if flusher != nil {
 			flusher.Flush()
 		}
-		_ = stdin.Close()
+		run.close()
 		_ = cmd.Wait()
 		<-stderrDone
 		return nil
 	}
 	for _, command := range prePromptCommands {
-		if err := writeRPCCommand(stdin, command); err != nil {
+		if err := run.write(command); err != nil {
 			writeNDJSON(w, streamErrorRecord{Type: "stream_error", Error: err.Error()})
 			if flusher != nil {
 				flusher.Flush()
 			}
-			_ = stdin.Close()
+			run.close()
 			_ = cmd.Wait()
 			<-stderrDone
 			return nil
 		}
 	}
-	if err := writeRPCCommand(stdin, prompt); err != nil {
+	if err := run.write(prompt); err != nil {
 		writeNDJSON(w, streamErrorRecord{Type: "stream_error", Error: err.Error()})
 		if flusher != nil {
 			flusher.Flush()
 		}
-		_ = stdin.Close()
+		run.close()
 		_ = cmd.Wait()
 		<-stderrDone
 		return nil
 	}
 
-	stdinClosed := false
-	closeStdin := func() {
-		if !stdinClosed {
-			_ = stdin.Close()
-			stdinClosed = true
-		}
-	}
+	closeStdin := run.close
+	go func() {
+		<-requestDone
+		_ = run.write(rpcSimpleCommand{ID: "pi-appd-client-disconnect-abort", Type: "abort"})
+	}()
 
 	reader := bufio.NewReader(stdout)
 	for {
@@ -1205,6 +1349,7 @@ func (s *server) streamPiRPCCommand(
 			if binding == nil {
 				if parsedBinding, ok := parseRPCStateBindingLine(rawLine, fallbackTitle, fallbackWorkingDirectory); ok {
 					binding = &parsedBinding
+					registerBinding(binding)
 					writeNDJSON(w, binding)
 					if flusher != nil {
 						flusher.Flush()
@@ -1213,12 +1358,23 @@ func (s *server) streamPiRPCCommand(
 				}
 			}
 			if isRPCResponseLine(rawLine) {
-				if message, ok := parseRPCFailureMessage(rawLine); ok {
-					writeNDJSON(w, streamErrorRecord{Type: "stream_error", Error: message})
-					if flusher != nil {
-						flusher.Flush()
+				if envelope, ok := parseRPCResponseEnvelope(rawLine); ok {
+					if !envelope.Success {
+						message := strings.TrimSpace(envelope.Error)
+						if message == "" {
+							message = firstNonBlank(strings.TrimSpace(envelope.Command), "rpc") + " command failed"
+						}
+						writeNDJSON(w, streamErrorRecord{Type: "stream_error", Error: message})
+						if flusher != nil {
+							flusher.Flush()
+						}
+						closeStdin()
+					} else if envelope.Command == "abort" {
+						writeNDJSON(w, map[string]any{"type": "abort"})
+						if flusher != nil {
+							flusher.Flush()
+						}
 					}
-					closeStdin()
 				}
 				continue
 			}
@@ -1685,12 +1841,20 @@ func rpcEventType(raw string) string {
 	return object.Type
 }
 
-func parseRPCFailureMessage(raw string) (string, bool) {
+func parseRPCResponseEnvelope(raw string) (rpcResponseEnvelope, bool) {
 	var envelope rpcResponseEnvelope
 	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &envelope); err != nil {
-		return "", false
+		return rpcResponseEnvelope{}, false
 	}
-	if envelope.Type != "response" || envelope.Success {
+	if envelope.Type != "response" {
+		return rpcResponseEnvelope{}, false
+	}
+	return envelope, true
+}
+
+func parseRPCFailureMessage(raw string) (string, bool) {
+	envelope, ok := parseRPCResponseEnvelope(raw)
+	if !ok || envelope.Success {
 		return "", false
 	}
 	message := strings.TrimSpace(envelope.Error)
