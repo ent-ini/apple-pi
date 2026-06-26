@@ -72,7 +72,7 @@ import Testing
 }
 
 @MainActor
-@Test func chatSessionShowsPlaceholderOnlyBeforeAssistantContentArrives() {
+@Test func chatSessionShowsPlaceholderOnlyBeforeStreamEventsArrive() {
     let session = ChatSession(key: "test", title: "Test")
     session.beginSending(prompt: "hello")
 
@@ -96,8 +96,47 @@ import Testing
         isFinal: false
     )
 
-    #expect(session.pendingAssistantMessageForDisplay != nil)
+    #expect(session.pendingAssistantMessageForDisplay == nil)
     #expect(session.shouldShowPendingAssistantPlaceholder == false)
+}
+
+@MainActor
+@Test func chatSessionKeepsStreamEventsInWireOrder() {
+    let session = ChatSession(key: "test", title: "Test")
+    session.beginSending(prompt: "hello")
+
+    session.applyStreamingEvents(
+        [
+            .message(
+                Message(id: "assistant-1", role: .assistant, content: [.text("I'll check")], model: nil, timestamp: nil, parentId: nil),
+                lineIndex: 0
+            ),
+            .toolCall(.function(id: "call-1", name: "read", arguments: "{}"), lineIndex: 0),
+            .toolResult(.result(id: "result-1", callId: "call-1", toolName: "read", output: "ok", isError: false), lineIndex: 0),
+            .message(
+                Message(id: "assistant-2", role: .assistant, content: [.text("Done")], model: nil, timestamp: nil, parentId: nil),
+                lineIndex: 0
+            )
+        ],
+        isFinal: false
+    )
+
+    let roles = session.events.map { event -> String in
+        switch event {
+        case .message(let message, _): return "message:\(message.role.rawValue):\(message.id)"
+        case .toolCall(let call, _): return "toolCall:\(call.id)"
+        case .toolResult(let result, _): return "toolResult:\(result.callId)"
+        case .meta, .other: return "other"
+        }
+    }
+
+    #expect(roles.first?.hasPrefix("message:user:") == true)
+    #expect(Array(roles.dropFirst()) == [
+        "message:assistant:assistant-1",
+        "toolCall:call-1",
+        "toolResult:call-1",
+        "message:assistant:assistant-2"
+    ])
 }
 
 @MainActor

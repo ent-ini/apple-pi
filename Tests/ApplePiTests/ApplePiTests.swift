@@ -933,6 +933,14 @@ private func isolatedDefaults() -> UserDefaults {
     #expect(lineIndex == 42)
 }
 
+@Test func sessionEventIdentityDoesNotDependOnLineIndex() {
+    let message = Message(id: "m1", role: .assistant, content: [.text("hi")], model: nil, timestamp: nil, parentId: nil)
+    let first = SessionEvent.message(message, lineIndex: 1)
+    let finalEvent = SessionEvent.message(message, lineIndex: 99)
+
+    #expect(first.id == finalEvent.id)
+}
+
 @Test func piTurnStreamParserDecodesFinalToolResultMessageEvents() {
     let raw = #"{"type":"message_end","message":{"role":"toolResult","toolCallId":"call-1","content":"done","isError":false}}"#
 
@@ -942,10 +950,11 @@ private func isolatedDefaults() -> UserDefaults {
         Issue.record("Expected a streamed tool-result event")
         return
     }
-    guard case .sessionEvents(let events, _) = event else {
+    guard case .sessionEvents(let events, let isFinal) = event else {
         Issue.record("Expected .sessionEvents")
         return
     }
+    #expect(isFinal)
     guard case .toolResult(let result, _) = events.first else {
         Issue.record("Expected first streamed event to be .toolResult")
         return

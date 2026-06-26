@@ -113,6 +113,7 @@ final class ChatSession: ObservableObject, Identifiable {
 
     var pendingAssistantMessageForDisplay: Message? {
         guard isSending,
+              transientStreamEvents.isEmpty,
               case .message(let message, _) = transientAssistantEvent else {
             return nil
         }
@@ -228,27 +229,15 @@ final class ChatSession: ObservableObject, Identifiable {
     func applyStreamingEvents(_ events: [SessionEvent], isFinal: Bool) {
         var nextStreamEvents = transientStreamEvents
 
-        for (index, event) in events.enumerated() {
+        for event in events {
             switch event {
             case .message(let message, _):
                 guard message.role == .assistant else { continue }
-                let isLastTimelineEvent = index == events.count - 1
-                if isLastTimelineEvent, messageHasRenderableAssistantResponse(message) {
-                    transientAssistantEvent = .message(
-                        message,
-                        lineIndex: Self.transientAssistantLineIndex
-                    )
-                    nextStreamEvents.removeAll { existing in
-                        guard case .message(let existingMessage, _) = existing else { return false }
-                        return existingMessage.id == message.id
-                    }
-                } else {
-                    let transientEvent = SessionEvent.message(
-                        message,
-                        lineIndex: nextTransientLineIndex(for: nextStreamEvents.count)
-                    )
-                    upsertTransientStreamEvent(transientEvent, into: &nextStreamEvents)
-                }
+                let transientEvent = SessionEvent.message(
+                    message,
+                    lineIndex: nextTransientLineIndex(for: nextStreamEvents.count)
+                )
+                upsertTransientStreamEvent(transientEvent, into: &nextStreamEvents)
             case .toolCall(let call, _):
                 let transientEvent = SessionEvent.toolCall(call, lineIndex: nextTransientLineIndex(for: nextStreamEvents.count))
                 upsertTransientStreamEvent(transientEvent, into: &nextStreamEvents)
@@ -260,8 +249,13 @@ final class ChatSession: ObservableObject, Identifiable {
             }
         }
 
+        if !nextStreamEvents.isEmpty {
+            transientAssistantEvent = nil
+        }
         if isFinal {
             isAwaitingTurnCommit = true
+        } else if !events.isEmpty {
+            isAwaitingTurnCommit = false
         }
         transientStreamEvents = nextStreamEvents
         statusMessage = isFinal ? "Finishing..." : "Streaming response..."
@@ -431,8 +425,7 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     private var visibleTransientEvents: [SessionEvent] {
-        let assistantEvents = isSending ? [] : [transientAssistantEvent].compactMap { $0 }
-        return ([transientUserEvent].compactMap { $0 } + transientStreamEvents + assistantEvents)
+        ([transientUserEvent].compactMap { $0 } + transientStreamEvents)
             .filter { shouldDisplayTransientEvent($0) }
     }
 
@@ -449,9 +442,7 @@ final class ChatSession: ObservableObject, Identifiable {
             return !persistedEvents.contains { event in
                 guard case .toolResult(let persistedResult, _) = event else { return false }
                 return persistedResult.id == result.id
-                    || (!result.callId.isEmpty
-                        && persistedResult.callId == result.callId
-                        && persistedResult.output == result.output)
+                    || (!result.callId.isEmpty && persistedResult.callId == result.callId)
             }
         case .meta, .other:
             return true
@@ -497,9 +488,7 @@ final class ChatSession: ObservableObject, Identifiable {
                 return persisted.contains { persistedEvent in
                     guard case .toolResult(let persistedResult, _) = persistedEvent else { return false }
                     return persistedResult.id == result.id
-                        || (!result.callId.isEmpty
-                            && persistedResult.callId == result.callId
-                            && persistedResult.output == result.output)
+                        || (!result.callId.isEmpty && persistedResult.callId == result.callId)
                 }
             case .meta, .other:
                 return false
@@ -543,9 +532,24 @@ final class ChatSession: ObservableObject, Identifiable {
             }
         }
         if let index = events.firstIndex(where: matches) {
-            events[index] = event
+            events[index] = eventWithLineIndex(event, events[index].lineIndex)
         } else {
             events.append(event)
+        }
+    }
+
+    private func eventWithLineIndex(_ event: SessionEvent, _ lineIndex: Int) -> SessionEvent {
+        switch event {
+        case .meta(let meta, _):
+            return .meta(meta, lineIndex: lineIndex)
+        case .message(let message, _):
+            return .message(message, lineIndex: lineIndex)
+        case .toolCall(let call, _):
+            return .toolCall(call, lineIndex: lineIndex)
+        case .toolResult(let result, _):
+            return .toolResult(result, lineIndex: lineIndex)
+        case .other(let type, _):
+            return .other(type: type, lineIndex: lineIndex)
         }
     }
 
@@ -581,19 +585,6 @@ final class ChatSession: ObservableObject, Identifiable {
                 return abs(persistedTimestamp.timeIntervalSince(transientTimestamp)) < 30
             }
             return persistedMessage.parentId == transientMessage.parentId
-        }
-    }
-
-    private func messageHasRenderableAssistantResponse(_ message: Message) -> Bool {
-        message.content.contains { block in
-            switch block {
-            case .text(let text):
-                return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case .image(let path, _):
-                return !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case .thinking:
-                return false
-            }
         }
     }
 

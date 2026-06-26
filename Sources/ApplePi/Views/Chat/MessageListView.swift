@@ -192,11 +192,8 @@ private enum DisplayedSessionRow: Identifiable {
         switch self {
         case .event(let event):
             return event.id
-        case .toolInteraction(let call, let result, _):
-            if let result {
-                return "toolInteraction:\(call.id):\(result.id)"
-            }
-            return "toolInteraction:\(call.id):pending"
+        case .toolInteraction(let call, _, _):
+            return "toolInteraction:\(call.id)"
         }
     }
 
@@ -210,21 +207,22 @@ private enum DisplayedSessionRow: Identifiable {
                 callIDs.insert(call.id)
             case .toolResult(let result, _):
                 guard !result.callId.isEmpty else { continue }
-                if resultByCallID[result.callId] == nil {
-                    resultByCallID[result.callId] = result
-                }
+                // Tool results may stream more than once for the same call.
+                // Keep the latest payload attached to the original call row
+                // so the transcript order stays call -> result -> answer.
+                resultByCallID[result.callId] = result
             case .message, .meta, .other:
                 continue
             }
         }
 
-        let pairedResultIDs = Set(callIDs.compactMap { resultByCallID[$0]?.id })
+        let pairedCallIDs = Set(callIDs.filter { resultByCallID[$0] != nil })
         return events.compactMap { event in
             switch event {
             case .toolCall(let call, let lineIndex):
                 return .toolInteraction(call: call, result: resultByCallID[call.id], lineIndex: lineIndex)
             case .toolResult(let result, _):
-                if pairedResultIDs.contains(result.id) { return nil }
+                if pairedCallIDs.contains(result.callId) { return nil }
                 return .event(event)
             case .message, .meta, .other:
                 return .event(event)

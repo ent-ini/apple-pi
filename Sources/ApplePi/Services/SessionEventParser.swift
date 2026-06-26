@@ -178,13 +178,18 @@ enum SessionEventParser {
     ) -> [SessionEvent] {
         var events: [SessionEvent] = []
         var fragmentBlocks: [ContentBlock] = []
-        var fragmentIndex = 0
-        var sawToolCall = false
+        var fragmentStartIndex: Int?
+        let hasToolCall = rawBlocks.contains { parseToolCallFromContentBlock($0) != nil }
 
         func flushFragment() {
             guard !fragmentBlocks.isEmpty else { return }
-            let fragmentID = sawToolCall ? "\(baseID)#fragment-\(fragmentIndex)" : baseID
-            fragmentIndex += 1
+            let startIndex = fragmentStartIndex ?? 0
+            let fragmentID: String
+            if hasToolCall, startIndex > 0 {
+                fragmentID = "\(baseID)#block-\(startIndex)"
+            } else {
+                fragmentID = baseID
+            }
             events.append(
                 .message(
                     Message(
@@ -199,16 +204,19 @@ enum SessionEventParser {
                 )
             )
             fragmentBlocks = []
+            fragmentStartIndex = nil
         }
 
-        for block in rawBlocks {
+        for (blockIndex, block) in rawBlocks.enumerated() {
             if let call = parseToolCallFromContentBlock(block) {
                 flushFragment()
-                sawToolCall = true
                 events.append(.toolCall(call, lineIndex: lineIndex))
                 continue
             }
             if let contentBlock = parseContentBlock(block) {
+                if fragmentStartIndex == nil {
+                    fragmentStartIndex = blockIndex
+                }
                 fragmentBlocks.append(contentBlock)
             }
         }
@@ -288,7 +296,7 @@ enum SessionEventParser {
 
     private static func parseToolResult(_ object: [String: Any]) -> ToolResult? {
         let callId = (object["toolCallId"] as? String) ?? (object["callId"] as? String) ?? ""
-        let id = (object["id"] as? String) ?? UUID().uuidString
+        let id = (object["id"] as? String) ?? stableToolResultID(for: callId)
         let toolName = (object["toolName"] as? String)
         let isError = (object["isError"] as? Bool) ?? false
         let output = stringifyToolResultContent(object["content"])
@@ -302,11 +310,15 @@ enum SessionEventParser {
     /// view can de-duplicate against the live tail.
     private static func parseToolResultFromMessage(_ payload: [String: Any], parentID: String?) -> ToolResult? {
         let callId = (payload["toolCallId"] as? String) ?? (payload["callId"] as? String) ?? ""
-        let id = parentID ?? (payload["id"] as? String) ?? UUID().uuidString
+        let id = parentID ?? (payload["id"] as? String) ?? stableToolResultID(for: callId)
         let toolName = (payload["toolName"] as? String)
         let isError = (payload["isError"] as? Bool) ?? false
         let output = stringifyToolResultContent(payload["content"])
         return .result(id: id, callId: callId, toolName: toolName, output: output, isError: isError)
+    }
+
+    private static func stableToolResultID(for callId: String) -> String {
+        callId.isEmpty ? UUID().uuidString : "toolResult:\(callId)"
     }
 
     private static func stringifyToolResultContent(_ value: Any?) -> String {

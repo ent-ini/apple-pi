@@ -49,7 +49,7 @@ enum PiTurnStreamParser {
         case "message_update", "message_end":
             let events = SessionEventParser.decodeMessageEvents(from: object, lineIndex: 0)
             guard !events.isEmpty else { return nil }
-            return .sessionEvents(events, isFinal: false)
+            return .sessionEvents(events, isFinal: type == "message_end")
         case "turn_end":
             return .turnEnd
         case "agent_end":

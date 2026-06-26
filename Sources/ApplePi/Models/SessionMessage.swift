@@ -103,8 +103,9 @@ enum SessionEvent: Identifiable, Hashable, Sendable {
     case other(type: String, lineIndex: Int)
 
     /// The line in the source `.jsonl` file this event came from. Used for
-    /// stable SwiftUI identity so messages do not jump around as new lines
-    /// are appended.
+    /// pagination and source ordering; SwiftUI identity is based on the
+    /// event payload so streamed rows do not flicker when a persisted line
+    /// receives its final index.
     var lineIndex: Int {
         switch self {
         case .meta(_, let index),
@@ -118,10 +119,10 @@ enum SessionEvent: Identifiable, Hashable, Sendable {
 
     var id: String {
         switch self {
-        case .meta(let meta, let index): return "meta:\(meta.id):\(index)"
-        case .message(let msg, let index): return "message:\(msg.id):\(index)"
-        case .toolCall(let call, let index): return "toolCall:\(call.id):\(index)"
-        case .toolResult(let result, let index): return "toolResult:\(result.id):\(index)"
+        case .meta(let meta, _): return "meta:\(meta.id)"
+        case .message(let msg, _): return "message:\(msg.id)"
+        case .toolCall(let call, _): return "toolCall:\(call.id)"
+        case .toolResult(let result, _): return "toolResult:\(result.id)"
         case .other(let type, let index): return "other:\(type):\(index)"
         }
     }
