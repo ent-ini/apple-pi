@@ -187,8 +187,7 @@ struct ChatSessionView: View {
     }
 
     private var displayedThinkingLevel: String {
-        let level = session.runtimeState?.thinkingLevel ?? "off"
-        return level == "off" ? "none" : level
+        session.runtimeState?.thinkingLevel ?? "off"
     }
 
     private var groupedModels: [ModelGroup] {

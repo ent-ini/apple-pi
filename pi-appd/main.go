@@ -1371,14 +1371,25 @@ func (s *server) loadDefaultRuntimeFast(cwd string) sessionDefaultsResponse {
 	provider := firstNonBlank(settings.DefaultProvider, "")
 	modelID := firstNonBlank(settings.DefaultModel, "")
 	var model *rpcModelRecord
+	var contextUsage *runtimeContextUsage
 	if provider != "" && modelID != "" {
 		model = fastModelRecord(provider, modelID)
+		if model.ContextWindow > 0 {
+			zeroTokens := 0
+			zeroPercent := 0.0
+			contextUsage = &runtimeContextUsage{
+				Tokens:        &zeroTokens,
+				ContextWindow: model.ContextWindow,
+				Percent:       &zeroPercent,
+			}
+		}
 	}
 	return sessionDefaultsResponse{
 		Runtime: sessionRuntimeResponse{
 			Model:         model,
 			ThinkingLevel: firstNonBlank(settings.DefaultThinkingLevel, "off"),
 			Tokens:        runtimeTokens{},
+			ContextUsage:  contextUsage,
 		},
 		Models: s.cachedAvailableModels(),
 	}

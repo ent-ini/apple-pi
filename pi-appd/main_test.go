@@ -81,6 +81,28 @@ func TestReadLastLinesTrimsTrailingEmptyLineAndPreservesLineNumbers(t *testing.T
 	}
 }
 
+func TestLoadDefaultRuntimeFastIncludesEmptyContextUsage(t *testing.T) {
+	agentDir := t.TempDir()
+	settings := `{"defaultProvider":"opencode-go","defaultModel":"minimax-m3","defaultThinkingLevel":"off"}`
+	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(settings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := (&server{agentDir: agentDir}).loadDefaultRuntimeFast(t.TempDir())
+	if payload.Runtime.ContextUsage == nil {
+		t.Fatal("ContextUsage is nil")
+	}
+	if payload.Runtime.ContextUsage.Tokens == nil || *payload.Runtime.ContextUsage.Tokens != 0 {
+		t.Fatalf("ContextUsage.Tokens = %#v, want 0", payload.Runtime.ContextUsage.Tokens)
+	}
+	if payload.Runtime.ContextUsage.ContextWindow != 512000 {
+		t.Fatalf("ContextWindow = %d, want 512000", payload.Runtime.ContextUsage.ContextWindow)
+	}
+	if payload.Runtime.ContextUsage.Percent == nil || *payload.Runtime.ContextUsage.Percent != 0 {
+		t.Fatalf("Percent = %#v, want 0", payload.Runtime.ContextUsage.Percent)
+	}
+}
+
 func writeTempSessionFile(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()
