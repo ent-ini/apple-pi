@@ -117,6 +117,26 @@ enum SessionEvent: Identifiable, Hashable, Sendable {
         }
     }
 
+    /// Whether this event should appear as a transcript row. Runtime
+    /// bookkeeping is still parsed and stored so model/thinking/context chips
+    /// can use it, but the chat feed should stay focused on messages and
+    /// meaningful tool/bookmark events.
+    var isVisibleInTranscript: Bool {
+        switch self {
+        case .meta:
+            return false
+        case .other(let type, _):
+            return !Self.hiddenTranscriptEventTypes.contains(type)
+        case .message, .toolCall, .toolResult:
+            return true
+        }
+    }
+
+    private static let hiddenTranscriptEventTypes: Set<String> = [
+        "model_change",
+        "thinking_level_change"
+    ]
+
     var id: String {
         switch self {
         case .meta(let meta, _): return "meta:\(meta.id)"

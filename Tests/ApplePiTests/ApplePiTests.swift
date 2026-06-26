@@ -868,6 +868,28 @@ private func isolatedDefaults() -> UserDefaults {
     }
 }
 
+@Test func transcriptVisibilityHidesRuntimeBookkeepingEvents() {
+    let events = SessionEventParser.parse(lines: [
+        #"{"type":"session","id":"s1","cwd":"/tmp/proj"}"#,
+        #"{"type":"model_change","provider":"opencode-go","model":"minimax-m3"}"#,
+        #"{"type":"thinking_level_change","level":"high"}"#,
+        #"{"type":"label","label":"checkpoint"}"#,
+        #"{"type":"message","message":{"role":"user","content":"hello"}}"#
+    ])
+
+    let visible = events.filter(\.isVisibleInTranscript)
+
+    #expect(visible.count == 2)
+    #expect({
+        if case .other(let type, _) = visible[0] { return type == "label" }
+        return false
+    }())
+    #expect({
+        if case .message = visible[1] { return true }
+        return false
+    }())
+}
+
 @Test func sessionEventParserHandlesContentBlocksAndImages() {
     let lines = [
         #"{"type":"message","message":{"role":"user","content":[{"type":"text","text":"see "},{"type":"image","source":{"path":"/tmp/cat.png","media_type":"image/png"}}]}}"#

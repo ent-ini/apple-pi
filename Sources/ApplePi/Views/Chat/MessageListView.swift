@@ -119,7 +119,7 @@ struct MessageListView: View {
     private static let scrollCoordinateSpaceName = "chat.list.scroll"
 
     private var displayedRows: [DisplayedSessionRow] {
-        DisplayedSessionRow.groupingToolResults(in: session.events)
+        DisplayedSessionRow.groupingToolResults(in: session.events.filter(\.isVisibleInTranscript))
     }
 
     @ViewBuilder
