@@ -100,12 +100,11 @@ struct SessionEventParserToolResultTests {
 
     @Test
     func assistantMessageWithInlineToolCallBlockEmitsCallBeforeMessage() {
-        // The actual wire format puts tool calls inside the assistant
-        // content array. The UI must render tool rows before the final
-        // assistant bubble, otherwise a completed answer can appear
-        // above tools that were actually used to produce it.
+        // When the content array places the tool call before the final
+        // text, the parser must keep that order so the UI shows the tool
+        // row before the completed assistant response.
         let raw = #"""
-        {"type":"message","id":"m1","message":{"role":"assistant","content":[{"type":"text","text":"Let me look"},{"type":"toolCall","id":"call-1","name":"read_file","arguments":{"path":"/tmp/a.txt"}}]}}
+        {"type":"message","id":"m1","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-1","name":"read_file","arguments":{"path":"/tmp/a.txt"}},{"type":"text","text":"Got it"}]}}
         """#
 
         let events = SessionEventParser.parse(lines: [raw])
@@ -120,7 +119,7 @@ struct SessionEventParserToolResultTests {
             return
         }
         #expect(message.role == .assistant)
-        #expect(message.content.count == 1)
+        #expect(message.content == [.text("Got it")])
         #expect(messageIndex == 0)
         #expect(callIndex == 0)
         #expect(call.id == "call-1")
@@ -142,15 +141,62 @@ struct SessionEventParserToolResultTests {
 
         #expect(events.count == 3)
         #expect({
-            if case .toolCall(let a, _) = events[0] { return a.id == "call-1" }
+            if case .message = events[0] { return true }
             return false
         }())
         #expect({
-            if case .toolCall(let b, _) = events[1] { return b.id == "call-2" }
+            if case .toolCall(let a, _) = events[1] { return a.id == "call-1" }
             return false
         }())
         #expect({
-            if case .message = events[2] { return true }
+            if case .toolCall(let b, _) = events[2] { return b.id == "call-2" }
+            return false
+        }())
+    }
+
+    @Test
+    func assistantMessagePreservesThinkingBetweenToolCalls() {
+        let raw = #"""
+        {"type":"message","id":"m1","message":{"role":"assistant","content":[{"type":"thinking","thinking":"first"},{"type":"toolCall","id":"call-1","name":"read_file","arguments":{"path":"/tmp/a"}},{"type":"thinking","thinking":"second"},{"type":"toolCall","id":"call-2","name":"grep","arguments":{"pattern":"TODO"}},{"type":"thinking","thinking":"third"},{"type":"text","text":"done"}]}}
+        """#
+
+        let events = SessionEventParser.parse(lines: [raw])
+
+        #expect(events.count == 5)
+        #expect({
+            if case .message(let message, _) = events[0] { return message.content.contains(where: {
+                if case .thinking(let text, _) = $0 { return text == "first" }
+                return false
+            }) }
+            return false
+        }())
+        #expect({
+            if case .toolCall(let call, _) = events[1] { return call.id == "call-1" }
+            return false
+        }())
+        #expect({
+            if case .message(let message, _) = events[2] { return message.content.contains(where: {
+                if case .thinking(let text, _) = $0 { return text == "second" }
+                return false
+            }) }
+            return false
+        }())
+        #expect({
+            if case .toolCall(let call, _) = events[3] { return call.id == "call-2" }
+            return false
+        }())
+        #expect({
+            if case .message(let message, _) = events[4] {
+                let texts = message.content.compactMap { block -> String? in
+                    if case .text(let text) = block { return text }
+                    return nil
+                }
+                let thinkings = message.content.compactMap { block -> String? in
+                    if case .thinking(let text, _) = block { return text }
+                    return nil
+                }
+                return texts == ["done"] && thinkings == ["third"]
+            }
             return false
         }())
     }
@@ -190,11 +236,11 @@ struct SessionEventParserToolResultTests {
 
         #expect(events.count == 4)
         #expect({
-            if case .toolCall(let c, _) = events[0] { return c.id == "call-1" }
+            if case .message(let m, _) = events[0] { return m.id == "a1" }
             return false
         }())
         #expect({
-            if case .message(let m, _) = events[1] { return m.id == "a1" }
+            if case .toolCall(let c, _) = events[1] { return c.id == "call-1" }
             return false
         }())
         #expect({
@@ -320,11 +366,11 @@ struct SessionEventParserToolResultTests {
         #expect(events.count == 2)
         #expect(events.allSatisfy { $0.lineIndex == 7 })
         #expect({
-            if case .toolCall(let c, _) = events[0] { return c.id == "c1" }
+            if case .message = events[0] { return true }
             return false
         }())
         #expect({
-            if case .message = events[1] { return true }
+            if case .toolCall(let c, _) = events[1] { return c.id == "c1" }
             return false
         }())
     }

@@ -128,17 +128,21 @@ enum SessionEventParser {
             parentId: parentId
         )
 
-        guard role == .assistant else {
+        guard role == .assistant,
+              let rawBlocks = payload["content"] as? [[String: Any]] else {
             return [.message(message, lineIndex: lineIndex)]
         }
 
-        let inlineToolCalls = (payload["content"] as? [[String: Any]] ?? []).compactMap(parseToolCallFromContentBlock)
-        guard !inlineToolCalls.isEmpty else {
-            return [.message(message, lineIndex: lineIndex)]
-        }
-
-        return inlineToolCalls.map { .toolCall($0, lineIndex: lineIndex) }
-            + [.message(message, lineIndex: lineIndex)]
+        let splitEvents = splitAssistantMessageEvents(
+            baseID: id,
+            rawBlocks: rawBlocks,
+            role: role,
+            model: model,
+            timestamp: timestamp,
+            parentId: parentId,
+            lineIndex: lineIndex
+        )
+        return splitEvents.isEmpty ? [.message(message, lineIndex: lineIndex)] : splitEvents
     }
 
     /// Backwards-compatible wrapper that returns only the chat message for
@@ -158,44 +162,96 @@ enum SessionEventParser {
             return text.isEmpty ? [] : [.text(text)]
         }
         if let blocks = value as? [[String: Any]] {
-            return blocks.compactMap { block in
-                let type = block["type"] as? String
-                if type == "text", let text = block["text"] as? String {
-                    return text.isEmpty ? nil : .text(text)
-                }
-                if type == "thinking" {
-                    let thinking = (block["thinking"] as? String) ?? ""
-                    let signature = (block["thinkingSignature"] as? String) ?? (block["signature"] as? String)
-                    return .thinking(thinking, signature: signature)
-                }
-                if type == "image" {
-                    if let source = block["source"] as? [String: Any],
-                       let path = source["path"] as? String {
-                        return .image(path: path, mime: block["mimeType"] as? String)
-                    }
-                    if let path = block["path"] as? String {
-                        return .image(path: path, mime: block["mimeType"] as? String)
-                    }
-                    if let fileName = block["fileName"] as? String {
-                        return .image(path: fileName, mime: block["mimeType"] as? String)
-                    }
-                    if let source = block["source"] as? [String: Any],
-                       let data = source["data"] as? String {
-                        let mime = (block["mimeType"] as? String) ?? "image/png"
-                        return .image(path: "data:\(mime);base64,\(data)", mime: mime)
-                    }
-                    if let data = block["data"] as? String {
-                        let mime = (block["mimeType"] as? String) ?? "image/png"
-                        return .image(path: "data:\(mime);base64,\(data)", mime: mime)
-                    }
-                }
-                if let text = block["text"] as? String {
-                    return text.isEmpty ? nil : .text(text)
-                }
-                return nil
-            }
+            return blocks.compactMap(parseContentBlock)
         }
         return []
+    }
+
+    private static func splitAssistantMessageEvents(
+        baseID: String,
+        rawBlocks: [[String: Any]],
+        role: Message.Role,
+        model: String?,
+        timestamp: Date?,
+        parentId: String?,
+        lineIndex: Int
+    ) -> [SessionEvent] {
+        var events: [SessionEvent] = []
+        var fragmentBlocks: [ContentBlock] = []
+        var fragmentIndex = 0
+        var sawToolCall = false
+
+        func flushFragment() {
+            guard !fragmentBlocks.isEmpty else { return }
+            let fragmentID = sawToolCall ? "\(baseID)#fragment-\(fragmentIndex)" : baseID
+            fragmentIndex += 1
+            events.append(
+                .message(
+                    Message(
+                        id: fragmentID,
+                        role: role,
+                        content: fragmentBlocks,
+                        model: model,
+                        timestamp: timestamp,
+                        parentId: parentId
+                    ),
+                    lineIndex: lineIndex
+                )
+            )
+            fragmentBlocks = []
+        }
+
+        for block in rawBlocks {
+            if let call = parseToolCallFromContentBlock(block) {
+                flushFragment()
+                sawToolCall = true
+                events.append(.toolCall(call, lineIndex: lineIndex))
+                continue
+            }
+            if let contentBlock = parseContentBlock(block) {
+                fragmentBlocks.append(contentBlock)
+            }
+        }
+
+        flushFragment()
+        return events
+    }
+
+    private static func parseContentBlock(_ block: [String: Any]) -> ContentBlock? {
+        let type = block["type"] as? String
+        if type == "text", let text = block["text"] as? String {
+            return text.isEmpty ? nil : .text(text)
+        }
+        if type == "thinking" {
+            let thinking = (block["thinking"] as? String) ?? ""
+            let signature = (block["thinkingSignature"] as? String) ?? (block["signature"] as? String)
+            return .thinking(thinking, signature: signature)
+        }
+        if type == "image" {
+            if let source = block["source"] as? [String: Any],
+               let path = source["path"] as? String {
+                return .image(path: path, mime: block["mimeType"] as? String)
+            }
+            if let path = block["path"] as? String {
+                return .image(path: path, mime: block["mimeType"] as? String)
+            }
+            if let fileName = block["fileName"] as? String {
+                return .image(path: fileName, mime: block["mimeType"] as? String)
+            }
+            if let source = block["source"] as? [String: Any],
+               let data = source["data"] as? String {
+                let mime = (block["mimeType"] as? String) ?? "image/png"
+                return .image(path: "data:\(mime);base64,\(data)", mime: mime)
+            }
+            if let data = block["data"] as? String {
+                let mime = (block["mimeType"] as? String) ?? "image/png"
+                return .image(path: "data:\(mime);base64,\(data)", mime: mime)
+            }
+        }
+        if let text = block["text"] as? String {
+            return text.isEmpty ? nil : .text(text)
+        }
+        return nil
     }
 
     private static func parseToolCall(_ object: [String: Any]) -> ToolCall? {

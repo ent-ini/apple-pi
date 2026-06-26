@@ -39,6 +39,7 @@ final class ChatSession: ObservableObject, Identifiable {
     @Published private(set) var availableModels: [PiModelOption] = []
     @Published private(set) var hasEarlierHistory: Bool = false
     @Published private(set) var isLoadingEarlierHistory: Bool = false
+    @Published private(set) var isAwaitingTurnCommit: Bool = false
 
     /// Path to the on-disk jsonl, if this session is backed by a file. For
     /// brand-new sessions the path is assigned once the first turn creates it.
@@ -152,6 +153,7 @@ final class ChatSession: ObservableObject, Identifiable {
         self.launchRequest = nil
         self.hasEarlierHistory = false
         self.isLoadingEarlierHistory = false
+        self.isAwaitingTurnCommit = false
         self.pendingHistoryAnchorEventID = nil
     }
 
@@ -172,6 +174,7 @@ final class ChatSession: ObservableObject, Identifiable {
         sendGeneration &+= 1
         pendingSendCompletionGeneration = nil
         isSending = true
+        isAwaitingTurnCommit = false
         statusMessage = "Thinking..."
 
         var content: [ContentBlock] = attachments.map { attachment in
@@ -221,14 +224,27 @@ final class ChatSession: ObservableObject, Identifiable {
     func applyStreamingEvents(_ events: [SessionEvent], isFinal: Bool) {
         var nextStreamEvents = transientStreamEvents
 
-        for event in events {
+        for (index, event) in events.enumerated() {
             switch event {
             case .message(let message, _):
                 guard message.role == .assistant else { continue }
-                transientAssistantEvent = .message(
-                    message,
-                    lineIndex: Self.transientAssistantLineIndex
-                )
+                let isLastTimelineEvent = index == events.count - 1
+                if isLastTimelineEvent, messageHasRenderableAssistantResponse(message) {
+                    transientAssistantEvent = .message(
+                        message,
+                        lineIndex: Self.transientAssistantLineIndex
+                    )
+                    nextStreamEvents.removeAll { existing in
+                        guard case .message(let existingMessage, _) = existing else { return false }
+                        return existingMessage.id == message.id
+                    }
+                } else {
+                    let transientEvent = SessionEvent.message(
+                        message,
+                        lineIndex: nextTransientLineIndex(for: nextStreamEvents.count)
+                    )
+                    upsertTransientStreamEvent(transientEvent, into: &nextStreamEvents)
+                }
             case .toolCall(let call, _):
                 let transientEvent = SessionEvent.toolCall(call, lineIndex: nextTransientLineIndex(for: nextStreamEvents.count))
                 upsertTransientStreamEvent(transientEvent, into: &nextStreamEvents)
@@ -240,6 +256,9 @@ final class ChatSession: ObservableObject, Identifiable {
             }
         }
 
+        if isFinal {
+            isAwaitingTurnCommit = true
+        }
         transientStreamEvents = nextStreamEvents
         statusMessage = isFinal ? "Finishing..." : "Streaming response..."
         rebuildEvents()
@@ -259,6 +278,7 @@ final class ChatSession: ObservableObject, Identifiable {
     func finishSendingCancelled() {
         pendingSendCompletionGeneration = nil
         isSending = false
+        isAwaitingTurnCommit = false
         statusMessage = ""
         transientUserEvent = nil
         transientAssistantEvent = nil
@@ -269,6 +289,7 @@ final class ChatSession: ObservableObject, Identifiable {
     func finishSendingWithError(_ message: String) {
         pendingSendCompletionGeneration = nil
         isSending = false
+        isAwaitingTurnCommit = false
         loadError = message
         statusMessage = message
         transientUserEvent = nil
@@ -482,6 +503,13 @@ final class ChatSession: ObservableObject, Identifiable {
         }
     }
 
+    func markTurnOutputComplete() {
+        guard isSending else { return }
+        isAwaitingTurnCommit = true
+        statusMessage = "Finalizing..."
+        rebuildEvents()
+    }
+
     private func completeSendReloadIfNeeded(for generation: Int?) {
         guard let generation,
               pendingSendCompletionGeneration == generation,
@@ -490,12 +518,15 @@ final class ChatSession: ObservableObject, Identifiable {
         }
         pendingSendCompletionGeneration = nil
         isSending = false
+        isAwaitingTurnCommit = false
         rebuildEvents()
     }
 
     private func upsertTransientStreamEvent(_ event: SessionEvent, into events: inout [SessionEvent]) {
         let matches: (SessionEvent) -> Bool = {
             switch (event, $0) {
+            case (.message(let lhs, _), .message(let rhs, _)):
+                return lhs.id == rhs.id
             case (.toolCall(let lhs, _), .toolCall(let rhs, _)):
                 return lhs.id == rhs.id
             case (.toolResult(let lhs, _), .toolResult(let rhs, _)):
@@ -546,6 +577,19 @@ final class ChatSession: ObservableObject, Identifiable {
             return abs(persistedTimestamp.timeIntervalSince(transientTimestamp)) < 30
         }
         return persistedMessage.parentId == transientMessage.parentId
+    }
+
+    private func messageHasRenderableAssistantResponse(_ message: Message) -> Bool {
+        message.content.contains { block in
+            switch block {
+            case .text(let text):
+                return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            case .image(let path, _):
+                return !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            case .thinking:
+                return false
+            }
+        }
     }
 
     private func messageHasVisibleAssistantContent(_ message: Message) -> Bool {

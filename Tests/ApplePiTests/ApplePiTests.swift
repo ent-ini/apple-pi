@@ -966,10 +966,10 @@ private func isolatedDefaults() -> UserDefaults {
         Issue.record("Expected an agent-end event")
         return
     }
-    if case .turnEnd = event {
+    if case .agentEnd = event {
         // ok
     } else {
-        Issue.record("Expected .turnEnd")
+        Issue.record("Expected .agentEnd")
     }
 }
 

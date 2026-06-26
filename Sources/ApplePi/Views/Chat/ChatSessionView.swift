@@ -103,13 +103,20 @@ struct ChatSessionView: View {
                 .help(audioRecorder.isRecording ? "Stop recording" : "Record voice note")
 
                 if session.isSending {
-                    composerIconButton(
-                        systemName: "stop.fill",
-                        enabled: true,
-                        foreground: .red,
-                        action: handleStopTapped
-                    )
-                    .help("Stop")
+                    if session.isAwaitingTurnCommit {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(width: 24, height: 24)
+                            .help("Finalizing response")
+                    } else {
+                        composerIconButton(
+                            systemName: "stop.fill",
+                            enabled: true,
+                            foreground: .red,
+                            action: handleStopTapped
+                        )
+                        .help("Stop")
+                    }
                 } else {
                     composerIconButton(
                         systemName: "arrow.up",
