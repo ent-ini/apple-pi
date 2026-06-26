@@ -376,17 +376,6 @@ final class PiAppState: ObservableObject {
         sessionDefaultsCache[sessionDefaultsCacheKey(for: workingDirectory)] = snapshot
     }
 
-    private func liveSessionDefaultsForCurrentContext(targetWorkingDirectory: String?) -> SessionDefaultsSnapshot? {
-        guard let selectedTab = chatWorkspace.selectedTab,
-              let runtime = selectedTab.runtimeState else {
-            return nil
-        }
-        let targetKey = sessionDefaultsCacheKey(for: targetWorkingDirectory)
-        let currentKey = sessionDefaultsCacheKey(for: selectedWorkingDirectory)
-        guard targetKey == currentKey else { return nil }
-        return SessionDefaultsSnapshot(runtimeState: runtime, availableModels: selectedTab.availableModels)
-    }
-
     @discardableResult
     private func applyBestKnownSessionDefaults(to session: ChatSession) -> Bool {
         guard session.sessionID == nil,
@@ -394,11 +383,9 @@ final class PiAppState: ObservableObject {
             return false
         }
 
-        let snapshot = sessionDefaultsCache[sessionDefaultsCacheKey(for: request.workingDirectory)]
-            ?? liveSessionDefaultsForCurrentContext(targetWorkingDirectory: request.workingDirectory)
-        guard let snapshot else { return false }
-
-        cacheSessionDefaults(snapshot, for: request.workingDirectory)
+        guard let snapshot = sessionDefaultsCache[sessionDefaultsCacheKey(for: request.workingDirectory)] else {
+            return false
+        }
 
         var nextRequest = request
         if nextRequest.initialModelProvider == nil { nextRequest.initialModelProvider = snapshot.runtimeState.provider }
@@ -982,10 +969,6 @@ final class PiAppState: ObservableObject {
                     guard (self.thinkingLevelMutationVersionBySessionKey[sessionKey] ?? 0) == observedThinkingMutationVersion else { return }
                     let effectiveRuntime = self.runtimeApplyingPendingThinkingLevel(runtime, sessionKey: sessionKey)
                     session.updateRuntimeState(effectiveRuntime)
-                    self.cacheSessionDefaults(
-                        SessionDefaultsSnapshot(runtimeState: effectiveRuntime, availableModels: session.availableModels),
-                        for: session.launchRequest?.workingDirectory
-                    )
                 }
             } catch {
                 await MainActor.run {
@@ -1019,12 +1002,6 @@ final class PiAppState: ObservableObject {
                 await MainActor.run {
                     guard let self, let session, self.host == remoteHost else { return }
                     session.updateAvailableModels(models)
-                    if let runtime = session.runtimeState {
-                        self.cacheSessionDefaults(
-                            SessionDefaultsSnapshot(runtimeState: runtime, availableModels: models),
-                            for: session.launchRequest?.workingDirectory
-                        )
-                    }
                 }
             } catch {
                 await MainActor.run {
@@ -1180,10 +1157,6 @@ final class PiAppState: ObservableObject {
                     guard self.thinkingLevelMutationVersionBySessionKey[sessionKey] == mutationVersion else { return }
                     self.pendingThinkingLevelBySessionKey.removeValue(forKey: sessionKey)
                     session.updateRuntimeState(runtime)
-                    self.cacheSessionDefaults(
-                        SessionDefaultsSnapshot(runtimeState: runtime, availableModels: session.availableModels),
-                        for: session.launchRequest?.workingDirectory
-                    )
                     self.statusMessage = "Thinking: \(runtime.thinkingLevel)"
                 }
             } catch {
