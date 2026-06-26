@@ -24,7 +24,7 @@ struct RemoteDaemonClient {
     func streamCatalogSnapshots(
         host: PiHostConfiguration,
         tokenOverride: String? = nil
-    ) -> AsyncThrowingStream<PiCatalogSnapshot, Error> {
+    ) -> AsyncThrowingStream<CatalogStreamEvent, Error> {
         AsyncThrowingStream { continuation in
             let worker = Task {
                 do {
@@ -49,15 +49,37 @@ struct RemoteDaemonClient {
                     }
 
                     let parser = SSECatalogEventParser()
+                    let decoder = JSONDecoder()
                     for try await line in bytes.lines {
                         if Task.isCancelled { break }
-                        guard let event = parser.feed(line),
-                              event.event == "snapshot" else { continue }
-                        guard let data = event.data.data(using: .utf8),
-                              let snapshot = Self.decodeCatalogSnapshot(from: data) else {
-                            continue
+                        guard let event = parser.feed(line) else { continue }
+                        if event.event == "error" {
+                            let message = Self.decodeSSEErrorMessage(from: event.data) ?? "Catalog stream failed."
+                            throw RemoteDaemonError.requestFailed(status: 0, body: message)
                         }
-                        continuation.yield(snapshot)
+                        guard let data = event.data.data(using: .utf8) else { continue }
+                        switch event.event {
+                        case "snapshot":
+                            if let response = try? Self.makeCatalogDecoder().decode(CatalogResponse.self, from: data) {
+                                continuation.yield(.snapshot(Self.catalogSnapshot(from: response)))
+                            }
+                        case "session_updated":
+                            if let record = try? decoder.decode(SessionRecord.self, from: data) {
+                                continuation.yield(.sessionUpdated(Self.sessionSummary(from: record)))
+                            }
+                        case "session_removed":
+                            if let object = try? decoder.decode(SessionRemovedPayload.self, from: data) {
+                                continuation.yield(.sessionRemoved(sessionId: object.sessionId))
+                            }
+                        case "runtime_changed":
+                            if let object = try? decoder.decode(RuntimeChangedPayload.self, from: data),
+                               let payload = object.runtime {
+                                let sessionId = object.sessionId ?? payload.sessionId ?? ""
+                                continuation.yield(.runtimeChanged(sessionId: sessionId, runtime: payload.runtimeState))
+                            }
+                        default:
+                            continuation.yield(.unknown(event.event, event.data))
+                        }
                     }
                     continuation.finish()
                 } catch {

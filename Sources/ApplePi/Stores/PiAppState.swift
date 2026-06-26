@@ -1558,6 +1558,11 @@ final class PiAppState: ObservableObject {
               let session = chatWorkspace.selectedTab,
               let sessionID = session.sessionID?.nilIfBlank else { return }
 
+        // Skeleton: show the runtime immediately from the cached JSONL
+        // parse (handled inside the fast runtime endpoint) so the
+        // model/thinking chip is never blank while the stream warms up.
+        refreshSessionRuntime(for: session)
+
         let streamHost = host
         let selectedTabID = session.id
         selectedSessionStreamTask = Task { [weak self] in
@@ -1650,6 +1655,10 @@ final class PiAppState: ObservableObject {
         selectedSessionPollingTask = Task { [weak self] in
             guard let self else { return }
             while !Task.isCancelled {
+                // When the per-session SSE stream is healthy, polling is
+                // pure overhead (and risks racing with the optimistic
+                // in-flight state). Keep this loop only as a slow safety
+                // net for the rare case where the stream is down.
                 let interval: Duration = self.selectedSessionStreamTask == nil && self.isApplicationActive
                     ? .seconds(2)
                     : .seconds(30)
@@ -1662,6 +1671,10 @@ final class PiAppState: ObservableObject {
 
     private func syncSelectedRemoteSessionDelta() async {
         guard host.usesRemoteDaemonTransport else { return }
+        // The per-session SSE stream is the primary live path. Polling is
+        // only useful when the stream is down, so skip the round-trip
+        // entirely while it is healthy.
+        guard selectedSessionStreamTask == nil else { return }
         guard let session = chatWorkspace.selectedTab,
               let sessionID = session.sessionID?.nilIfBlank,
               !session.isLoading,
@@ -1714,7 +1727,7 @@ final class PiAppState: ObservableObject {
         }
     }
 
-    /// Outer reconnect loop. On every successful snapshot the backoff
+    /// Outer reconnect loop. On every successful event the backoff
     /// resets, so a stable connection pays only the per-event cost. On
     /// any failure (network, auth, malformed event) we sleep with an
     /// exponentially growing delay, capped at 30s. Cancellation is
@@ -1727,12 +1740,12 @@ final class PiAppState: ObservableObject {
 
         while !Task.isCancelled {
             let stream = client.streamCatalogSnapshots(host: host)
-            var receivedSnapshot = false
+            var receivedEvent = false
             do {
-                for try await snapshot in stream {
-                    receivedSnapshot = true
+                for try await event in stream {
+                    receivedEvent = true
                     backoff = .seconds(1)
-                    applyLiveCatalogSnapshot(snapshot)
+                    applyCatalogStreamEvent(event)
                 }
                 if Task.isCancelled { return }
                 try? await Task.sleep(for: backoff)
@@ -1744,7 +1757,7 @@ final class PiAppState: ObservableObject {
                 if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
                     return
                 }
-                if !receivedSnapshot {
+                if !receivedEvent {
                     statusMessage = "Live catalog lost: \(error.localizedDescription). Retrying…"
                 }
                 try? await Task.sleep(for: backoff)
@@ -1753,21 +1766,40 @@ final class PiAppState: ObservableObject {
         }
     }
 
-    /// Applies a snapshot delivered by the SSE stream to the published
-    /// state. The body mirrors the one-shot `refreshCatalog` success
-    /// path so the UI behaves identically for HTTP-loaded and
-    /// stream-loaded snapshots.
-    private func applyLiveCatalogSnapshot(_ snapshot: PiCatalogSnapshot) {
-        projects = snapshot.projects
-        sessions = snapshot.sessions
-        if !snapshot.warnings.isEmpty {
-            statusMessage = PiAppState.catalogStatusMessage(
-                sessionCount: snapshot.sessions.count,
-                warnings: snapshot.warnings
-            )
+    /// Applies a typed event from the global SSE channel. The first event
+    /// is always a full snapshot; subsequent events are small deltas.
+    private func applyCatalogStreamEvent(_ event: CatalogStreamEvent) {
+        switch event {
+        case .snapshot(let snapshot):
+            projects = snapshot.projects
+            sessions = snapshot.sessions
+            if !snapshot.warnings.isEmpty {
+                statusMessage = PiAppState.catalogStatusMessage(
+                    sessionCount: snapshot.sessions.count,
+                    warnings: snapshot.warnings
+                )
+            }
+            repairSelectionIfNeeded()
+            refreshConfigurationSummary()
+        case .sessionUpdated(let summary):
+            if let index = sessions.firstIndex(where: { $0.id == summary.id || $0.filePath == summary.filePath }) {
+                sessions[index] = summary
+            } else {
+                sessions.append(summary)
+                sessions.sort { $0.modifiedAt > $1.modifiedAt }
+            }
+            repairSelectionIfNeeded()
+        case .sessionRemoved(let sessionId):
+            sessions.removeAll { $0.id == sessionId || $0.filePath == sessionId }
+            repairSelectionIfNeeded()
+        case .runtimeChanged(let sessionId, let runtime):
+            if sessionId.isEmpty { return }
+            for tab in chatWorkspace.tabs where tab.sessionID?.nilIfBlank == sessionId {
+                tab.updateRuntimeState(runtime)
+            }
+        case .unknown:
+            break
         }
-        repairSelectionIfNeeded()
-        refreshConfigurationSummary()
     }
 
     /// Builds a short status-bar message that lists the session count

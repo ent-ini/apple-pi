@@ -9,6 +9,92 @@ struct SSECatalogEvent: Sendable {
     let data: String
 }
 
+/// Typed events from the daemon's global `/sessions/stream` SSE channel.
+/// The first event on connect is always `snapshot` (full catalog);
+/// subsequent events are small deltas so the client does not have to
+/// reparse the whole catalog on every change.
+enum CatalogStreamEvent: Sendable {
+    case snapshot(PiCatalogSnapshot)
+    case sessionUpdated(PiSessionSummary)
+    case sessionRemoved(sessionId: String)
+    case runtimeChanged(sessionId: String, runtime: SessionRuntimeState)
+    case unknown(String, String)
+
+    var eventName: String {
+        switch self {
+        case .snapshot: return "snapshot"
+        case .sessionUpdated: return "session_updated"
+        case .sessionRemoved: return "session_removed"
+        case .runtimeChanged: return "runtime_changed"
+        case .unknown(let name, _): return name
+        }
+    }
+}
+
+struct RuntimeChangedPayload: Decodable {
+    let sessionId: String?
+    let runtime: RuntimePayload?
+}
+
+struct SessionRemovedPayload: Decodable {
+    let sessionId: String
+}
+
+struct RuntimePayload: Decodable {
+    let sessionId: String?
+    let sessionFile: String?
+    let model: RuntimeModelPayload?
+    let thinkingLevel: String?
+    let tokens: RuntimeTokenTotals?
+    let contextUsage: RuntimeContextUsage?
+
+    var runtimeState: SessionRuntimeState {
+        SessionRuntimeState(
+            sessionID: sessionId,
+            sessionPath: sessionFile,
+            provider: model?.provider,
+            modelID: model?.id,
+            modelName: model?.name,
+            thinkingLevel: thinkingLevel ?? "off",
+            tokens: SessionTokenTotals(
+                input: tokens?.input ?? 0,
+                output: tokens?.output ?? 0,
+                cacheRead: tokens?.cacheRead ?? 0,
+                cacheWrite: tokens?.cacheWrite ?? 0,
+                total: tokens?.total ?? 0
+            ),
+            contextUsage: contextUsage.map {
+                SessionContextUsage(
+                    tokens: $0.tokens,
+                    contextWindow: $0.contextWindow,
+                    percent: $0.percent
+                )
+            }
+        )
+    }
+}
+
+struct RuntimeModelPayload: Decodable {
+    let id: String
+    let name: String?
+    let provider: String
+    let contextWindow: Int?
+}
+
+struct RuntimeTokenTotals: Decodable {
+    let input: Int
+    let output: Int
+    let cacheRead: Int
+    let cacheWrite: Int
+    let total: Int
+}
+
+struct RuntimeContextUsage: Decodable {
+    let tokens: Int?
+    let contextWindow: Int?
+    let percent: Double?
+}
+
 /// Line-oriented parser for Server-Sent Events. Implements the slice of
 /// the WHATWG SSE spec the daemon's `/sessions/stream` endpoint relies on:
 ///

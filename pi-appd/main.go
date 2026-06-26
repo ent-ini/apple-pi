@@ -519,6 +519,7 @@ func (s *server) handleSessionSetModel(w http.ResponseWriter, r *http.Request, r
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.publishRuntime(record, runtime)
 	writeJSON(w, http.StatusOK, runtime)
 }
 
@@ -548,6 +549,7 @@ func (s *server) handleSessionSetThinkingLevel(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.publishRuntime(record, runtime)
 	writeJSON(w, http.StatusOK, runtime)
 }
 
@@ -564,7 +566,16 @@ func (s *server) handleSessionCycleThinking(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.publishRuntime(record, runtime)
 	writeJSON(w, http.StatusOK, runtime)
+}
+
+func (s *server) publishRuntime(record sessionRecord, runtime sessionRuntimeResponse) {
+	payload := map[string]any{
+		"sessionId": firstNonBlank(runtime.SessionID, record.ID),
+		"runtime":   runtime,
+	}
+	s.broker.publishRuntimeChanged(payload)
 }
 
 func isValidThinkingLevel(level string) bool {
@@ -1218,7 +1229,6 @@ func (s *server) streamPiRPCCommand(
 	}
 	return nil
 }
-
 func (s *server) loadSessionRuntime(record sessionRecord) (sessionRuntimeResponse, error) {
 	if runtime, err := loadFastSessionRuntime(record); err == nil {
 		return runtime, nil
@@ -2193,27 +2203,37 @@ func xmlEscape(value string) string {
 
 // --- Live catalog SSE stream ---
 
-// catalogBroker fans out full catalog snapshots to all connected SSE clients.
+// catalogBroker fans out typed events to all connected SSE clients. The
+// initial event is always a `snapshot` carrying the full catalog; subsequent
+// events are small typed deltas (session_updated, session_added, ...
+// runtime_changed) so the client does not have to reparse the whole
+// catalog on every change.
+//
 // Sends are non-blocking: a slow client that cannot keep up simply misses
-// intermediate snapshots and receives the most recent one.
+// intermediate events and receives the most recent snapshot on reconnect.
 type catalogBroker struct {
 	mu          sync.RWMutex
-	subscribers map[chan catalogResponse]struct{}
+	subscribers map[chan streamEvent]struct{}
+}
+
+type streamEvent struct {
+	Type    string          `json:"type"`
+	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
 func newCatalogBroker() *catalogBroker {
-	return &catalogBroker{subscribers: map[chan catalogResponse]struct{}{}}
+	return &catalogBroker{subscribers: map[chan streamEvent]struct{}{}}
 }
 
-func (b *catalogBroker) subscribe() chan catalogResponse {
-	ch := make(chan catalogResponse, 4)
+func (b *catalogBroker) subscribe() chan streamEvent {
+	ch := make(chan streamEvent, 16)
 	b.mu.Lock()
 	b.subscribers[ch] = struct{}{}
 	b.mu.Unlock()
 	return ch
 }
 
-func (b *catalogBroker) unsubscribe(ch chan catalogResponse) {
+func (b *catalogBroker) unsubscribe(ch chan streamEvent) {
 	b.mu.Lock()
 	if _, ok := b.subscribers[ch]; ok {
 		delete(b.subscribers, ch)
@@ -2222,15 +2242,47 @@ func (b *catalogBroker) unsubscribe(ch chan catalogResponse) {
 	b.mu.Unlock()
 }
 
-func (b *catalogBroker) broadcast(snapshot catalogResponse) {
+func (b *catalogBroker) broadcast(event streamEvent) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	for ch := range b.subscribers {
 		select {
-		case ch <- snapshot:
+		case ch <- event:
 		default:
 		}
 	}
+}
+
+func (b *catalogBroker) broadcastSnapshot(snapshot catalogResponse) {
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		return
+	}
+	b.broadcast(streamEvent{Type: "snapshot", Payload: raw})
+}
+
+func (b *catalogBroker) publishSessionUpdated(record sessionRecord) {
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return
+	}
+	b.broadcast(streamEvent{Type: "session_updated", Payload: raw})
+}
+
+func (b *catalogBroker) publishSessionRemoved(sessionID string) {
+	raw, err := json.Marshal(map[string]string{"sessionId": sessionID})
+	if err != nil {
+		return
+	}
+	b.broadcast(streamEvent{Type: "session_removed", Payload: raw})
+}
+
+func (b *catalogBroker) publishRuntimeChanged(payload map[string]any) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	b.broadcast(streamEvent{Type: "runtime_changed", Payload: raw})
 }
 
 func (b *catalogBroker) subscriberCount() int {
@@ -2249,7 +2301,42 @@ func (s *server) refreshAndBroadcast() {
 	s.mu.RLock()
 	snapshot := s.snapshot
 	s.mu.RUnlock()
-	s.broker.broadcast(snapshot)
+	s.broker.broadcastSnapshot(snapshot)
+}
+
+// handleCatalogChange diffs the fresh catalog against the previous in-memory
+// snapshot and emits small per-session deltas (`session_updated`,
+// `session_removed`) in addition to a full `snapshot` so subscribers can
+// apply the update without re-rendering the whole sidebar.
+func (s *server) handleCatalogChange() {
+	previousSessions := func() map[string]struct{} {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		out := make(map[string]struct{}, len(s.sessionsByID))
+		for id := range s.sessionsByID {
+			out[id] = struct{}{}
+		}
+		return out
+	}()
+	if err := s.refreshCatalog(true); err != nil {
+		log.Printf("catalog refresh failed: %v", err)
+		return
+	}
+	s.mu.RLock()
+	newSessions := s.sessionsByID
+	s.mu.RUnlock()
+	for id := range newSessions {
+		s.broker.publishSessionUpdated(newSessions[id])
+	}
+	for id := range previousSessions {
+		if _, ok := newSessions[id]; !ok {
+			s.broker.publishSessionRemoved(id)
+		}
+	}
+	s.mu.RLock()
+	snapshot := s.snapshot
+	s.mu.RUnlock()
+	s.broker.broadcastSnapshot(snapshot)
 }
 
 // watchCatalog runs in its own goroutine. It watches the agent sessions
@@ -2276,7 +2363,7 @@ func (s *server) watchCatalog() {
 		if debounceTimer != nil {
 			debounceTimer.Stop()
 		}
-		debounceTimer = time.AfterFunc(debounce, s.refreshAndBroadcast)
+		debounceTimer = time.AfterFunc(debounce, s.handleCatalogChange)
 	}
 
 	for {
@@ -2344,7 +2431,7 @@ func (s *server) handleSessionsStream(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	initial := s.snapshot
 	s.mu.RUnlock()
-	if !writeSSE(w, flusher, "snapshot", initial) {
+	if !writeTypedSSE(w, flusher, streamEvent{Type: "snapshot", Payload: mustJSON(initial)}) {
 		return
 	}
 
@@ -2360,15 +2447,44 @@ func (s *server) handleSessionsStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			flusher.Flush()
-		case snapshot, ok := <-ch:
+		case event, ok := <-ch:
 			if !ok {
 				return
 			}
-			if !writeSSE(w, flusher, "snapshot", snapshot) {
+			if !writeTypedSSE(w, flusher, event) {
 				return
 			}
 		}
 	}
+}
+
+func mustJSON(value any) json.RawMessage {
+	data, err := json.Marshal(value)
+	if err != nil {
+		log.Printf("stream event encode failed: %v", err)
+		return nil
+	}
+	return data
+}
+
+func writeTypedSSE(w http.ResponseWriter, flusher http.Flusher, event streamEvent) bool {
+	if len(event.Payload) == 0 {
+		if _, err := io.WriteString(w, "event: "+event.Type+"\n\n"); err != nil {
+			return false
+		}
+	} else {
+		if _, err := io.WriteString(w, "event: "+event.Type+"\ndata: "); err != nil {
+			return false
+		}
+		if _, err := w.Write(event.Payload); err != nil {
+			return false
+		}
+		if _, err := io.WriteString(w, "\n\n"); err != nil {
+			return false
+		}
+	}
+	flusher.Flush()
+	return true
 }
 
 // writeSSE serialises payload as a single SSE event. Returns false if the
