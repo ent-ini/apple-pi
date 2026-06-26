@@ -933,12 +933,25 @@ private func isolatedDefaults() -> UserDefaults {
     #expect(lineIndex == 42)
 }
 
-@Test func piTurnStreamParserIgnoresFinalToolResultMessageEvents() {
+@Test func piTurnStreamParserDecodesFinalToolResultMessageEvents() {
     let raw = #"{"type":"message_end","message":{"role":"toolResult","toolCallId":"call-1","content":"done","isError":false}}"#
 
     let event = PiTurnStreamParser.parseLine(raw)
 
-    #expect(event == nil)
+    guard let event else {
+        Issue.record("Expected a streamed tool-result event")
+        return
+    }
+    guard case .sessionEvents(let events, _) = event else {
+        Issue.record("Expected .sessionEvents")
+        return
+    }
+    guard case .toolResult(let result, _) = events.first else {
+        Issue.record("Expected first streamed event to be .toolResult")
+        return
+    }
+    #expect(result.callId == "call-1")
+    #expect(result.output == "done")
 }
 
 @Test func piTurnStreamParserRecognizesTurnEnd() {
@@ -970,6 +983,22 @@ private func isolatedDefaults() -> UserDefaults {
         // ok
     } else {
         Issue.record("Expected .agentEnd")
+    }
+}
+
+@Test func piTurnStreamParserRecognizesOutputComplete() {
+    let raw = #"{"type":"output_complete"}"#
+
+    let event = PiTurnStreamParser.parseLine(raw)
+
+    guard let event else {
+        Issue.record("Expected an output-complete event")
+        return
+    }
+    if case .outputComplete = event {
+        // ok
+    } else {
+        Issue.record("Expected .outputComplete")
     }
 }
 

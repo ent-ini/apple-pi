@@ -664,6 +664,7 @@ final class PiAppState: ObservableObject {
         }
 
         session.beginSending(prompt: taggedPrompt, attachments: attachments)
+        let sendGeneration = session.currentSendGeneration
         let initialAliases = sessionAliases(for: session)
         markSessionActive(initialAliases)
         setSessionSending(true, aliases: initialAliases)
@@ -687,6 +688,7 @@ final class PiAppState: ObservableObject {
                     Self.applySendOutcome(
                         outcome,
                         session: session,
+                        sendGeneration: sendGeneration,
                         initialAliases: initialAliases,
                         appState: self
                     )
@@ -720,6 +722,7 @@ final class PiAppState: ObservableObject {
                     Self.applySendOutcome(
                         .cancelled,
                         session: session,
+                        sendGeneration: sendGeneration,
                         initialAliases: initialAliases,
                         appState: nil
                     )
@@ -752,6 +755,7 @@ final class PiAppState: ObservableObject {
                 Self.applySendOutcome(
                     outcome,
                     session: session,
+                    sendGeneration: sendGeneration,
                     initialAliases: initialAliases,
                     appState: self
                 )
@@ -780,11 +784,17 @@ final class PiAppState: ObservableObject {
     fileprivate static func applySendOutcome(
         _ outcome: SendOutcome,
         session: ChatSession?,
+        sendGeneration: Int,
         initialAliases: [String],
         appState: PiAppState?
     ) {
-        defer { session?.sendTask = nil }
-        guard let session else { return }
+        defer {
+            if session?.currentSendGeneration == sendGeneration {
+                session?.sendTask = nil
+            }
+        }
+        guard let session,
+              session.currentSendGeneration == sendGeneration else { return }
         switch outcome {
         case .success:
             session.finishSendingAndReload()
@@ -907,6 +917,8 @@ final class PiAppState: ObservableObject {
             session.markTurnOutputComplete()
         case .agentEnd:
             session.applyStreamingEvents([], isFinal: true)
+        case .outputComplete:
+            session.finishSendingAndReload()
         case .streamError(let message):
             statusMessage = message
         }

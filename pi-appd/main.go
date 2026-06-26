@@ -1058,6 +1058,11 @@ func (s *server) streamPiRPCCommand(
 		return nil
 	}
 
+	writeNDJSON(w, map[string]any{"type": "output_complete"})
+	if flusher != nil {
+		flusher.Flush()
+	}
+
 	s.refreshAndBroadcast()
 	return nil
 }

@@ -435,7 +435,7 @@ struct RemoteDaemonClient {
                 switch event {
                 case .streamError(let message):
                     throw RemoteDaemonError.requestFailed(status: 0, body: message)
-                case .turnEnd, .agentEnd:
+                case .turnEnd, .agentEnd, .outputComplete:
                     continue
                 case .sessionBound, .sessionHeader, .sessionEvents:
                     break

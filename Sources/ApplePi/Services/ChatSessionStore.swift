@@ -102,6 +102,10 @@ final class ChatSession: ObservableObject, Identifiable {
         !isSending
     }
 
+    var currentSendGeneration: Int {
+        sendGeneration
+    }
+
     /// True while a send task is associated with this session. The
     /// store uses this to decide whether closing the tab needs to
     /// cancel work in flight.
@@ -526,7 +530,10 @@ final class ChatSession: ObservableObject, Identifiable {
         let matches: (SessionEvent) -> Bool = {
             switch (event, $0) {
             case (.message(let lhs, _), .message(let rhs, _)):
-                return lhs.id == rhs.id
+                if lhs.id == rhs.id { return true }
+                return lhs.role == rhs.role
+                    && !messageSignature(for: lhs).isEmpty
+                    && messageSignature(for: lhs) == messageSignature(for: rhs)
             case (.toolCall(let lhs, _), .toolCall(let rhs, _)):
                 return lhs.id == rhs.id
             case (.toolResult(let lhs, _), .toolResult(let rhs, _)):
@@ -548,35 +555,33 @@ final class ChatSession: ObservableObject, Identifiable {
 
     private func latestPersistedMessage(matches transientEvent: SessionEvent, in persisted: [SessionEvent]) -> Bool {
         guard case .message(let transientMessage, _) = transientEvent else { return false }
-        guard let persistedMessage = persisted.reversed().compactMap({ event -> Message? in
-            guard case .message(let message, let lineIndex) = event,
-                  lineIndex < Self.transientUserLineIndex,
-                  message.role == transientMessage.role else {
-                return nil
-            }
-            return message
-        }).first else {
-            return false
-        }
-
-        if persistedMessage.id == transientMessage.id {
-            return true
-        }
-
         let transientSignature = messageSignature(for: transientMessage)
-        let persistedSignature = messageSignature(for: persistedMessage)
-        if !transientSignature.isEmpty, transientSignature == persistedSignature {
-            return true
-        }
 
-        guard persistedMessage.content == transientMessage.content else {
-            return false
+        return persisted.contains { event in
+            guard case .message(let persistedMessage, let lineIndex) = event,
+                  lineIndex < Self.transientUserLineIndex,
+                  persistedMessage.role == transientMessage.role else {
+                return false
+            }
+
+            if persistedMessage.id == transientMessage.id {
+                return true
+            }
+
+            let persistedSignature = messageSignature(for: persistedMessage)
+            if !transientSignature.isEmpty, transientSignature == persistedSignature {
+                return true
+            }
+
+            guard persistedMessage.content == transientMessage.content else {
+                return false
+            }
+            if let transientTimestamp = transientMessage.timestamp,
+               let persistedTimestamp = persistedMessage.timestamp {
+                return abs(persistedTimestamp.timeIntervalSince(transientTimestamp)) < 30
+            }
+            return persistedMessage.parentId == transientMessage.parentId
         }
-        if let transientTimestamp = transientMessage.timestamp,
-           let persistedTimestamp = persistedMessage.timestamp {
-            return abs(persistedTimestamp.timeIntervalSince(transientTimestamp)) < 30
-        }
-        return persistedMessage.parentId == transientMessage.parentId
     }
 
     private func messageHasRenderableAssistantResponse(_ message: Message) -> Bool {
