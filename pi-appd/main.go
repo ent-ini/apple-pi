@@ -1220,6 +1220,9 @@ func (s *server) streamPiRPCCommand(
 }
 
 func (s *server) loadSessionRuntime(record sessionRecord) (sessionRuntimeResponse, error) {
+	if runtime, err := loadFastSessionRuntime(record); err == nil {
+		return runtime, nil
+	}
 	responses, err := s.runPiRPCCommands(record, []any{
 		rpcSimpleCommand{Type: "get_state"},
 		rpcSimpleCommand{Type: "get_session_stats"},
@@ -1228,6 +1231,92 @@ func (s *server) loadSessionRuntime(record sessionRecord) (sessionRuntimeRespons
 		return sessionRuntimeResponse{}, err
 	}
 	return decodeSessionRuntimeResponse(responses)
+}
+
+func loadFastSessionRuntime(record sessionRecord) (sessionRuntimeResponse, error) {
+	data, err := os.ReadFile(record.FilePath)
+	if err != nil {
+		return sessionRuntimeResponse{}, err
+	}
+	runtime := sessionRuntimeResponse{
+		SessionID:     record.ID,
+		SessionFile:   record.FilePath,
+		ThinkingLevel: "off",
+	}
+	var latestContextTokens *int
+	for _, line := range splitJSONLLines(data) {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		var object map[string]any
+		if err := json.Unmarshal([]byte(trimmed), &object); err != nil {
+			continue
+		}
+		switch typeValue, _ := object["type"].(string); typeValue {
+		case "session":
+			if id := stringValue(object, "sessionId", "sessionID", "id"); id != "" {
+				runtime.SessionID = id
+			}
+		case "model_change":
+			provider := stringValue(object, "provider")
+			modelID := stringValue(object, "modelId", "modelID", "model")
+			if provider != "" || modelID != "" {
+				runtime.Model = fastModelRecord(provider, modelID)
+			}
+		case "thinking_level_change":
+			if level := stringValue(object, "thinkingLevel", "level"); level != "" {
+				runtime.ThinkingLevel = level
+			}
+		case "message":
+			message, _ := object["message"].(map[string]any)
+			if message == nil {
+				continue
+			}
+			provider := stringValue(message, "provider")
+			modelID := stringValue(message, "model", "modelId", "modelID")
+			if provider != "" || modelID != "" {
+				runtime.Model = fastModelRecord(provider, modelID)
+			}
+			usage, _ := message["usage"].(map[string]any)
+			if usage == nil {
+				continue
+			}
+			input := intValue(usage, "input")
+			output := intValue(usage, "output")
+			cacheRead := intValue(usage, "cacheRead")
+			cacheWrite := intValue(usage, "cacheWrite")
+			total := intValue(usage, "totalTokens", "total")
+			if total == 0 {
+				total = input + output + cacheRead + cacheWrite
+			}
+			runtime.Tokens.Input += input
+			runtime.Tokens.Output += output
+			runtime.Tokens.CacheRead += cacheRead
+			runtime.Tokens.CacheWrite += cacheWrite
+			runtime.Tokens.Total += total
+			if total > 0 {
+				contextTokens := total
+				latestContextTokens = &contextTokens
+			}
+		}
+	}
+	if runtime.Tokens.Total == 0 {
+		runtime.Tokens.Total = runtime.Tokens.Input + runtime.Tokens.Output + runtime.Tokens.CacheRead + runtime.Tokens.CacheWrite
+	}
+	if latestContextTokens != nil {
+		contextUsage := &runtimeContextUsage{Tokens: latestContextTokens}
+		if runtime.Model != nil && runtime.Model.ContextWindow > 0 {
+			contextUsage.ContextWindow = runtime.Model.ContextWindow
+			percent := float64(*latestContextTokens) / float64(runtime.Model.ContextWindow) * 100
+			contextUsage.Percent = &percent
+		}
+		runtime.ContextUsage = contextUsage
+	}
+	if runtime.ThinkingLevel == "" {
+		runtime.ThinkingLevel = "off"
+	}
+	return runtime, nil
 }
 
 func (s *server) loadDefaultRuntime(cwd string) (sessionDefaultsResponse, error) {
@@ -1483,14 +1572,18 @@ func (s *server) refreshCatalog(force bool) error {
 		return nil
 	}
 
+	// Catalog rebuild scans every session file and can take seconds on Orange.
+	// Build it outside the global mutex so session event/runtime endpoints can
+	// keep reading the previous snapshot instead of queueing behind a writer.
+	catalog, byID, err := buildCatalog(s.agentDir)
+	if err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if time.Since(s.lastRefresh) < ttl && !force {
 		return nil
-	}
-	catalog, byID, err := buildCatalog(s.agentDir)
-	if err != nil {
-		return err
 	}
 	s.snapshot = catalog
 	s.sessionsByID = byID
@@ -1884,6 +1977,52 @@ func stringValue(object map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func intValue(object map[string]any, keys ...string) int {
+	for _, key := range keys {
+		switch value := object[key].(type) {
+		case int:
+			return value
+		case int64:
+			return int(value)
+		case float64:
+			return int(value)
+		case json.Number:
+			if parsed, err := value.Int64(); err == nil {
+				return int(parsed)
+			}
+		}
+	}
+	return 0
+}
+
+func fastModelRecord(provider string, modelID string) *rpcModelRecord {
+	model := &rpcModelRecord{Provider: provider, ID: modelID, Name: modelID}
+	model.ContextWindow = contextWindowForModel(provider, modelID)
+	return model
+}
+
+func contextWindowForModel(provider string, modelID string) int {
+	key := strings.ToLower(provider + "/" + modelID)
+	switch {
+	case strings.Contains(key, "gpt-5.5"), strings.Contains(key, "gpt-5.4"):
+		return 272000
+	case strings.Contains(key, "gpt-5.3"):
+		return 128000
+	case strings.Contains(key, "minimax-m3"):
+		return 512000
+	case strings.Contains(key, "minimax-m2"):
+		return 205000
+	case strings.Contains(key, "deepseek-v4"), strings.Contains(key, "qwen3.7-max"), strings.Contains(key, "mimo-v2.5"):
+		return 1000000
+	case strings.Contains(key, "qwen3.7"), strings.Contains(key, "qwen3.6"), strings.Contains(key, "kimi-k2"):
+		return 262000
+	case strings.Contains(key, "glm-5"):
+		return 203000
+	default:
+		return 0
+	}
 }
 
 func modelDescription(object map[string]any) string {
