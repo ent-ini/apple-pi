@@ -418,6 +418,31 @@ import Testing
 }
 
 @MainActor
+@Test func catalogRefreshPreservesOpenPendingSessionInSidebar() async throws {
+    let defaults = isolatedDefaults()
+    defaults.set(Date(), forKey: "ApplePi.updateCheck.lastCheckedAt")
+    let state = PiAppState(
+        defaults: defaults,
+        configurationService: PiConfigurationService(environment: [:]),
+        catalogLoader: { _, _ in PiCatalogSnapshot(projects: [], sessions: []) },
+        startsBackgroundWork: false
+    )
+
+    state.openNewSession(in: "/tmp/project")
+    guard let tab = state.chatWorkspace.selectedTab else {
+        Issue.record("expected a selected new tab")
+        return
+    }
+    tab.beginSending(prompt: "hello")
+
+    state.refreshCatalog()
+    try await Task.sleep(for: .milliseconds(100))
+
+    #expect(state.sessions.contains { $0.filePath == tab.key || $0.id == tab.key })
+    #expect(state.selection == .session(tab.key))
+}
+
+@MainActor
 @Test func sessionSearchCanMatchAcrossProjects() async throws {
     let defaults = isolatedDefaults()
     defaults.set(Date(), forKey: "ApplePi.updateCheck.lastCheckedAt")

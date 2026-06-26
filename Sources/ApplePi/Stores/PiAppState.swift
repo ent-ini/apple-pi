@@ -323,6 +323,7 @@ final class PiAppState: ObservableObject {
                     guard self.catalogRefreshID == refreshID else { return }
                     self.projects = snapshot.projects
                     self.sessions = snapshot.sessions
+                    self.preserveOpenChatSessionSidebarEntries()
                     self.isLoadingCatalog = false
                     if !quietly {
                         self.statusMessage = PiAppState.catalogStatusMessage(
@@ -1816,6 +1817,7 @@ final class PiAppState: ObservableObject {
         case .snapshot(let snapshot):
             projects = snapshot.projects
             sessions = snapshot.sessions
+            preserveOpenChatSessionSidebarEntries()
             if !snapshot.warnings.isEmpty {
                 statusMessage = PiAppState.catalogStatusMessage(
                     sessionCount: snapshot.sessions.count,
@@ -2051,6 +2053,17 @@ final class PiAppState: ObservableObject {
         }
         for projectID in affectedProjectIDs {
             reconcileSidebarProject(projectID)
+        }
+    }
+
+    private func preserveOpenChatSessionSidebarEntries() {
+        for session in chatWorkspace.tabs {
+            let aliases = Set(sessionAliases(for: session))
+            let isSelected = chatWorkspace.selectedTab?.id == session.id
+            let existsInSidebar = sessions.contains { !aliases.isDisjoint(with: Set(sessionAliases(for: $0))) }
+            let shouldPreserve = session.isSending || !Self.isPersistedTabKey(session.key) || (isSelected && !existsInSidebar)
+            guard shouldPreserve else { continue }
+            upsertSidebarSession(for: session)
         }
     }
 
