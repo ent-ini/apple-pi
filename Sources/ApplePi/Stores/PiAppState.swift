@@ -891,9 +891,11 @@ final class PiAppState: ObservableObject {
             // The key changed from `new:<UUID>` to the real file path,
             // so the persisted tabs snapshot is now stale. Save again.
             schedulePersistedChatTabsSave()
-            restartSelectedSessionEventStream()
-            scheduleCatalogRefresh(after: .milliseconds(50))
-            refreshSessionRuntime(for: session, updatesStatus: false)
+            if !session.isSending {
+                restartSelectedSessionEventStream()
+                scheduleCatalogRefresh(after: .milliseconds(50))
+                refreshSessionRuntime(for: session, updatesStatus: false)
+            }
             applyCachedAvailableModels(to: session)
         case .sessionHeader(let meta):
             if session.sessionID == nil {
@@ -907,9 +909,11 @@ final class PiAppState: ObservableObject {
                 migrateSessionState(from: previousAliases, to: sessionAliases(for: session))
                 upsertSidebarSession(for: session, previousAliases: previousAliases, fallbackWorkingDirectory: meta.workingDirectory)
                 schedulePersistedChatTabsSave()
-                restartSelectedSessionEventStream()
-                scheduleCatalogRefresh(after: .milliseconds(50))
-                refreshSessionRuntime(for: session, updatesStatus: false)
+                if !session.isSending {
+                    restartSelectedSessionEventStream()
+                    scheduleCatalogRefresh(after: .milliseconds(50))
+                    refreshSessionRuntime(for: session, updatesStatus: false)
+                }
                 applyCachedAvailableModels(to: session)
             }
         case .sessionEvents(let events, let isFinal):
@@ -920,6 +924,9 @@ final class PiAppState: ObservableObject {
             session.applyStreamingEvents([], isFinal: true)
         case .outputComplete:
             session.finishSendingAndReload()
+            restartSelectedSessionEventStream()
+            scheduleCatalogRefresh(after: .milliseconds(50))
+            refreshSessionRuntime(for: session, updatesStatus: false)
         case .streamError(let message):
             statusMessage = message
         }
@@ -968,6 +975,7 @@ final class PiAppState: ObservableObject {
             hydratePendingSessionDefaults(for: session)
             return
         }
+        guard !sessionID.hasPrefix("new:"), !sessionID.hasPrefix("fork:") else { return }
 
         let remoteHost = host
         let sessionKey = runtimeSessionKey(for: session)
@@ -1590,7 +1598,9 @@ final class PiAppState: ObservableObject {
         guard startsBackgroundWork,
               host.usesRemoteDaemonTransport,
               let session = chatWorkspace.selectedTab,
-              let sessionID = session.sessionID?.nilIfBlank else { return }
+              let sessionID = session.sessionID?.nilIfBlank,
+              !sessionID.hasPrefix("new:"),
+              !sessionID.hasPrefix("fork:") else { return }
 
         // Skeleton: show the runtime immediately from the cached JSONL
         // parse (handled inside the fast runtime endpoint) so the
@@ -2066,6 +2076,10 @@ final class PiAppState: ObservableObject {
             sessions[index] = summary
         } else {
             sessions.append(summary)
+        }
+
+        if chatWorkspace.selectedTab?.id == session.id {
+            selection = .session(summary.id)
         }
 
         reconcileSidebarProject(summary.projectID)

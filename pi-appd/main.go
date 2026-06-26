@@ -1188,7 +1188,14 @@ func (s *server) streamPiRPCCommand(
 		<-stderrDone
 		return nil
 	}
-	_ = stdin.Close()
+
+	stdinClosed := false
+	closeStdin := func() {
+		if !stdinClosed {
+			_ = stdin.Close()
+			stdinClosed = true
+		}
+	}
 
 	reader := bufio.NewReader(stdout)
 	for {
@@ -1206,12 +1213,22 @@ func (s *server) streamPiRPCCommand(
 				}
 			}
 			if isRPCResponseLine(rawLine) {
+				if message, ok := parseRPCFailureMessage(rawLine); ok {
+					writeNDJSON(w, streamErrorRecord{Type: "stream_error", Error: message})
+					if flusher != nil {
+						flusher.Flush()
+					}
+					closeStdin()
+				}
 				continue
 			}
 			_, _ = io.WriteString(w, rawLine)
 			_, _ = io.WriteString(w, "\n")
 			if flusher != nil {
 				flusher.Flush()
+			}
+			if rpcEventType(rawLine) == "agent_end" {
+				closeStdin()
 			}
 		}
 		if readErr != nil {
@@ -1226,6 +1243,7 @@ func (s *server) streamPiRPCCommand(
 		}
 	}
 
+	closeStdin()
 	waitErr := cmd.Wait()
 	stderrText := <-stderrDone
 	if waitErr != nil {
@@ -1643,13 +1661,32 @@ func parseRPCStateBindingLine(raw string, fallbackTitle string, fallbackWorkingD
 }
 
 func isRPCResponseLine(raw string) bool {
+	return rpcEventType(raw) == "response"
+}
+
+func rpcEventType(raw string) string {
 	var object struct {
 		Type string `json:"type"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &object); err != nil {
-		return false
+		return ""
 	}
-	return object.Type == "response"
+	return object.Type
+}
+
+func parseRPCFailureMessage(raw string) (string, bool) {
+	var envelope rpcResponseEnvelope
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &envelope); err != nil {
+		return "", false
+	}
+	if envelope.Type != "response" || envelope.Success {
+		return "", false
+	}
+	message := strings.TrimSpace(envelope.Error)
+	if message == "" {
+		message = firstNonBlank(strings.TrimSpace(envelope.Command), "rpc") + " command failed"
+	}
+	return message, true
 }
 
 func writeNDJSON(w http.ResponseWriter, payload any) {
