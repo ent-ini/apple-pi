@@ -1554,6 +1554,15 @@ func (s *server) lookupSessionRecord(sessionID string) (sessionRecord, bool, err
 	if ok {
 		return record, true, nil
 	}
+	if record, ok := findSessionRecordFast(s.agentDir, sessionID); ok {
+		s.mu.Lock()
+		if s.sessionsByID == nil {
+			s.sessionsByID = map[string]sessionRecord{}
+		}
+		s.sessionsByID[record.ID] = record
+		s.mu.Unlock()
+		return record, true, nil
+	}
 	if err := s.refreshCatalogIfNeeded(); err != nil {
 		return sessionRecord{}, false, err
 	}
@@ -1596,6 +1605,51 @@ func (s *server) catalogCacheTTL() time.Duration {
 		return 10 * time.Second
 	}
 	return 30 * time.Second
+}
+
+func findSessionRecordFast(agentDir string, sessionID string) (sessionRecord, bool) {
+	root := filepath.Join(agentDir, "sessions")
+	var found sessionRecord
+	matched := false
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || matched || d.IsDir() || filepath.Ext(path) != ".jsonl" {
+			return nil
+		}
+		base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		if !strings.Contains(base, sessionID) {
+			return nil
+		}
+		info, statErr := d.Info()
+		if statErr != nil {
+			return nil
+		}
+		parsed, parseErr := parseSessionFile(path)
+		if parseErr != nil {
+			return nil
+		}
+		projectID := filepath.Base(filepath.Dir(path))
+		if projectID == "sessions" && strings.TrimSpace(parsed.WorkingDirectory) != "" {
+			projectID = encodedProjectID(parsed.WorkingDirectory)
+		}
+		found = sessionRecord{
+			ID:                 firstNonBlank(parsed.ID, sessionID, base),
+			FilePath:           path,
+			ProjectID:          projectID,
+			Title:              firstNonBlank(parsed.DisplayName, parsed.FirstUserMessage, base),
+			WorkingDirectory:   parsed.WorkingDirectory,
+			MessageCount:       parsed.MessageCount,
+			ModifiedAt:         info.ModTime().UTC(),
+			DisplayName:        parsed.DisplayName,
+			ParentSession:      parsed.ParentSession,
+			BranchCount:        parsed.BranchCount,
+			LabelCount:         parsed.LabelCount,
+			BranchSummaryCount: parsed.BranchSummaryCount,
+			LatestModel:        parsed.LatestModel,
+		}
+		matched = true
+		return filepath.SkipAll
+	})
+	return found, matched
 }
 
 func buildCatalog(agentDir string) (catalogResponse, map[string]sessionRecord, error) {
@@ -1696,11 +1750,7 @@ func parseSessionFile(path string) (parsedSession, error) {
 	if err != nil {
 		return parsedSession{}, err
 	}
-	result := parseSessionLines(lines)
-	if messageCount, err := countMessageLines(path); err == nil {
-		result.MessageCount = messageCount
-	}
-	return result, nil
+	return parseSessionLines(lines), nil
 }
 
 func parseSessionLines(lines []string) parsedSession {
