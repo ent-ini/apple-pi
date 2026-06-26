@@ -804,12 +804,15 @@ func readEventRecordsAfter(path string, after int) ([]rawEventRecord, error) {
 		return nil, err
 	}
 	lines := splitJSONLLines(data)
-	// The streaming endpoint must only advance its cursor over complete JSONL
-	// records. If we observe a partial trailing write without a newline, keep
-	// it for the next fsnotify tick instead of emitting and losing the final
-	// completed line at the same index.
+	// The streaming endpoint must not advance its cursor over a partial
+	// trailing write. A closed JSONL file may legitimately omit the final
+	// newline, though, so keep a non-newline final record when it is already
+	// valid JSON and only defer malformed trailing fragments.
 	if len(data) > 0 && data[len(data)-1] != '\n' && len(lines) > 0 {
-		lines = lines[:len(lines)-1]
+		candidate := strings.TrimSpace(lines[len(lines)-1])
+		if candidate == "" || !json.Valid([]byte(candidate)) {
+			lines = lines[:len(lines)-1]
+		}
 	}
 	start := after + 1
 	if start < 0 {

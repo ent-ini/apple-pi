@@ -20,7 +20,7 @@ func TestSplitJSONLLinesDropsOnlyTrailingEmptyLine(t *testing.T) {
 }
 
 func TestReadEventRecordsAfterReturnsCatchUpRecords(t *testing.T) {
-	path := writeTempSessionFile(t, "a\nb\nc\n")
+	path := writeTempSessionFile(t, "{\"type\":\"session\"}\n{\"type\":\"message\",\"id\":\"b\"}\n{\"type\":\"message\",\"id\":\"c\"}\n")
 
 	records, err := readEventRecordsAfter(path, 0)
 	if err != nil {
@@ -29,13 +29,25 @@ func TestReadEventRecordsAfterReturnsCatchUpRecords(t *testing.T) {
 	if len(records) != 2 {
 		t.Fatalf("len(records) = %d, want 2", len(records))
 	}
-	if records[0].Line != 1 || records[0].Raw != "b" || records[1].Line != 2 || records[1].Raw != "c" {
+	if records[0].Line != 1 || records[0].Raw != "{\"type\":\"message\",\"id\":\"b\"}" || records[1].Line != 2 || records[1].Raw != "{\"type\":\"message\",\"id\":\"c\"}" {
+		t.Fatalf("records = %#v", records)
+	}
+}
+
+func TestReadEventRecordsAfterKeepsValidTrailingLineWithoutNewline(t *testing.T) {
+	path := writeTempSessionFile(t, "{\"type\":\"session\"}\n{\"type\":\"message\",\"id\":\"b\"}")
+
+	records, err := readEventRecordsAfter(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Line != 1 || records[0].Raw != "{\"type\":\"message\",\"id\":\"b\"}" {
 		t.Fatalf("records = %#v", records)
 	}
 }
 
 func TestReadEventRecordsAfterSkipsPartialTrailingLine(t *testing.T) {
-	path := writeTempSessionFile(t, "a\nb")
+	path := writeTempSessionFile(t, "{\"type\":\"session\"}\n{\"type\":\"message\"")
 
 	records, err := readEventRecordsAfter(path, 0)
 	if err != nil {
