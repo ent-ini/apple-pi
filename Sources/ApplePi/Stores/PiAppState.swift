@@ -91,6 +91,8 @@ final class PiAppState: ObservableObject {
     /// is reused so a burst of mutations only writes once.
     private var chatTabsSaveTask: Task<Void, Never>?
     private var sessionDefaultsCache: [String: SessionDefaultsSnapshot] = [:]
+    private var pendingThinkingLevelBySessionKey: [String: String] = [:]
+    private var thinkingLevelMutationVersionBySessionKey: [String: Int] = [:]
 
     init(
         defaults: UserDefaults = Foundation.UserDefaults(suiteName: nil) ?? Foundation.UserDefaults(),
@@ -922,6 +924,8 @@ final class PiAppState: ObservableObject {
         }
 
         let remoteHost = host
+        let sessionKey = runtimeSessionKey(for: session)
+        let observedThinkingMutationVersion = thinkingLevelMutationVersionBySessionKey[sessionKey] ?? 0
         Task { [weak self, weak session] in
             do {
                 let runtime = try await RemoteDaemonClient().loadSessionRuntime(
@@ -930,9 +934,11 @@ final class PiAppState: ObservableObject {
                 )
                 await MainActor.run {
                     guard let self, let session, self.host == remoteHost else { return }
-                    session.updateRuntimeState(runtime)
+                    guard (self.thinkingLevelMutationVersionBySessionKey[sessionKey] ?? 0) == observedThinkingMutationVersion else { return }
+                    let effectiveRuntime = self.runtimeApplyingPendingThinkingLevel(runtime, sessionKey: sessionKey)
+                    session.updateRuntimeState(effectiveRuntime)
                     self.cacheSessionDefaults(
-                        SessionDefaultsSnapshot(runtimeState: runtime, availableModels: session.availableModels),
+                        SessionDefaultsSnapshot(runtimeState: effectiveRuntime, availableModels: session.availableModels),
                         for: session.launchRequest?.workingDirectory
                     )
                 }
@@ -1094,6 +1100,12 @@ final class PiAppState: ObservableObject {
             return
         }
 
+        let currentLevel = effectiveThinkingLevel(for: session)
+        let nextLevel = nextThinkingLevel(after: currentLevel)
+        let sessionKey = runtimeSessionKey(for: session)
+        let mutationVersion = nextThinkingLevelMutationVersion(for: sessionKey)
+        pendingThinkingLevelBySessionKey[sessionKey] = nextLevel
+
         if let current = session.runtimeState {
             session.updateRuntimeState(
                 SessionRuntimeState(
@@ -1102,28 +1114,38 @@ final class PiAppState: ObservableObject {
                     provider: current.provider,
                     modelID: current.modelID,
                     modelName: current.modelName,
-                    thinkingLevel: nextThinkingLevel(after: current.thinkingLevel),
+                    thinkingLevel: nextLevel,
                     tokens: current.tokens,
                     contextUsage: current.contextUsage
                 )
             )
         }
+        statusMessage = "Thinking: \(nextLevel)"
 
         let remoteHost = host
         Task { [weak self, weak session] in
             do {
-                let runtime = try await RemoteDaemonClient().cycleSessionThinkingLevel(
+                let runtime = try await RemoteDaemonClient().setSessionThinkingLevel(
                     host: remoteHost,
-                    sessionID: sessionID
+                    sessionID: sessionID,
+                    level: nextLevel
                 )
                 await MainActor.run {
                     guard let self, let session, self.host == remoteHost else { return }
+                    guard self.thinkingLevelMutationVersionBySessionKey[sessionKey] == mutationVersion else { return }
+                    self.pendingThinkingLevelBySessionKey.removeValue(forKey: sessionKey)
                     session.updateRuntimeState(runtime)
+                    self.cacheSessionDefaults(
+                        SessionDefaultsSnapshot(runtimeState: runtime, availableModels: session.availableModels),
+                        for: session.launchRequest?.workingDirectory
+                    )
                     self.statusMessage = "Thinking: \(runtime.thinkingLevel)"
                 }
             } catch {
                 await MainActor.run {
                     guard let self, let session else { return }
+                    guard self.thinkingLevelMutationVersionBySessionKey[sessionKey] == mutationVersion else { return }
+                    self.pendingThinkingLevelBySessionKey.removeValue(forKey: sessionKey)
                     self.statusMessage = error.localizedDescription
                     self.refreshSessionRuntime(for: session, updatesStatus: false)
                 }
@@ -1138,6 +1160,47 @@ final class PiAppState: ObservableObject {
             return "off"
         }
         return levels[(index + 1) % levels.count]
+    }
+
+    private func effectiveThinkingLevel(for session: ChatSession) -> String {
+        let sessionKey = runtimeSessionKey(for: session)
+        if let pending = pendingThinkingLevelBySessionKey[sessionKey]?.nilIfBlank {
+            return pending
+        }
+        return session.runtimeState?.thinkingLevel ?? "off"
+    }
+
+    private func runtimeSessionKey(for session: ChatSession) -> String {
+        if let sessionID = session.sessionID?.nilIfBlank {
+            return "id:\(sessionID)"
+        }
+        if let sessionPath = session.sessionPath?.nilIfBlank {
+            return "path:\(sessionPath)"
+        }
+        return "key:\(session.key)"
+    }
+
+    private func nextThinkingLevelMutationVersion(for sessionKey: String) -> Int {
+        let next = (thinkingLevelMutationVersionBySessionKey[sessionKey] ?? 0) + 1
+        thinkingLevelMutationVersionBySessionKey[sessionKey] = next
+        return next
+    }
+
+    private func runtimeApplyingPendingThinkingLevel(_ runtime: SessionRuntimeState, sessionKey: String) -> SessionRuntimeState {
+        guard let pendingLevel = pendingThinkingLevelBySessionKey[sessionKey]?.nilIfBlank,
+              pendingLevel != runtime.thinkingLevel else {
+            return runtime
+        }
+        return SessionRuntimeState(
+            sessionID: runtime.sessionID,
+            sessionPath: runtime.sessionPath,
+            provider: runtime.provider,
+            modelID: runtime.modelID,
+            modelName: runtime.modelName,
+            thinkingLevel: pendingLevel,
+            tokens: runtime.tokens,
+            contextUsage: runtime.contextUsage
+        )
     }
 
     func delete(_ session: PiSessionSummary) {

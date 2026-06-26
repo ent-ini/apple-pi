@@ -160,13 +160,18 @@ struct RemoteDaemonClient {
         return response.runtimeState
     }
 
-    func cycleSessionThinkingLevel(host: PiHostConfiguration, sessionID: String, tokenOverride: String? = nil) async throws -> SessionRuntimeState {
+    func setSessionThinkingLevel(
+        host: PiHostConfiguration,
+        sessionID: String,
+        level: String,
+        tokenOverride: String? = nil
+    ) async throws -> SessionRuntimeState {
         let response: SessionRuntimeResponse = try await send(
             host: host,
-            path: "/sessions/\(encodedPathComponent(sessionID))/thinking/cycle",
+            path: "/sessions/\(encodedPathComponent(sessionID))/thinking",
             method: "POST",
             tokenOverride: tokenOverride,
-            body: EmptyRequestBody(),
+            body: SetThinkingLevelRequestBody(level: level),
             accept: "application/json"
         )
         return response.runtimeState
@@ -778,6 +783,10 @@ private struct SendSessionRequestBody: Encodable {
 private struct SetModelRequestBody: Encodable {
     let provider: String
     let modelId: String
+}
+
+private struct SetThinkingLevelRequestBody: Encodable {
+    let level: String
 }
 
 private struct EmptyRequestBody: Encodable {}

@@ -126,6 +126,10 @@ type setModelRequest struct {
 	ModelID  string `json:"modelId"`
 }
 
+type setThinkingLevelRequest struct {
+	Level string `json:"level"`
+}
+
 type sessionBoundRecord struct {
 	Type             string `json:"type"`
 	SessionID        string `json:"sessionId,omitempty"`
@@ -441,6 +445,14 @@ func (s *server) handleSessionSubroutes(w http.ResponseWriter, r *http.Request) 
 		s.handleSessionSetModel(w, r, record)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "thinking" {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.handleSessionSetThinkingLevel(w, r, record)
+		return
+	}
 	if len(parts) == 3 && parts[1] == "thinking" && parts[2] == "cycle" {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -504,6 +516,35 @@ func (s *server) handleSessionSetModel(w http.ResponseWriter, r *http.Request, r
 	writeJSON(w, http.StatusOK, runtime)
 }
 
+func (s *server) handleSessionSetThinkingLevel(w http.ResponseWriter, r *http.Request, record sessionRecord) {
+	var request setThinkingLevelRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	request.Level = strings.TrimSpace(strings.ToLower(request.Level))
+	if request.Level == "none" {
+		request.Level = "off"
+	}
+	if !isValidThinkingLevel(request.Level) {
+		writeError(w, http.StatusBadRequest, "invalid thinking level")
+		return
+	}
+	_, err := s.runPiRPCCommands(record, []any{
+		rpcSimpleCommand{Type: "set_thinking_level", Level: request.Level},
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	runtime, err := s.loadSessionRuntime(record)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, runtime)
+}
+
 func (s *server) handleSessionCycleThinking(w http.ResponseWriter, r *http.Request, record sessionRecord) {
 	_, err := s.runPiRPCCommands(record, []any{
 		rpcSimpleCommand{Type: "cycle_thinking_level"},
@@ -518,6 +559,15 @@ func (s *server) handleSessionCycleThinking(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, runtime)
+}
+
+func isValidThinkingLevel(level string) bool {
+	switch level {
+	case "off", "minimal", "low", "medium", "high", "xhigh":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *server) handleSessionEvents(w http.ResponseWriter, r *http.Request, record sessionRecord) {
