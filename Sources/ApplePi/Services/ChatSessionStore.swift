@@ -678,7 +678,8 @@ final class ChatSessionStore: ObservableObject {
         sessionPath: String? = nil,
         launchRequest: PiLaunchRequest? = nil,
         eventLoader: (@Sendable () async throws -> SessionEventsPage)? = nil,
-        historyPageLoader: (@Sendable (_ before: Int, _ limit: Int) async throws -> SessionEventsPage)? = nil
+        historyPageLoader: (@Sendable (_ before: Int, _ limit: Int) async throws -> SessionEventsPage)? = nil,
+        autoLoad: Bool = true
     ) -> ChatSession {
         if let existing = tabs.first(where: { $0.key == key }) {
             existing.bindToSession(
@@ -691,7 +692,7 @@ final class ChatSessionStore: ObservableObject {
             )
             existing.updateLaunchRequest(launchRequest)
             select(existing)
-            if !existing.isSending, (sessionPath != nil || eventLoader != nil) {
+            if autoLoad, !existing.isSending, (sessionPath != nil || eventLoader != nil) {
                 existing.loadFromDisk(force: true)
             }
             return existing
@@ -711,7 +712,7 @@ final class ChatSessionStore: ObservableObject {
         )
         tabs.append(session)
         select(session)
-        if sessionPath != nil || eventLoader != nil {
+        if autoLoad, (sessionPath != nil || eventLoader != nil) {
             session.loadFromDisk()
         }
         trimCachedTabsIfNeeded()
@@ -727,7 +728,8 @@ final class ChatSessionStore: ObservableObject {
         sessionPath: String?,
         launchRequest: PiLaunchRequest? = nil,
         eventLoader: (@Sendable () async throws -> SessionEventsPage)? = nil,
-        historyPageLoader: (@Sendable (_ before: Int, _ limit: Int) async throws -> SessionEventsPage)? = nil
+        historyPageLoader: (@Sendable (_ before: Int, _ limit: Int) async throws -> SessionEventsPage)? = nil,
+        autoLoad: Bool = true
     ) -> ChatSession {
         openTab(
             key: key,
@@ -736,7 +738,8 @@ final class ChatSessionStore: ObservableObject {
             sessionPath: sessionPath,
             launchRequest: launchRequest,
             eventLoader: eventLoader,
-            historyPageLoader: historyPageLoader
+            historyPageLoader: historyPageLoader,
+            autoLoad: autoLoad
         )
     }
 

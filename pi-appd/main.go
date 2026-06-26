@@ -386,13 +386,11 @@ func (s *server) handleSessionSubroutes(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	sessionID := parts[0]
-	if err := s.refreshCatalogIfNeeded(); err != nil {
+	record, ok, err := s.lookupSessionRecord(sessionID)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.mu.RLock()
-	record, ok := s.sessionsByID[sessionID]
-	s.mu.RUnlock()
 	if !ok {
 		writeError(w, http.StatusNotFound, "unknown session")
 		return
@@ -1458,6 +1456,22 @@ func writeNDJSON(w http.ResponseWriter, payload any) {
 
 func (s *server) refreshCatalogIfNeeded() error {
 	return s.refreshCatalog(false)
+}
+
+func (s *server) lookupSessionRecord(sessionID string) (sessionRecord, bool, error) {
+	s.mu.RLock()
+	record, ok := s.sessionsByID[sessionID]
+	s.mu.RUnlock()
+	if ok {
+		return record, true, nil
+	}
+	if err := s.refreshCatalogIfNeeded(); err != nil {
+		return sessionRecord{}, false, err
+	}
+	s.mu.RLock()
+	record, ok = s.sessionsByID[sessionID]
+	s.mu.RUnlock()
+	return record, ok, nil
 }
 
 func (s *server) refreshCatalog(force bool) error {

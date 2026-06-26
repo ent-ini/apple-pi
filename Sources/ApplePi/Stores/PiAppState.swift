@@ -1879,8 +1879,10 @@ final class PiAppState: ObservableObject {
 
         let isRemote = host.usesRemoteDaemonTransport || host.mode == .remoteSSH
         let fileManager = Foundation.FileManager()
+        let selectedKey = snapshot.selectedTabKey
 
         for tab in snapshot.tabs {
+            let shouldLoadImmediately = tab.key == selectedKey
             guard Self.isPersistedTabKey(tab.key) else { continue }
             if isRemote {
                 let loader = tab.sessionID.flatMap { remoteEventLoader(sessionID: $0) }
@@ -1891,7 +1893,8 @@ final class PiAppState: ObservableObject {
                     sessionID: tab.sessionID,
                     sessionPath: nil,
                     eventLoader: loader,
-                    historyPageLoader: historyLoader
+                    historyPageLoader: historyLoader,
+                    autoLoad: shouldLoadImmediately
                 )
             } else {
                 // Local: only reopen if the file is still on disk. A
@@ -1904,12 +1907,13 @@ final class PiAppState: ObservableObject {
                     title: tab.title,
                     sessionID: nil,
                     sessionPath: tab.key,
-                    eventLoader: nil
+                    eventLoader: nil,
+                    autoLoad: shouldLoadImmediately
                 )
             }
         }
 
-        if let selectedKey = snapshot.selectedTabKey,
+        if let selectedKey,
            let tab = chatWorkspace.tabs.first(where: { $0.key == selectedKey }) {
             chatWorkspace.select(tab)
         }
