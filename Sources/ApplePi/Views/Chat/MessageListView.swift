@@ -247,11 +247,13 @@ struct ToolInteractionRow: View {
                 .buttonStyle(.plain)
                 .help(isExpanded ? "Collapse long tool details" : "Expand full tool call and response")
 
-                toolSection(title: "Call", text: arguments, fallback: "(no arguments)")
-                if let result {
-                    toolSection(title: "Response", text: result.output, fallback: "(empty)")
-                } else {
-                    toolSection(title: "Response", text: "", fallback: "(waiting for tool result)")
+                if isExpanded {
+                    toolSection(title: "Call", text: arguments, fallback: "(no arguments)")
+                    if let result {
+                        toolSection(title: "Response", text: result.output, fallback: "(empty)")
+                    } else {
+                        toolSection(title: "Response", text: "", fallback: "(waiting for tool result)")
+                    }
                 }
             }
             .padding(.horizontal, 10)
@@ -342,19 +344,6 @@ struct ToolEventRow: View {
             }
         }
 
-        var detail: String? {
-            switch self {
-            case .toolCall(_, let arguments):
-                return summary(of: arguments, fallback: "(no arguments)")
-            case .toolResult(_, _, let output, _):
-                return summary(of: output, fallback: "(empty)")
-            case .meta(_, _, let parent):
-                return parent.map { "forked from \($0)" }
-            case .other:
-                return nil
-            }
-        }
-
         var expandedBody: String? {
             switch self {
             case .toolCall(_, let arguments):
@@ -372,14 +361,6 @@ struct ToolEventRow: View {
             }
         }
 
-        private func summary(of text: String, fallback: String) -> String {
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty { return fallback }
-            let oneLine = trimmed.replacingOccurrences(of: "\n", with: " ")
-            if oneLine.count <= 80 { return oneLine }
-            let endIndex = oneLine.index(oneLine.startIndex, offsetBy: 80)
-            return "\(oneLine[..<endIndex])…"
-        }
     }
 
     let kind: Kind
@@ -424,15 +405,6 @@ struct ToolEventRow: View {
             }
             .buttonStyle(.plain)
             .help(kind.expandedBody == nil ? kind.label : (isExpanded ? "Hide details" : "Show details"))
-
-            if let detail = kind.detail, !isExpanded {
-                Text(detail)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(2)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
 
             if isExpanded, let body = kind.expandedBody {
                 Text(body)
