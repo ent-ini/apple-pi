@@ -38,7 +38,6 @@ struct ChatSessionView: View {
         .onAppear {
             if session.sessionID != nil {
                 appState.refreshSessionRuntime(for: session)
-                appState.refreshAvailableModels(for: session)
             } else {
                 appState.hydratePendingSessionDefaults(for: session)
             }
@@ -46,7 +45,6 @@ struct ChatSessionView: View {
         .onChange(of: session.sessionID) { _, _ in
             showsModelPicker = false
             appState.refreshSessionRuntime(for: session)
-            appState.refreshAvailableModels(for: session, force: true)
         }
         .onDisappear {
             transcriptionTask?.cancel()

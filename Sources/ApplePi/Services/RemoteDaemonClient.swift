@@ -264,10 +264,10 @@ struct RemoteDaemonClient {
         return response.runtimeState
     }
 
-    func loadAvailableModels(host: PiHostConfiguration, sessionID: String, tokenOverride: String? = nil) async throws -> [PiModelOption] {
+    func loadAvailableModels(host: PiHostConfiguration, sessionID: String? = nil, tokenOverride: String? = nil) async throws -> [PiModelOption] {
         let response: AvailableModelsResponse = try await send(
             host: host,
-            path: "/sessions/\(encodedPathComponent(sessionID))/models",
+            path: "/models",
             tokenOverride: tokenOverride
         )
         return response.models.map(\.piModelOption)

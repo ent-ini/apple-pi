@@ -33,6 +33,12 @@ type server struct {
 	snapshot     catalogResponse
 	sessionsByID map[string]sessionRecord
 
+	modelsMu             sync.Mutex
+	modelsCache          []rpcModelRecord
+	modelsCacheAt        time.Time
+	modelsCacheSignature string
+	modelsInflight       chan struct{}
+
 	broker *catalogBroker
 }
 
@@ -243,6 +249,12 @@ type sessionDefaultsResponse struct {
 	Models  []rpcModelRecord       `json:"models"`
 }
 
+type agentSettings struct {
+	DefaultProvider      string `json:"defaultProvider"`
+	DefaultModel         string `json:"defaultModel"`
+	DefaultThinkingLevel string `json:"defaultThinkingLevel"`
+}
+
 type parsedSession struct {
 	ID                 string
 	WorkingDirectory   string
@@ -290,6 +302,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", srv.handleHealthz)
+	mux.HandleFunc("/models", srv.handleModels)
 	mux.HandleFunc("/runtime/defaults", srv.handleRuntimeDefaults)
 	mux.HandleFunc("/sessions", srv.handleSessions)
 	mux.HandleFunc("/sessions/", srv.handleSessionSubroutes)
@@ -330,6 +343,23 @@ func (s *server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+func (s *server) handleModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	cwd := strings.TrimSpace(r.URL.Query().Get("cwd"))
+	if cwd == "" {
+		cwd = os.Getenv("HOME")
+	}
+	models, err := s.loadAvailableModels(expandHome(cwd))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, rpcAvailableModelsResponse{Models: models})
+}
+
 func (s *server) handleRuntimeDefaults(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -339,12 +369,7 @@ func (s *server) handleRuntimeDefaults(w http.ResponseWriter, r *http.Request) {
 	if cwd == "" {
 		cwd = os.Getenv("HOME")
 	}
-	cwd = expandHome(cwd)
-	payload, err := s.loadDefaultRuntime(cwd)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
+	payload := s.loadDefaultRuntimeFast(expandHome(cwd))
 	writeJSON(w, http.StatusOK, payload)
 }
 
@@ -480,19 +505,13 @@ func (s *server) handleSessionRuntime(w http.ResponseWriter, r *http.Request, re
 }
 
 func (s *server) handleSessionModels(w http.ResponseWriter, r *http.Request, record sessionRecord) {
-	responses, err := s.runPiRPCCommands(record, []any{
-		rpcSimpleCommand{Type: "get_available_models"},
-	})
+	cwd := firstNonBlank(strings.TrimSpace(record.WorkingDirectory), filepath.Dir(record.FilePath), os.Getenv("HOME"))
+	models, err := s.loadAvailableModels(expandHome(cwd))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	var payload rpcAvailableModelsResponse
-	if err := decodeRPCSuccessResponse(responses, "get_available_models", &payload); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, payload)
+	writeJSON(w, http.StatusOK, rpcAvailableModelsResponse{Models: models})
 }
 
 func (s *server) handleSessionSetModel(w http.ResponseWriter, r *http.Request, record sessionRecord) {
@@ -1329,24 +1348,113 @@ func loadFastSessionRuntime(record sessionRecord) (sessionRuntimeResponse, error
 	return runtime, nil
 }
 
-func (s *server) loadDefaultRuntime(cwd string) (sessionDefaultsResponse, error) {
+func (s *server) loadDefaultRuntimeFast(cwd string) sessionDefaultsResponse {
+	settings := s.loadAgentSettings()
+	provider := firstNonBlank(settings.DefaultProvider, "")
+	modelID := firstNonBlank(settings.DefaultModel, "")
+	var model *rpcModelRecord
+	if provider != "" && modelID != "" {
+		model = fastModelRecord(provider, modelID)
+	}
+	return sessionDefaultsResponse{
+		Runtime: sessionRuntimeResponse{
+			Model:         model,
+			ThinkingLevel: firstNonBlank(settings.DefaultThinkingLevel, "off"),
+			Tokens:        runtimeTokens{},
+		},
+		Models: s.cachedAvailableModels(),
+	}
+}
+
+func (s *server) loadAgentSettings() agentSettings {
+	var settings agentSettings
+	data, err := os.ReadFile(filepath.Join(s.agentDir, "settings.json"))
+	if err != nil {
+		return settings
+	}
+	_ = json.Unmarshal(data, &settings)
+	return settings
+}
+
+const modelsCacheTTL = 6 * time.Hour
+
+func (s *server) cachedAvailableModels() []rpcModelRecord {
+	s.modelsMu.Lock()
+	defer s.modelsMu.Unlock()
+	return cloneModels(s.modelsCache)
+}
+
+func (s *server) loadAvailableModels(cwd string) ([]rpcModelRecord, error) {
+	signature := s.modelsFilesSignature()
+	for {
+		s.modelsMu.Lock()
+		if len(s.modelsCache) > 0 && s.modelsCacheSignature == signature && time.Since(s.modelsCacheAt) < modelsCacheTTL {
+			models := cloneModels(s.modelsCache)
+			s.modelsMu.Unlock()
+			return models, nil
+		}
+		if s.modelsInflight != nil {
+			inflight := s.modelsInflight
+			s.modelsMu.Unlock()
+			<-inflight
+			continue
+		}
+		inflight := make(chan struct{})
+		s.modelsInflight = inflight
+		s.modelsMu.Unlock()
+
+		var models []rpcModelRecord
+		var err error
+		func() {
+			defer func() {
+				s.modelsMu.Lock()
+				defer s.modelsMu.Unlock()
+				defer close(inflight)
+				s.modelsInflight = nil
+				if err == nil {
+					s.modelsCache = cloneModels(models)
+					s.modelsCacheAt = time.Now()
+					s.modelsCacheSignature = signature
+				}
+			}()
+			models, err = s.fetchAvailableModels(cwd)
+		}()
+		return models, err
+	}
+}
+
+func (s *server) fetchAvailableModels(cwd string) ([]rpcModelRecord, error) {
 	responses, err := s.runPiRPCCommandsInContext(cwd, "", []any{
-		rpcSimpleCommand{Type: "get_state"},
-		rpcSimpleCommand{Type: "get_session_stats"},
 		rpcSimpleCommand{Type: "get_available_models"},
 	})
 	if err != nil {
-		return sessionDefaultsResponse{}, err
+		return nil, err
 	}
-	runtime, err := decodeSessionRuntimeResponse(responses)
-	if err != nil {
-		return sessionDefaultsResponse{}, err
+	var payload rpcAvailableModelsResponse
+	if err := decodeRPCSuccessResponse(responses, "get_available_models", &payload); err != nil {
+		return nil, err
 	}
-	var models rpcAvailableModelsResponse
-	if err := decodeRPCSuccessResponse(responses, "get_available_models", &models); err != nil {
-		return sessionDefaultsResponse{}, err
+	return payload.Models, nil
+}
+
+func (s *server) modelsFilesSignature() string {
+	parts := make([]string, 0, 3)
+	for _, name := range []string{"auth.json", "models.json", "settings.json"} {
+		path := filepath.Join(s.agentDir, name)
+		info, err := os.Stat(path)
+		if err != nil {
+			parts = append(parts, name+":missing")
+			continue
+		}
+		parts = append(parts, name+":"+strconv.FormatInt(info.Size(), 10)+":"+strconv.FormatInt(info.ModTime().UnixNano(), 10))
 	}
-	return sessionDefaultsResponse{Runtime: runtime, Models: models.Models}, nil
+	return strings.Join(parts, "|")
+}
+
+func cloneModels(models []rpcModelRecord) []rpcModelRecord {
+	out := make([]rpcModelRecord, len(models))
+	copy(out, models)
+	return out
 }
 
 func decodeSessionRuntimeResponse(responses map[string]rpcResponseEnvelope) (sessionRuntimeResponse, error) {

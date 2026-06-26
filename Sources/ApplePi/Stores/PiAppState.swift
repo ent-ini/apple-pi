@@ -93,6 +93,9 @@ final class PiAppState: ObservableObject {
     /// is reused so a burst of mutations only writes once.
     private var chatTabsSaveTask: Task<Void, Never>?
     private var sessionDefaultsCache: [String: SessionDefaultsSnapshot] = [:]
+    private var availableModelsCache: [PiModelOption] = []
+    private var availableModelsCacheLoadedAt: Date?
+    private var isLoadingAvailableModels = false
     private var pendingThinkingLevelBySessionKey: [String: String] = [:]
     private var thinkingLevelMutationVersionBySessionKey: [String: Int] = [:]
 
@@ -379,6 +382,10 @@ final class PiAppState: ObservableObject {
 
     private func cacheSessionDefaults(_ snapshot: SessionDefaultsSnapshot, for workingDirectory: String?) {
         sessionDefaultsCache[sessionDefaultsCacheKey(for: workingDirectory)] = snapshot
+        if !snapshot.availableModels.isEmpty {
+            availableModelsCache = snapshot.availableModels
+            availableModelsCacheLoadedAt = Date()
+        }
     }
 
     @discardableResult
@@ -585,7 +592,7 @@ final class PiAppState: ObservableObject {
             historyPageLoader: historyPageLoader(for: session)
         )
         refreshSessionRuntime(for: tab)
-        refreshAvailableModels(for: tab)
+        applyCachedAvailableModels(to: tab)
         statusMessage = "Resumed \(session.title)"
     }
 
@@ -887,7 +894,7 @@ final class PiAppState: ObservableObject {
             restartSelectedSessionEventStream()
             scheduleCatalogRefresh(after: .milliseconds(50))
             refreshSessionRuntime(for: session, updatesStatus: false)
-            refreshAvailableModels(for: session)
+            applyCachedAvailableModels(to: session)
         case .sessionHeader(let meta):
             if session.sessionID == nil {
                 let previousAliases = sessionAliases(for: session)
@@ -903,7 +910,7 @@ final class PiAppState: ObservableObject {
                 restartSelectedSessionEventStream()
                 scheduleCatalogRefresh(after: .milliseconds(50))
                 refreshSessionRuntime(for: session, updatesStatus: false)
-                refreshAvailableModels(for: session)
+                applyCachedAvailableModels(to: session)
             }
         case .sessionEvents(let events, let isFinal):
             session.applyStreamingEvents(events, isFinal: isFinal)
@@ -993,30 +1000,48 @@ final class PiAppState: ObservableObject {
             session.updateAvailableModels([])
             return
         }
-        guard let sessionID = session.sessionID?.nilIfBlank else {
-            hydratePendingSessionDefaults(for: session)
-            return
-        }
         if !force, !session.availableModels.isEmpty { return }
+        if applyCachedAvailableModels(to: session) { return }
+        if isLoadingAvailableModels { return }
 
+        isLoadingAvailableModels = true
         let remoteHost = host
         Task { [weak self, weak session] in
             do {
-                let models = try await RemoteDaemonClient().loadAvailableModels(
-                    host: remoteHost,
-                    sessionID: sessionID
-                )
+                let models = try await RemoteDaemonClient().loadAvailableModels(host: remoteHost)
                 await MainActor.run {
-                    guard let self, let session, self.host == remoteHost else { return }
-                    session.updateAvailableModels(models)
+                    guard let self, self.host == remoteHost else { return }
+                    self.availableModelsCache = models
+                    self.availableModelsCacheLoadedAt = Date()
+                    self.isLoadingAvailableModels = false
+                    for tab in self.chatWorkspace.tabs where tab.availableModels.isEmpty {
+                        tab.updateAvailableModels(models)
+                    }
+                    if let session {
+                        session.updateAvailableModels(models)
+                    }
                 }
             } catch {
                 await MainActor.run {
                     guard let self else { return }
+                    self.isLoadingAvailableModels = false
                     self.statusMessage = error.localizedDescription
                 }
             }
         }
+    }
+
+    @discardableResult
+    private func applyCachedAvailableModels(to session: ChatSession) -> Bool {
+        guard !availableModelsCache.isEmpty else { return false }
+        if let loadedAt = availableModelsCacheLoadedAt,
+           Date().timeIntervalSince(loadedAt) > 6 * 60 * 60 {
+            return false
+        }
+        if session.availableModels.isEmpty {
+            session.updateAvailableModels(availableModelsCache)
+        }
+        return true
     }
 
     func selectModel(_ model: PiModelOption, in session: ChatSession) {
@@ -1470,6 +1495,9 @@ final class PiAppState: ObservableObject {
         unreadSessionKeys = []
         sessionActivityOverrides = [:]
         sessionDefaultsCache = [:]
+        availableModelsCache = []
+        availableModelsCacheLoadedAt = nil
+        isLoadingAvailableModels = false
         // Open chat tabs reference `sessionPath` values from the previous
         // host, so close them. Without this the user sees stale
         // conversations after a host change.
@@ -1721,12 +1749,7 @@ final class PiAppState: ObservableObject {
             session.appendPersistedPage(delta)
             let sessionKey = runtimeSessionKey(for: session)
             session.updateRuntimeState(runtimeApplyingPendingThinkingLevel(runtime, sessionKey: sessionKey))
-            if session.availableModels.isEmpty {
-                Task { [weak self, weak session] in
-                    guard let self, let session else { return }
-                    self.refreshAvailableModels(for: session)
-                }
-            }
+            applyCachedAvailableModels(to: session)
         } catch {
             // Best-effort background sync: keep the current transcript and
             // let catalog polling / manual reload recover.

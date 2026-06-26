@@ -30,7 +30,6 @@ struct ChatWorkspaceView: View {
             guard let tab = workspace.selectedTab else { return }
             if tab.sessionID != nil {
                 appState.refreshSessionRuntime(for: tab)
-                appState.refreshAvailableModels(for: tab)
             } else {
                 appState.hydratePendingSessionDefaults(for: tab)
             }
