@@ -83,6 +83,7 @@ final class PiAppState: ObservableObject {
     private var selectedSessionStreamTask: Task<Void, Never>?
     private var activityObservers: [NSObjectProtocol] = []
     private var isApplicationActive = true
+    private var isCatalogStreamConnected = false
     /// Long-lived task that subscribes to the daemon's `/sessions/stream`
     /// SSE endpoint and pushes full catalog snapshots into `projects` /
     /// `sessions`. `nil` whenever the current host doesn't use the daemon
@@ -1505,6 +1506,7 @@ final class PiAppState: ObservableObject {
     private func stopCatalogLiveUpdates() {
         catalogStreamTask?.cancel()
         catalogStreamTask = nil
+        isCatalogStreamConnected = false
     }
 
     private func startCatalogAdaptivePolling() {
@@ -1515,7 +1517,9 @@ final class PiAppState: ObservableObject {
                 let interval: Duration = self.isApplicationActive ? .seconds(3) : .seconds(30)
                 try? await Task.sleep(for: interval)
                 if Task.isCancelled { return }
-                guard self.host.usesRemoteDaemonTransport, !self.isLoadingCatalog else { continue }
+                guard self.host.usesRemoteDaemonTransport,
+                      !self.isLoadingCatalog,
+                      !self.isCatalogStreamConnected else { continue }
                 self.refreshCatalog(quietly: true)
             }
         }
@@ -1535,7 +1539,9 @@ final class PiAppState: ObservableObject {
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     self.isApplicationActive = true
-                    if self.host.usesRemoteDaemonTransport, !self.isLoadingCatalog {
+                    if self.host.usesRemoteDaemonTransport,
+                       !self.isLoadingCatalog,
+                       !self.isCatalogStreamConnected {
                         self.refreshCatalog(quietly: true)
                     }
                     await self.syncSelectedRemoteSessionDelta()
@@ -1744,14 +1750,18 @@ final class PiAppState: ObservableObject {
             do {
                 for try await event in stream {
                     receivedEvent = true
+                    isCatalogStreamConnected = true
                     backoff = .seconds(1)
                     applyCatalogStreamEvent(event)
                 }
+                isCatalogStreamConnected = false
                 if Task.isCancelled { return }
                 try? await Task.sleep(for: backoff)
             } catch is CancellationError {
+                isCatalogStreamConnected = false
                 return
             } catch {
+                isCatalogStreamConnected = false
                 if Task.isCancelled { return }
                 let nsError = error as NSError
                 if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {

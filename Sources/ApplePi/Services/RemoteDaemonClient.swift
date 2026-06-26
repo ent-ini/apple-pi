@@ -49,7 +49,7 @@ struct RemoteDaemonClient {
                     }
 
                     let parser = SSECatalogEventParser()
-                    let decoder = JSONDecoder()
+                    let decoder = Self.makeCatalogDecoder()
                     for try await line in bytes.lines {
                         if Task.isCancelled { break }
                         guard let event = parser.feed(line) else { continue }
@@ -648,23 +648,25 @@ struct RemoteDaemonClient {
                     lastActivity: record.lastActivity
                 )
             },
-            sessions: response.sessions.map { record in
-                PiSessionSummary(
-                    id: record.id,
-                    filePath: record.filePath,
-                    projectID: record.projectID,
-                    title: record.title,
-                    workingDirectory: record.workingDirectory,
-                    messageCount: record.messageCount,
-                    modifiedAt: record.modifiedAt,
-                    displayName: record.displayName,
-                    parentSession: record.parentSession,
-                    branchCount: record.branchCount,
-                    labelCount: record.labelCount,
-                    branchSummaryCount: record.branchSummaryCount,
-                    latestModel: record.latestModel
-                )
-            }
+            sessions: response.sessions.map { sessionSummary(from: $0) }
+        )
+    }
+
+    private static func sessionSummary(from record: SessionRecord) -> PiSessionSummary {
+        PiSessionSummary(
+            id: record.id,
+            filePath: record.filePath,
+            projectID: record.projectID,
+            title: record.title,
+            workingDirectory: record.workingDirectory,
+            messageCount: record.messageCount,
+            modifiedAt: record.modifiedAt,
+            displayName: record.displayName,
+            parentSession: record.parentSession,
+            branchCount: record.branchCount,
+            labelCount: record.labelCount,
+            branchSummaryCount: record.branchSummaryCount,
+            latestModel: record.latestModel
         )
     }
 

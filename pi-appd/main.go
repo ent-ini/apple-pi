@@ -1221,7 +1221,7 @@ func (s *server) streamPiRPCCommand(
 		return nil
 	}
 
-	s.refreshAndBroadcast()
+	s.handleCatalogChange()
 
 	writeNDJSON(w, map[string]any{"type": "output_complete"})
 	if flusher != nil {
@@ -2291,52 +2291,64 @@ func (b *catalogBroker) subscriberCount() int {
 	return len(b.subscribers)
 }
 
-// refreshAndBroadcast forces a fresh catalog rebuild and pushes the result
-// to every SSE subscriber. Safe to call concurrently.
-func (s *server) refreshAndBroadcast() {
-	if err := s.refreshCatalog(true); err != nil {
-		log.Printf("catalog refresh failed: %v", err)
-		return
-	}
-	s.mu.RLock()
-	snapshot := s.snapshot
-	s.mu.RUnlock()
-	s.broker.broadcastSnapshot(snapshot)
-}
-
 // handleCatalogChange diffs the fresh catalog against the previous in-memory
 // snapshot and emits small per-session deltas (`session_updated`,
-// `session_removed`) in addition to a full `snapshot` so subscribers can
-// apply the update without re-rendering the whole sidebar.
+// `session_removed`). A full `snapshot` is only sent when project topology
+// changes or when the catalog was not initialized yet.
 func (s *server) handleCatalogChange() {
-	previousSessions := func() map[string]struct{} {
+	previousSessions, previousProjects, hadCatalog := func() (map[string]sessionRecord, []projectRecord, bool) {
 		s.mu.RLock()
 		defer s.mu.RUnlock()
-		out := make(map[string]struct{}, len(s.sessionsByID))
-		for id := range s.sessionsByID {
-			out[id] = struct{}{}
+		out := make(map[string]sessionRecord, len(s.sessionsByID))
+		for id, record := range s.sessionsByID {
+			out[id] = record
 		}
-		return out
+		projects := append([]projectRecord(nil), s.snapshot.Projects...)
+		return out, projects, !s.lastRefresh.IsZero()
 	}()
 	if err := s.refreshCatalog(true); err != nil {
 		log.Printf("catalog refresh failed: %v", err)
 		return
 	}
-	s.mu.RLock()
-	newSessions := s.sessionsByID
-	s.mu.RUnlock()
-	for id := range newSessions {
-		s.broker.publishSessionUpdated(newSessions[id])
+	newSessions, snapshot := func() (map[string]sessionRecord, catalogResponse) {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		out := make(map[string]sessionRecord, len(s.sessionsByID))
+		for id, record := range s.sessionsByID {
+			out[id] = record
+		}
+		return out, s.snapshot
+	}()
+	if !hadCatalog || !projectsEqual(previousProjects, snapshot.Projects) {
+		s.broker.broadcastSnapshot(snapshot)
+		return
+	}
+	for id, record := range newSessions {
+		if previous, ok := previousSessions[id]; !ok || previous != record {
+			s.broker.publishSessionUpdated(record)
+		}
 	}
 	for id := range previousSessions {
 		if _, ok := newSessions[id]; !ok {
 			s.broker.publishSessionRemoved(id)
 		}
 	}
-	s.mu.RLock()
-	snapshot := s.snapshot
-	s.mu.RUnlock()
-	s.broker.broadcastSnapshot(snapshot)
+}
+
+func projectsEqual(a, b []projectRecord) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].ID != b[i].ID ||
+			a[i].Title != b[i].Title ||
+			a[i].WorkingDirectory != b[i].WorkingDirectory ||
+			a[i].SessionDirectory != b[i].SessionDirectory ||
+			a[i].SessionCount != b[i].SessionCount {
+			return false
+		}
+	}
+	return true
 }
 
 // watchCatalog runs in its own goroutine. It watches the agent sessions
