@@ -957,6 +957,22 @@ private func isolatedDefaults() -> UserDefaults {
     }
 }
 
+@Test func piTurnStreamParserRecognizesAgentEnd() {
+    let raw = #"{"type":"agent_end"}"#
+
+    let event = PiTurnStreamParser.parseLine(raw)
+
+    guard let event else {
+        Issue.record("Expected an agent-end event")
+        return
+    }
+    if case .turnEnd = event {
+        // ok
+    } else {
+        Issue.record("Expected .turnEnd")
+    }
+}
+
 @Test func shortcutPreferencesUseDefaultsAndSwapConflicts() {
     var preferences = AppShortcutPreferences()
 

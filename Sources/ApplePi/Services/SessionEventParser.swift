@@ -33,7 +33,14 @@ enum SessionEventParser {
     /// the first event only and is kept around for the live-tail path,
     /// which appends one event per appended line.
     static func decode(line raw: String, at lineIndex: Int) -> SessionEvent? {
-        decodeAll(line: raw, at: lineIndex).first
+        let events = decodeAll(line: raw, at: lineIndex)
+        if let message = events.first(where: {
+            if case .message = $0 { return true }
+            return false
+        }) {
+            return message
+        }
+        return events.first
     }
 
     /// Decode a single line and return *every* event encoded on it, in
@@ -121,15 +128,17 @@ enum SessionEventParser {
             parentId: parentId
         )
 
-        var events: [SessionEvent] = [.message(message, lineIndex: lineIndex)]
-        if role == .assistant {
-            for block in payload["content"] as? [[String: Any]] ?? [] {
-                if let call = parseToolCallFromContentBlock(block) {
-                    events.append(.toolCall(call, lineIndex: lineIndex))
-                }
-            }
+        guard role == .assistant else {
+            return [.message(message, lineIndex: lineIndex)]
         }
-        return events
+
+        let inlineToolCalls = (payload["content"] as? [[String: Any]] ?? []).compactMap(parseToolCallFromContentBlock)
+        guard !inlineToolCalls.isEmpty else {
+            return [.message(message, lineIndex: lineIndex)]
+        }
+
+        return inlineToolCalls.map { .toolCall($0, lineIndex: lineIndex) }
+            + [.message(message, lineIndex: lineIndex)]
     }
 
     /// Backwards-compatible wrapper that returns only the chat message for

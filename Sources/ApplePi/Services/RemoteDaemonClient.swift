@@ -113,7 +113,7 @@ struct RemoteDaemonClient {
             tokenOverride: tokenOverride
         )
         return SessionEventsPage(
-            events: response.events.compactMap { SessionEventParser.decode(line: $0.raw, at: $0.line) },
+            events: response.events.flatMap { SessionEventParser.decodeAll(line: $0.raw, at: $0.line) },
             firstLine: response.page?.firstLine,
             lastLine: response.page?.lastLine,
             hasMoreBefore: response.page?.hasMoreBefore ?? false,
@@ -436,7 +436,7 @@ struct RemoteDaemonClient {
                 case .streamError(let message):
                     throw RemoteDaemonError.requestFailed(status: 0, body: message)
                 case .turnEnd:
-                    return
+                    continue
                 case .sessionBound, .sessionHeader, .sessionEvents:
                     break
                 }

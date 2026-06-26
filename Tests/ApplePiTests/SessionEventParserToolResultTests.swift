@@ -99,12 +99,11 @@ struct SessionEventParserToolResultTests {
     }
 
     @Test
-    func assistantMessageWithInlineToolCallBlockEmitsCallAfterMessage() {
+    func assistantMessageWithInlineToolCallBlockEmitsCallBeforeMessage() {
         // The actual wire format puts tool calls inside the assistant
-        // content array. We should emit one .message event followed by
-        // one .toolCall event for the same line so the chat view can
-        // show "model decided to call X" without losing the message
-        // bubble itself.
+        // content array. The UI must render tool rows before the final
+        // assistant bubble, otherwise a completed answer can appear
+        // above tools that were actually used to produce it.
         let raw = #"""
         {"type":"message","id":"m1","message":{"role":"assistant","content":[{"type":"text","text":"Let me look"},{"type":"toolCall","id":"call-1","name":"read_file","arguments":{"path":"/tmp/a.txt"}}]}}
         """#
@@ -112,12 +111,12 @@ struct SessionEventParserToolResultTests {
         let events = SessionEventParser.parse(lines: [raw])
 
         #expect(events.count == 2)
-        guard case .message(let message, let messageIndex) = events[0] else {
-            Issue.record("Expected .message at index 0, got \(events[0])")
+        guard case .toolCall(let call, let callIndex) = events[0] else {
+            Issue.record("Expected .toolCall at index 0, got \(events[0])")
             return
         }
-        guard case .toolCall(let call, let callIndex) = events[1] else {
-            Issue.record("Expected .toolCall at index 1, got \(events[1])")
+        guard case .message(let message, let messageIndex) = events[1] else {
+            Issue.record("Expected .message at index 1, got \(events[1])")
             return
         }
         #expect(message.role == .assistant)
@@ -143,15 +142,15 @@ struct SessionEventParserToolResultTests {
 
         #expect(events.count == 3)
         #expect({
-            if case .message = events[0] { return true }
+            if case .toolCall(let a, _) = events[0] { return a.id == "call-1" }
             return false
         }())
         #expect({
-            if case .toolCall(let a, _) = events[1] { return a.id == "call-1" }
+            if case .toolCall(let b, _) = events[1] { return b.id == "call-2" }
             return false
         }())
         #expect({
-            if case .toolCall(let b, _) = events[2] { return b.id == "call-2" }
+            if case .message = events[2] { return true }
             return false
         }())
     }
@@ -191,11 +190,11 @@ struct SessionEventParserToolResultTests {
 
         #expect(events.count == 4)
         #expect({
-            if case .message(let m, _) = events[0] { return m.id == "a1" }
+            if case .toolCall(let c, _) = events[0] { return c.id == "call-1" }
             return false
         }())
         #expect({
-            if case .toolCall(let c, _) = events[1] { return c.id == "call-1" }
+            if case .message(let m, _) = events[1] { return m.id == "a1" }
             return false
         }())
         #expect({
@@ -321,11 +320,11 @@ struct SessionEventParserToolResultTests {
         #expect(events.count == 2)
         #expect(events.allSatisfy { $0.lineIndex == 7 })
         #expect({
-            if case .message = events[0] { return true }
+            if case .toolCall(let c, _) = events[0] { return c.id == "c1" }
             return false
         }())
         #expect({
-            if case .toolCall(let c, _) = events[1] { return c.id == "c1" }
+            if case .message = events[1] { return true }
             return false
         }())
     }
