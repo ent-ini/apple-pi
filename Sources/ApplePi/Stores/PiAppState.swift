@@ -1573,7 +1573,8 @@ final class PiAppState: ObservableObject {
                 return
             }
             session.appendPersistedEvents(delta)
-            session.updateRuntimeState(runtime)
+            let sessionKey = runtimeSessionKey(for: session)
+            session.updateRuntimeState(runtimeApplyingPendingThinkingLevel(runtime, sessionKey: sessionKey))
             if session.availableModels.isEmpty {
                 Task { [weak self, weak session] in
                     guard let self, let session else { return }
