@@ -45,8 +45,8 @@ struct RuntimePayload: Decodable {
     let sessionFile: String?
     let model: RuntimeModelPayload?
     let thinkingLevel: String?
-    let tokens: RuntimeTokenTotals?
-    let contextUsage: RuntimeContextUsage?
+    let tokens: RuntimePayloadTokenTotals?
+    let contextUsage: RuntimePayloadContextUsage?
 
     var runtimeState: SessionRuntimeState {
         SessionRuntimeState(
@@ -81,7 +81,7 @@ struct RuntimeModelPayload: Decodable {
     let contextWindow: Int?
 }
 
-struct RuntimeTokenTotals: Decodable {
+struct RuntimePayloadTokenTotals: Decodable {
     let input: Int
     let output: Int
     let cacheRead: Int
@@ -89,7 +89,7 @@ struct RuntimeTokenTotals: Decodable {
     let total: Int
 }
 
-struct RuntimeContextUsage: Decodable {
+struct RuntimePayloadContextUsage: Decodable {
     let tokens: Int?
     let contextWindow: Int?
     let percent: Double?
