@@ -652,8 +652,13 @@ func (s *server) handleSessionEvents(w http.ResponseWriter, r *http.Request, rec
 			start = len(lines)
 		}
 		end = len(lines)
+		if limit > 0 && start+limit < end {
+			end = start + limit
+			hasMoreAfter = true
+		} else {
+			hasMoreAfter = false
+		}
 		hasMoreBefore = start > 0
-		hasMoreAfter = false
 	} else if limit > 0 && limit < len(lines) {
 		start = len(lines) - limit
 		hasMoreBefore = start > 0
@@ -1003,6 +1008,7 @@ func (s *server) streamPiRPCCommand(
 		<-stderrDone
 		return nil
 	}
+	_ = stdin.Close()
 
 	reader := bufio.NewReader(stdout)
 	for {
@@ -1027,9 +1033,6 @@ func (s *server) streamPiRPCCommand(
 			if flusher != nil {
 				flusher.Flush()
 			}
-			if isAgentEndLine(rawLine) {
-				break
-			}
 		}
 		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {
@@ -1043,7 +1046,6 @@ func (s *server) streamPiRPCCommand(
 		}
 	}
 
-	_ = stdin.Close()
 	waitErr := cmd.Wait()
 	stderrText := <-stderrDone
 	if waitErr != nil {
@@ -1058,12 +1060,12 @@ func (s *server) streamPiRPCCommand(
 		return nil
 	}
 
+	s.refreshAndBroadcast()
+
 	writeNDJSON(w, map[string]any{"type": "output_complete"})
 	if flusher != nil {
 		flusher.Flush()
 	}
-
-	s.refreshAndBroadcast()
 	return nil
 }
 
@@ -1291,16 +1293,6 @@ func isRPCResponseLine(raw string) bool {
 		return false
 	}
 	return object.Type == "response"
-}
-
-func isAgentEndLine(raw string) bool {
-	var object struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &object); err != nil {
-		return false
-	}
-	return object.Type == "agent_end"
 }
 
 func writeNDJSON(w http.ResponseWriter, payload any) {
@@ -1561,12 +1553,19 @@ func readAllLines(path string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return splitJSONLLines(data), nil
+}
+
+func splitJSONLLines(data []byte) []string {
 	parts := bytes.Split(data, []byte("\n"))
+	if len(parts) > 0 && len(parts[len(parts)-1]) == 0 {
+		parts = parts[:len(parts)-1]
+	}
 	lines := make([]string, len(parts))
 	for i, part := range parts {
 		lines[i] = string(part)
 	}
-	return lines, nil
+	return lines
 }
 
 func readPreviewLines(path string, limit int) ([]string, error) {
@@ -1608,6 +1607,14 @@ func readPreviewLines(path string, limit int) ([]string, error) {
 }
 
 func readLastLines(path string, limit int) ([]string, int, error) {
+	if limit <= 0 {
+		lines, err := readAllLines(path)
+		if err != nil {
+			return nil, 0, err
+		}
+		return lines, len(lines), nil
+	}
+
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, 0, err
@@ -1642,13 +1649,9 @@ func readLastLines(path string, limit int) ([]string, int, error) {
 		return nil, 0, err
 	}
 
-	parts := bytes.Split(buffer, []byte("\n"))
-	if limit > 0 && len(parts) > limit {
-		parts = parts[len(parts)-limit:]
-	}
-	lines := make([]string, len(parts))
-	for i, part := range parts {
-		lines[i] = string(part)
+	lines := splitJSONLLines(buffer)
+	if len(lines) > limit {
+		lines = lines[len(lines)-limit:]
 	}
 	return lines, totalLines, nil
 }
