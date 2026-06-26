@@ -589,7 +589,8 @@ final class PiAppState: ObservableObject {
             title: session.title,
             sessionID: session.id,
             sessionPath: session.filePath,
-            eventLoader: eventLoader(for: session)
+            eventLoader: eventLoader(for: session),
+            historyPageLoader: historyPageLoader(for: session)
         )
         refreshSessionRuntime(for: tab)
         refreshAvailableModels(for: tab)
@@ -607,16 +608,39 @@ final class PiAppState: ObservableObject {
         statusMessage = "Fork ready from \(session.title)"
     }
 
-    private func eventLoader(for session: PiSessionSummary) -> (@Sendable () async throws -> [SessionEvent])? {
+    private func eventLoader(for session: PiSessionSummary) -> (@Sendable () async throws -> SessionEventsPage)? {
         remoteEventLoader(sessionID: session.id)
     }
 
-    private func remoteEventLoader(sessionID: String) -> (@Sendable () async throws -> [SessionEvent])? {
+    private func historyPageLoader(for session: PiSessionSummary) -> (@Sendable (_ before: Int, _ limit: Int) async throws -> SessionEventsPage)? {
+        remoteHistoryPageLoader(sessionID: session.id)
+    }
+
+    private func remoteEventLoader(sessionID: String) -> (@Sendable () async throws -> SessionEventsPage)? {
         guard host.usesRemoteDaemonTransport || host.mode == .remoteSSH else { return nil }
         let remoteHost = host
         return {
-            try await RemoteDaemonClient().loadSessionEvents(host: remoteHost, sessionID: sessionID)
+            try await RemoteDaemonClient().loadSessionEventPage(host: remoteHost, sessionID: sessionID)
         }
+    }
+
+    private func remoteHistoryPageLoader(sessionID: String) -> (@Sendable (_ before: Int, _ limit: Int) async throws -> SessionEventsPage)? {
+        guard host.usesRemoteDaemonTransport || host.mode == .remoteSSH else { return nil }
+        let remoteHost = host
+        return { before, limit in
+            try await RemoteDaemonClient().loadSessionEventPage(
+                host: remoteHost,
+                sessionID: sessionID,
+                limit: limit,
+                before: before
+            )
+        }
+    }
+
+    func cancelSend(in session: ChatSession) {
+        guard session.hasActiveSend else { return }
+        statusMessage = "Stopping Pi..."
+        session.cancelSend()
     }
 
     @discardableResult
@@ -627,6 +651,10 @@ final class PiAppState: ObservableObject {
         let taggedPrompt = sourceTaggedAppPrompt(effectivePrompt)
         guard !session.isSending else {
             statusMessage = "Pi is already working on this session."
+            return false
+        }
+        guard !session.isLoading else {
+            statusMessage = "Session is still refreshing."
             return false
         }
 
@@ -840,12 +868,14 @@ final class PiAppState: ObservableObject {
             let previousAliases = sessionAliases(for: session)
             let title = binding.title == "Pi" ? session.title : binding.title
             let eventLoader = binding.sessionID.flatMap { remoteEventLoader(sessionID: $0) }
+            let historyPageLoader = binding.sessionID.flatMap { remoteHistoryPageLoader(sessionID: $0) }
             session.bindToSession(
                 key: binding.key,
                 title: title,
                 sessionID: binding.sessionID,
                 sessionPath: binding.sessionPath,
-                eventLoader: eventLoader
+                eventLoader: eventLoader,
+                historyPageLoader: historyPageLoader
             )
             migrateSessionState(from: previousAliases, to: sessionAliases(for: session))
             upsertSidebarSession(for: session, previousAliases: previousAliases, fallbackWorkingDirectory: binding.workingDirectory)
@@ -861,7 +891,8 @@ final class PiAppState: ObservableObject {
                 session.bindToSession(
                     sessionID: meta.id,
                     sessionPath: session.sessionPath,
-                    eventLoader: session.sessionPath == nil ? remoteEventLoader(sessionID: meta.id) : nil
+                    eventLoader: session.sessionPath == nil ? remoteEventLoader(sessionID: meta.id) : nil,
+                    historyPageLoader: remoteHistoryPageLoader(sessionID: meta.id)
                 )
                 migrateSessionState(from: previousAliases, to: sessionAliases(for: session))
                 upsertSidebarSession(for: session, previousAliases: previousAliases, fallbackWorkingDirectory: meta.workingDirectory)
@@ -873,7 +904,7 @@ final class PiAppState: ObservableObject {
         case .sessionEvents(let events, let isFinal):
             session.applyStreamingEvents(events, isFinal: isFinal)
         case .turnEnd:
-            break
+            session.applyStreamingEvents([], isFinal: true)
         case .streamError(let message):
             statusMessage = message
         }
@@ -1557,10 +1588,10 @@ final class PiAppState: ObservableObject {
         let remoteHost = host
         let selectedTabID = session.id
         do {
-            async let deltaTask = RemoteDaemonClient().loadSessionEvents(
+            async let deltaTask = RemoteDaemonClient().loadSessionEventPage(
                 host: remoteHost,
                 sessionID: sessionID,
-                limit: nil,
+                limit: 200,
                 after: after
             )
             async let runtimeTask = RemoteDaemonClient().loadSessionRuntime(
@@ -1572,7 +1603,13 @@ final class PiAppState: ObservableObject {
                   self.chatWorkspace.selectedTab?.id == selectedTabID else {
                 return
             }
-            session.appendPersistedEvents(delta)
+            if let firstLine = delta.firstLine,
+               !delta.events.isEmpty,
+               firstLine <= after {
+                session.loadFromDisk(force: true)
+                return
+            }
+            session.appendPersistedPage(delta)
             let sessionKey = runtimeSessionKey(for: session)
             session.updateRuntimeState(runtimeApplyingPendingThinkingLevel(runtime, sessionKey: sessionKey))
             if session.availableModels.isEmpty {
@@ -1757,12 +1794,14 @@ final class PiAppState: ObservableObject {
             guard Self.isPersistedTabKey(tab.key) else { continue }
             if isRemote {
                 let loader = tab.sessionID.flatMap { remoteEventLoader(sessionID: $0) }
+                let historyLoader = tab.sessionID.flatMap { remoteHistoryPageLoader(sessionID: $0) }
                 chatWorkspace.openOrSelectTab(
                     key: tab.key,
                     title: tab.title,
                     sessionID: tab.sessionID,
                     sessionPath: nil,
-                    eventLoader: loader
+                    eventLoader: loader,
+                    historyPageLoader: historyLoader
                 )
             } else {
                 // Local: only reopen if the file is still on disk. A

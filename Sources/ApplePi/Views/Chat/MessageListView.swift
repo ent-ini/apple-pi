@@ -17,6 +17,9 @@ struct MessageListView: View {
             ScrollViewReader { scrollProxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
+                        if session.hasEarlierHistory || session.isLoadingEarlierHistory {
+                            historyLoadRow
+                        }
                         ForEach(displayedRows) { row in
                             eventRow(for: row)
                                 .id(row.id)
@@ -35,7 +38,7 @@ struct MessageListView: View {
                                     Color.clear
                                         .preference(
                                             key: BottomAnchorMaxYPreferenceKey.self,
-                                            value: anchorProxy.frame(in: .named(Self.scrollCoordinateSpaceName)).maxY
+                                            value: anchorProxy.frame(in: .global).maxY
                                         )
                                 }
                             }
@@ -46,13 +49,15 @@ struct MessageListView: View {
                 }
                 .coordinateSpace(name: Self.scrollCoordinateSpaceName)
                 .onPreferenceChange(BottomAnchorMaxYPreferenceKey.self) { bottomMaxY in
-                    isAnchoredToBottom = bottomMaxY <= proxy.size.height + 72
-                }
-                .onChange(of: session.events.count) { _, _ in
-                    scrollToBottomIfNeeded(using: scrollProxy)
+                    isAnchoredToBottom = bottomMaxY <= proxy.frame(in: .global).maxY + 72
                 }
                 .onChange(of: session.streamRevision) { _, _ in
                     scrollToBottomIfNeeded(using: scrollProxy)
+                }
+                .onChange(of: session.historyRevision) { _, _ in
+                    if let anchorID = session.consumePendingHistoryAnchorID() {
+                        scrollProxy.scrollTo(anchorID, anchor: .top)
+                    }
                 }
                 .onChange(of: session.isLoading) { _, isLoading in
                     guard !isLoading else { return }
@@ -117,6 +122,29 @@ struct MessageListView: View {
         DisplayedSessionRow.groupingToolResults(in: session.events)
     }
 
+    @ViewBuilder
+    private var historyLoadRow: some View {
+        HStack {
+            Spacer()
+            if session.isLoadingEarlierHistory {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Loading earlier messages…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Button("Load earlier messages") {
+                    session.loadEarlierHistory()
+                }
+                .buttonStyle(.plain)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 4)
+    }
+
     private func scrollToBottomIfNeeded(using scrollProxy: ScrollViewProxy) {
         guard isAnchoredToBottom else { return }
         scrollToBottom(using: scrollProxy, animated: true)
@@ -164,11 +192,11 @@ private enum DisplayedSessionRow: Identifiable {
         switch self {
         case .event(let event):
             return event.id
-        case .toolInteraction(let call, let result, let lineIndex):
+        case .toolInteraction(let call, let result, _):
             if let result {
-                return "toolInteraction:\(call.id):\(result.id):\(lineIndex)"
+                return "toolInteraction:\(call.id):\(result.id)"
             }
-            return "toolInteraction:\(call.id):pending:\(lineIndex)"
+            return "toolInteraction:\(call.id):pending"
         }
     }
 

@@ -26,7 +26,7 @@ struct ChatSessionView: View {
     }
 
     private var canAdjustSessionOptions: Bool {
-        session.sessionID != nil || session.launchRequest != nil
+        (session.sessionID != nil || session.launchRequest != nil) && !session.isSending
     }
 
     var body: some View {
@@ -102,12 +102,22 @@ struct ChatSessionView: View {
                 )
                 .help(audioRecorder.isRecording ? "Stop recording" : "Record voice note")
 
-                composerIconButton(
-                    systemName: "arrow.up",
-                    enabled: canSend,
-                    action: handleSendTapped
-                )
-                .help("Send")
+                if session.isSending {
+                    composerIconButton(
+                        systemName: "stop.fill",
+                        enabled: true,
+                        foreground: .red,
+                        action: handleStopTapped
+                    )
+                    .help("Stop")
+                } else {
+                    composerIconButton(
+                        systemName: "arrow.up",
+                        enabled: canSend,
+                        action: handleSendTapped
+                    )
+                    .help("Send")
+                }
             }
 
             sessionStatusStrip
@@ -315,6 +325,10 @@ struct ChatSessionView: View {
             draftHeight = 30
             draftAttachments = []
         }
+    }
+
+    private func handleStopTapped() {
+        appState.cancelSend(in: session)
     }
 
     private func handleMicrophoneTapped() {

@@ -87,19 +87,23 @@ struct RemoteDaemonClient {
         return Self.catalogSnapshot(from: response)
     }
 
-    func loadSessionEvents(
+    func loadSessionEventPage(
         host: PiHostConfiguration,
         sessionID: String,
         limit: Int? = 120,
         after: Int? = nil,
+        before: Int? = nil,
         tokenOverride: String? = nil
-    ) async throws -> [SessionEvent] {
+    ) async throws -> SessionEventsPage {
         var queryItems: [URLQueryItem] = []
         if let limit {
             queryItems.append(URLQueryItem(name: "limit", value: String(limit)))
         }
         if let after {
             queryItems.append(URLQueryItem(name: "after", value: String(after)))
+        }
+        if let before {
+            queryItems.append(URLQueryItem(name: "before", value: String(before)))
         }
 
         let response: EventPageResponse = try await send(
@@ -108,7 +112,32 @@ struct RemoteDaemonClient {
             queryItems: queryItems,
             tokenOverride: tokenOverride
         )
-        return response.events.compactMap { SessionEventParser.decode(line: $0.raw, at: $0.line) }
+        return SessionEventsPage(
+            events: response.events.compactMap { SessionEventParser.decode(line: $0.raw, at: $0.line) },
+            firstLine: response.page?.firstLine,
+            lastLine: response.page?.lastLine,
+            hasMoreBefore: response.page?.hasMoreBefore ?? false,
+            hasMoreAfter: response.page?.hasMoreAfter ?? false
+        )
+    }
+
+    func loadSessionEvents(
+        host: PiHostConfiguration,
+        sessionID: String,
+        limit: Int? = 120,
+        after: Int? = nil,
+        before: Int? = nil,
+        tokenOverride: String? = nil
+    ) async throws -> [SessionEvent] {
+        let page = try await loadSessionEventPage(
+            host: host,
+            sessionID: sessionID,
+            limit: limit,
+            after: after,
+            before: before,
+            tokenOverride: tokenOverride
+        )
+        return page.events
     }
 
     func loadSessionDefaults(host: PiHostConfiguration, workingDirectory: String?, tokenOverride: String? = nil) async throws -> SessionDefaultsSnapshot {
@@ -657,6 +686,14 @@ private struct SessionRecord: Decodable {
 
 private struct EventPageResponse: Decodable {
     let events: [RawEventRecord]
+    let page: EventPageRecord?
+}
+
+private struct EventPageRecord: Decodable {
+    let firstLine: Int
+    let lastLine: Int
+    let hasMoreBefore: Bool
+    let hasMoreAfter: Bool
 }
 
 private struct RawEventRecord: Decodable {

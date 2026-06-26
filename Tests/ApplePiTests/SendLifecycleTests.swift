@@ -100,6 +100,90 @@ import Testing
     #expect(session.shouldShowPendingAssistantPlaceholder == false)
 }
 
+@MainActor
+@Test func chatSessionInitialRemotePageTracksEarlierHistoryAvailability() async throws {
+    let session = ChatSession(
+        key: "test",
+        title: "Test",
+        eventLoader: {
+            SessionEventsPage(
+                events: [
+                    .message(
+                        Message(id: "m2", role: .assistant, content: [.text("new")], model: nil, timestamp: nil, parentId: nil),
+                        lineIndex: 2
+                    )
+                ],
+                firstLine: 2,
+                lastLine: 2,
+                hasMoreBefore: true,
+                hasMoreAfter: false
+            )
+        }
+    )
+
+    session.loadFromDisk(force: true)
+    try await Task.sleep(for: .milliseconds(50))
+
+    #expect(session.hasEarlierHistory)
+    #expect(session.firstPersistedLineIndex == 2)
+}
+
+@MainActor
+@Test func chatSessionLoadEarlierHistoryPrependsEventsAndExposesAnchor() async throws {
+    let initialPage = SessionEventsPage(
+        events: [
+            .message(
+                Message(id: "m2", role: .assistant, content: [.text("two")], model: nil, timestamp: nil, parentId: nil),
+                lineIndex: 2
+            ),
+            .message(
+                Message(id: "m3", role: .assistant, content: [.text("three")], model: nil, timestamp: nil, parentId: nil),
+                lineIndex: 3
+            )
+        ],
+        firstLine: 2,
+        lastLine: 3,
+        hasMoreBefore: true,
+        hasMoreAfter: false
+    )
+    let olderPage = SessionEventsPage(
+        events: [
+            .message(
+                Message(id: "m0", role: .assistant, content: [.text("zero")], model: nil, timestamp: nil, parentId: nil),
+                lineIndex: 0
+            ),
+            .message(
+                Message(id: "m1", role: .assistant, content: [.text("one")], model: nil, timestamp: nil, parentId: nil),
+                lineIndex: 1
+            )
+        ],
+        firstLine: 0,
+        lastLine: 1,
+        hasMoreBefore: false,
+        hasMoreAfter: true
+    )
+
+    let session = ChatSession(
+        key: "test",
+        title: "Test",
+        eventLoader: { initialPage },
+        historyPageLoader: { before, _ in
+            precondition(before == 2)
+            return olderPage
+        }
+    )
+
+    session.loadFromDisk(force: true)
+    try await Task.sleep(for: .milliseconds(50))
+    session.loadEarlierHistory(limit: 120)
+    try await Task.sleep(for: .milliseconds(50))
+
+    #expect(session.firstPersistedLineIndex == 0)
+    #expect(session.hasEarlierHistory == false)
+    #expect(session.pendingHistoryAnchorID == "m2")
+    #expect(session.consumePendingHistoryAnchorID() == "m2")
+}
+
 // MARK: - ChatSessionStore close/closeAll cancellation
 
 @MainActor

@@ -1,6 +1,24 @@
 import Foundation
 import SwiftUI
 
+struct SessionEventsPage: Sendable {
+    let events: [SessionEvent]
+    let firstLine: Int?
+    let lastLine: Int?
+    let hasMoreBefore: Bool
+    let hasMoreAfter: Bool
+
+    static func fromEvents(_ events: [SessionEvent]) -> SessionEventsPage {
+        SessionEventsPage(
+            events: events,
+            firstLine: events.first?.lineIndex,
+            lastLine: events.last?.lineIndex,
+            hasMoreBefore: false,
+            hasMoreAfter: false
+        )
+    }
+}
+
 /// One Pi session that the user has open in a tab. The read-only MVP loads
 /// the underlying `.jsonl` file once and exposes the events to the chat
 /// view; live sends add transient user/assistant events while the backing
@@ -16,18 +34,25 @@ final class ChatSession: ObservableObject, Identifiable {
     @Published private(set) var loadError: String?
     @Published private(set) var isSending: Bool = false
     @Published private(set) var streamRevision: Int = 0
+    @Published private(set) var historyRevision: Int = 0
     @Published private(set) var runtimeState: SessionRuntimeState?
     @Published private(set) var availableModels: [PiModelOption] = []
+    @Published private(set) var hasEarlierHistory: Bool = false
+    @Published private(set) var isLoadingEarlierHistory: Bool = false
 
     /// Path to the on-disk jsonl, if this session is backed by a file. For
     /// brand-new sessions the path is assigned once the first turn creates it.
     private(set) var sessionPath: String?
     private(set) var sessionID: String?
     private(set) var launchRequest: PiLaunchRequest?
-    private var eventLoader: (@Sendable () async throws -> [SessionEvent])?
+    private var eventLoader: (@Sendable () async throws -> SessionEventsPage)?
+    private var historyPageLoader: (@Sendable (_ before: Int, _ limit: Int) async throws -> SessionEventsPage)?
     private var hasLoadedOnce = false
     private var lastLoadedModificationDate: Date?
     private var loadTask: Task<Void, Never>?
+    private var sendGeneration: Int = 0
+    private var pendingSendCompletionGeneration: Int?
+    private var pendingHistoryAnchorEventID: String?
     /// The in-flight send task, if any. `PiAppState.sendMessage`
     /// assigns the task it spawns so the store can cancel it when
     /// the tab is closed. The task body clears the reference on
@@ -46,13 +71,22 @@ final class ChatSession: ObservableObject, Identifiable {
         persistedEvents.last?.lineIndex ?? -1
     }
 
+    var firstPersistedLineIndex: Int {
+        persistedEvents.first?.lineIndex ?? -1
+    }
+
+    var pendingHistoryAnchorID: String? {
+        pendingHistoryAnchorEventID
+    }
+
     init(
         key: String,
         title: String,
         sessionID: String? = nil,
         sessionPath: String? = nil,
         launchRequest: PiLaunchRequest? = nil,
-        eventLoader: (@Sendable () async throws -> [SessionEvent])? = nil
+        eventLoader: (@Sendable () async throws -> SessionEventsPage)? = nil,
+        historyPageLoader: (@Sendable (_ before: Int, _ limit: Int) async throws -> SessionEventsPage)? = nil
     ) {
         self.key = key
         self.title = title
@@ -60,6 +94,7 @@ final class ChatSession: ObservableObject, Identifiable {
         self.sessionPath = sessionPath
         self.launchRequest = launchRequest
         self.eventLoader = eventLoader
+        self.historyPageLoader = historyPageLoader
     }
 
     var canSend: Bool {
@@ -101,7 +136,8 @@ final class ChatSession: ObservableObject, Identifiable {
         title: String? = nil,
         sessionID: String?,
         sessionPath: String?,
-        eventLoader: (@Sendable () async throws -> [SessionEvent])?
+        eventLoader: (@Sendable () async throws -> SessionEventsPage)?,
+        historyPageLoader: (@Sendable (_ before: Int, _ limit: Int) async throws -> SessionEventsPage)?
     ) {
         if let key {
             self.key = key
@@ -112,7 +148,11 @@ final class ChatSession: ObservableObject, Identifiable {
         self.sessionID = sessionID
         self.sessionPath = sessionPath
         self.eventLoader = eventLoader
+        self.historyPageLoader = historyPageLoader
         self.launchRequest = nil
+        self.hasEarlierHistory = false
+        self.isLoadingEarlierHistory = false
+        self.pendingHistoryAnchorEventID = nil
     }
 
     func updateLaunchRequest(_ launchRequest: PiLaunchRequest?) {
@@ -129,6 +169,8 @@ final class ChatSession: ObservableObject, Identifiable {
 
     func beginSending(prompt: String, attachments: [ChatAttachment] = []) {
         loadError = nil
+        sendGeneration &+= 1
+        pendingSendCompletionGeneration = nil
         isSending = true
         statusMessage = "Thinking..."
 
@@ -204,7 +246,7 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     func finishSendingAndReload() {
-        isSending = false
+        pendingSendCompletionGeneration = sendGeneration
         statusMessage = "Refreshing session..."
         loadFromDisk(force: true)
     }
@@ -215,6 +257,7 @@ final class ChatSession: ObservableObject, Identifiable {
     /// mid-send). Clears transient UI state so the composer is usable
     /// again.
     func finishSendingCancelled() {
+        pendingSendCompletionGeneration = nil
         isSending = false
         statusMessage = ""
         transientUserEvent = nil
@@ -224,6 +267,7 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     func finishSendingWithError(_ message: String) {
+        pendingSendCompletionGeneration = nil
         isSending = false
         loadError = message
         statusMessage = message
@@ -234,12 +278,60 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     func appendPersistedEvents(_ newEvents: [SessionEvent]) {
-        let filtered = newEvents.filter { $0.lineIndex > lastPersistedLineIndex }
-        guard !filtered.isEmpty else { return }
-        persistedEvents.append(contentsOf: filtered)
-        reconcileTransientEvents(with: persistedEvents)
-        rebuildEvents()
-        statusMessage = "\(persistedEvents.count) events"
+        appendPersistedPage(SessionEventsPage.fromEvents(newEvents))
+    }
+
+    func appendPersistedPage(_ page: SessionEventsPage) {
+        let filtered = page.events.filter { $0.lineIndex > lastPersistedLineIndex }
+        if !filtered.isEmpty {
+            persistedEvents.append(contentsOf: filtered)
+            reconcileTransientEvents(with: persistedEvents)
+            rebuildEvents()
+            statusMessage = "\(persistedEvents.count) events"
+        }
+        if page.hasMoreBefore {
+            hasEarlierHistory = true
+        }
+    }
+
+    func loadEarlierHistory(limit: Int = 120) {
+        guard let historyPageLoader,
+              !isLoadingEarlierHistory,
+              !isLoading else { return }
+
+        let before = firstPersistedLineIndex
+        guard before > 0 else {
+            hasEarlierHistory = false
+            return
+        }
+
+        let anchorEventID = persistedEvents.first?.id
+        isLoadingEarlierHistory = true
+        loadError = nil
+
+        Task { [weak self] in
+            do {
+                let page = try await historyPageLoader(before, limit)
+                await MainActor.run {
+                    guard let self else { return }
+                    defer { self.isLoadingEarlierHistory = false }
+                    guard self.firstPersistedLineIndex == before else { return }
+                    self.prependPersistedPage(page, anchorEventID: anchorEventID)
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self else { return }
+                    self.isLoadingEarlierHistory = false
+                    self.loadError = error.localizedDescription
+                    self.statusMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func consumePendingHistoryAnchorID() -> String? {
+        defer { pendingHistoryAnchorEventID = nil }
+        return pendingHistoryAnchorEventID
     }
 
     /// Reload the session from disk or remote API. Safe to call multiple
@@ -251,6 +343,9 @@ final class ChatSession: ObservableObject, Identifiable {
         let eventLoader = self.eventLoader
         let previousLoadedOnce = hasLoadedOnce
         let previousModificationDate = lastLoadedModificationDate
+        let completionGeneration = pendingSendCompletionGeneration
+
+        pendingHistoryAnchorEventID = nil
 
         isLoading = true
         loadError = nil
@@ -270,28 +365,29 @@ final class ChatSession: ObservableObject, Identifiable {
             switch outcome {
             case .skipped:
                 isLoading = false
-                isSending = false
+                completeSendReloadIfNeeded(for: completionGeneration)
                 loadTask = nil
             case .notBackedByFile:
                 statusMessage = "Session is not backed by a file yet."
                 isLoading = false
-                isSending = false
+                completeSendReloadIfNeeded(for: completionGeneration)
                 loadTask = nil
-            case .loaded(let parsed, let modificationDate):
-                persistedEvents = parsed
-                reconcileTransientEvents(with: parsed)
+            case .loaded(let page, let modificationDate):
+                persistedEvents = page.events
+                hasEarlierHistory = page.hasMoreBefore
+                reconcileTransientEvents(with: page.events)
                 rebuildEvents()
-                statusMessage = parsed.isEmpty ? "Session is empty." : "\(parsed.count) events"
+                statusMessage = page.events.isEmpty ? "Session is empty." : "\(page.events.count) events"
                 hasLoadedOnce = true
                 lastLoadedModificationDate = modificationDate
                 isLoading = false
-                isSending = false
+                completeSendReloadIfNeeded(for: completionGeneration)
                 loadTask = nil
             case .failed(let message):
                 loadError = message
                 statusMessage = "Failed to read session: \(message)"
                 isLoading = false
-                isSending = false
+                completeSendReloadIfNeeded(for: completionGeneration)
                 loadTask = nil
             }
         }
@@ -310,7 +406,8 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     private var visibleTransientEvents: [SessionEvent] {
-        ([transientUserEvent].compactMap { $0 } + transientStreamEvents + [transientAssistantEvent].compactMap { $0 })
+        let assistantEvents = isSending ? [] : [transientAssistantEvent].compactMap { $0 }
+        return ([transientUserEvent].compactMap { $0 } + transientStreamEvents + assistantEvents)
             .filter { shouldDisplayTransientEvent($0) }
     }
 
@@ -334,6 +431,23 @@ final class ChatSession: ObservableObject, Identifiable {
         case .meta, .other:
             return true
         }
+    }
+
+    private func prependPersistedPage(_ page: SessionEventsPage, anchorEventID: String?) {
+        let filtered = page.events.filter { candidate in
+            !persistedEvents.contains { $0.id == candidate.id || $0.lineIndex == candidate.lineIndex }
+        }
+        guard !filtered.isEmpty else {
+            hasEarlierHistory = page.hasMoreBefore
+            return
+        }
+        pendingHistoryAnchorEventID = anchorEventID
+        persistedEvents.insert(contentsOf: filtered, at: 0)
+        hasEarlierHistory = page.hasMoreBefore
+        reconcileTransientEvents(with: persistedEvents)
+        rebuildEvents()
+        historyRevision &+= 1
+        statusMessage = "\(persistedEvents.count) events"
     }
 
     private func reconcileTransientEvents(with persisted: [SessionEvent]) {
@@ -366,6 +480,17 @@ final class ChatSession: ObservableObject, Identifiable {
                 return false
             }
         }
+    }
+
+    private func completeSendReloadIfNeeded(for generation: Int?) {
+        guard let generation,
+              pendingSendCompletionGeneration == generation,
+              sendGeneration == generation else {
+            return
+        }
+        pendingSendCompletionGeneration = nil
+        isSending = false
+        rebuildEvents()
     }
 
     private func upsertTransientStreamEvent(_ event: SessionEvent, into events: inout [SessionEvent]) {
@@ -512,7 +637,8 @@ final class ChatSessionStore: ObservableObject {
         sessionID: String? = nil,
         sessionPath: String? = nil,
         launchRequest: PiLaunchRequest? = nil,
-        eventLoader: (@Sendable () async throws -> [SessionEvent])? = nil
+        eventLoader: (@Sendable () async throws -> SessionEventsPage)? = nil,
+        historyPageLoader: (@Sendable (_ before: Int, _ limit: Int) async throws -> SessionEventsPage)? = nil
     ) -> ChatSession {
         if let existing = tabs.first(where: { $0.key == key }) {
             existing.bindToSession(
@@ -520,12 +646,13 @@ final class ChatSessionStore: ObservableObject {
                 title: title,
                 sessionID: sessionID,
                 sessionPath: sessionPath,
-                eventLoader: eventLoader
+                eventLoader: eventLoader,
+                historyPageLoader: historyPageLoader
             )
             existing.updateLaunchRequest(launchRequest)
             select(existing)
-            if existing.events.isEmpty, (sessionPath != nil || eventLoader != nil) {
-                existing.loadFromDisk()
+            if !existing.isSending, (sessionPath != nil || eventLoader != nil) {
+                existing.loadFromDisk(force: true)
             }
             return existing
         }
@@ -539,7 +666,8 @@ final class ChatSessionStore: ObservableObject {
             sessionID: sessionID,
             sessionPath: sessionPath,
             launchRequest: launchRequest,
-            eventLoader: eventLoader
+            eventLoader: eventLoader,
+            historyPageLoader: historyPageLoader
         )
         tabs.append(session)
         select(session)
@@ -558,7 +686,8 @@ final class ChatSessionStore: ObservableObject {
         sessionID: String? = nil,
         sessionPath: String?,
         launchRequest: PiLaunchRequest? = nil,
-        eventLoader: (@Sendable () async throws -> [SessionEvent])? = nil
+        eventLoader: (@Sendable () async throws -> SessionEventsPage)? = nil,
+        historyPageLoader: (@Sendable (_ before: Int, _ limit: Int) async throws -> SessionEventsPage)? = nil
     ) -> ChatSession {
         openTab(
             key: key,
@@ -566,7 +695,8 @@ final class ChatSessionStore: ObservableObject {
             sessionID: sessionID,
             sessionPath: sessionPath,
             launchRequest: launchRequest,
-            eventLoader: eventLoader
+            eventLoader: eventLoader,
+            historyPageLoader: historyPageLoader
         )
     }
 
@@ -636,24 +766,24 @@ final class ChatSessionStore: ObservableObject {
 private enum SessionLoadOutcome: Sendable {
     case skipped
     case notBackedByFile
-    case loaded([SessionEvent], modificationDate: Date?)
+    case loaded(SessionEventsPage, modificationDate: Date?)
     case failed(String)
 }
 
 private enum SessionLoadWorker {
     static func load(
         sessionPath: String?,
-        eventLoader: (@Sendable () async throws -> [SessionEvent])?,
+        eventLoader: (@Sendable () async throws -> SessionEventsPage)?,
         force: Bool,
         previousLoadedOnce: Bool,
         previousModificationDate: Date?
     ) async -> SessionLoadOutcome {
         do {
-            let parsed: [SessionEvent]
+            let page: SessionEventsPage
             let modificationDate: Date?
 
             if let eventLoader {
-                parsed = try await eventLoader()
+                page = try await eventLoader()
                 modificationDate = nil
             } else if let sessionPath {
                 let fileURL = URL(fileURLWithPath: sessionPath)
@@ -662,12 +792,12 @@ private enum SessionLoadWorker {
                 if !force && previousLoadedOnce && modificationDate == previousModificationDate {
                     return .skipped
                 }
-                parsed = try SessionEventParser.parse(fileURL: fileURL)
+                page = SessionEventsPage.fromEvents(try SessionEventParser.parse(fileURL: fileURL))
             } else {
                 return .notBackedByFile
             }
 
-            return .loaded(parsed, modificationDate: modificationDate)
+            return .loaded(page, modificationDate: modificationDate)
         } catch {
             return .failed(error.localizedDescription)
         }
