@@ -10,6 +10,8 @@ struct MessageListView: View {
     @ObservedObject var session: ChatSession
 
     @State private var isAnchoredToBottom = true
+    @State private var stickyAutoScrollUntil: Date?
+    @State private var visibilityFrames: [String: CGRect] = [:]
     @State private var hasCompletedInitialPlacement = false
 
     var body: some View {
@@ -48,8 +50,21 @@ struct MessageListView: View {
                     .frame(minHeight: proxy.size.height, alignment: .top)
                 }
                 .coordinateSpace(name: Self.scrollCoordinateSpaceName)
+                .environment(\.chatEnsureVisible) { targetID in
+                    ensureVisible(targetID, using: scrollProxy, viewportHeight: proxy.size.height)
+                }
                 .onPreferenceChange(BottomAnchorMaxYPreferenceKey.self) { bottomMaxY in
-                    isAnchoredToBottom = bottomMaxY <= proxy.size.height + Self.bottomStickinessBuffer
+                    updateBottomAnchoring(
+                        bottomMaxY: bottomMaxY,
+                        viewportHeight: proxy.size.height,
+                        scrollProxy: scrollProxy
+                    )
+                }
+                .onPreferenceChange(ChatVisibilityTargetPreferenceKey.self) { frames in
+                    visibilityFrames = frames
+                    if isStickyAutoScrollActive {
+                        scrollToBottomSettled(using: scrollProxy, animated: false, completesInitialPlacement: false)
+                    }
                 }
                 .onChange(of: session.streamRevision) { _, _ in
                     scrollToBottomIfNeeded(using: scrollProxy)
@@ -88,7 +103,12 @@ struct MessageListView: View {
             case .message(let message, _):
                 MessageBubble(message: message)
             case .toolCall(let call, _):
-                ToolInteractionRow(name: call.name, arguments: call.arguments, result: nil)
+                ToolInteractionRow(
+                    name: call.name,
+                    arguments: call.arguments,
+                    result: nil,
+                    visibilityID: "visibility:\(event.id)"
+                )
             case .toolResult(let result, _):
                 ToolEventRow(
                     kind: .toolResult(
@@ -96,7 +116,8 @@ struct MessageListView: View {
                         callId: result.callId,
                         output: result.output,
                         isError: result.isError
-                    )
+                    ),
+                    visibilityID: "visibility:\(event.id)"
                 )
             case .meta(let meta, _):
                 ToolEventRow(
@@ -104,23 +125,37 @@ struct MessageListView: View {
                         displayName: meta.displayName,
                         workingDirectory: meta.workingDirectory,
                         parentSession: meta.parentSession
-                    )
+                    ),
+                    visibilityID: "visibility:\(event.id)"
                 )
             case .other(let type, _):
-                ToolEventRow(kind: .other(type: type))
+                ToolEventRow(kind: .other(type: type), visibilityID: "visibility:\(event.id)")
             }
         case .toolInteraction(let call, let result, _):
-            ToolInteractionRow(name: call.name, arguments: call.arguments, result: result)
+            ToolInteractionRow(
+                name: call.name,
+                arguments: call.arguments,
+                result: result,
+                visibilityID: "visibility:\(row.id)"
+            )
         }
     }
 
     private static let bottomAnchorID = "chat.list.bottom"
     private static let pendingAssistantBubbleID = "chat.list.pending.assistant"
-    private static let scrollCoordinateSpaceName = "chat.list.scroll"
+    static let scrollCoordinateSpaceName = "chat.list.scroll"
     private static let bottomStickinessBuffer: CGFloat = 96
+    private static let stickyAutoScrollDuration: TimeInterval = 0.75
+    private static let scrollSettleDelays: [TimeInterval] = [0, 0.016, 0.05, 0.12, 0.25, 0.45]
 
     private var displayedRows: [DisplayedSessionRow] {
         DisplayedSessionRow.groupingToolResults(in: session.events.filter(\.isVisibleInTranscript))
+    }
+
+    private var transcriptEndsWithUserMessage: Bool {
+        guard let last = session.events.filter(\.isVisibleInTranscript).last,
+              case .message(let message, _) = last else { return false }
+        return message.role == .user
     }
 
     @ViewBuilder
@@ -146,8 +181,30 @@ struct MessageListView: View {
         .padding(.vertical, 4)
     }
 
+    private var isStickyAutoScrollActive: Bool {
+        guard let stickyAutoScrollUntil else { return false }
+        return stickyAutoScrollUntil > Date()
+    }
+
+    private func updateBottomAnchoring(
+        bottomMaxY: CGFloat,
+        viewportHeight: CGFloat,
+        scrollProxy: ScrollViewProxy
+    ) {
+        let distanceToBottom = bottomMaxY - viewportHeight
+        if isStickyAutoScrollActive {
+            isAnchoredToBottom = true
+            if distanceToBottom > 1 {
+                scrollToBottomSettled(using: scrollProxy, animated: false, completesInitialPlacement: false)
+            }
+            return
+        }
+        isAnchoredToBottom = distanceToBottom <= Self.bottomStickinessBuffer
+    }
+
     private func scrollToBottomIfNeeded(using scrollProxy: ScrollViewProxy) {
-        guard isAnchoredToBottom else { return }
+        guard isAnchoredToBottom || isStickyAutoScrollActive || transcriptEndsWithUserMessage else { return }
+        stickyAutoScrollUntil = Date().addingTimeInterval(Self.stickyAutoScrollDuration)
         scrollToBottomSettled(using: scrollProxy, animated: true, completesInitialPlacement: false)
     }
 
@@ -162,14 +219,26 @@ struct MessageListView: View {
     }
 
     private func scrollToBottomSettled(using scrollProxy: ScrollViewProxy, animated: Bool, completesInitialPlacement: Bool) {
-        scrollToBottom(using: scrollProxy, animated: animated)
-        DispatchQueue.main.async {
-            scrollToBottom(using: scrollProxy, animated: false)
+        for (index, delay) in Self.scrollSettleDelays.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                scrollToBottom(using: scrollProxy, animated: animated && index == 0)
+                if completesInitialPlacement, index == Self.scrollSettleDelays.count - 1 {
+                    hasCompletedInitialPlacement = true
+                }
+            }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            scrollToBottom(using: scrollProxy, animated: false)
-            if completesInitialPlacement {
-                hasCompletedInitialPlacement = true
+    }
+
+    private func ensureVisible(_ targetID: String, using scrollProxy: ScrollViewProxy, viewportHeight: CGFloat) {
+        stickyAutoScrollUntil = nil
+        for delay in [0.20, 0.36] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                let frame = visibilityFrames[targetID]
+                let contentHeight = frame?.height ?? 0
+                let anchor: UnitPoint = contentHeight > max(120, viewportHeight - 24) ? .top : .bottom
+                withAnimation(.easeOut(duration: 0.16)) {
+                    scrollProxy.scrollTo(targetID, anchor: anchor)
+                }
             }
         }
     }
@@ -182,6 +251,40 @@ private struct BottomAnchorMaxYPreferenceKey: PreferenceKey {
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
+    }
+}
+
+struct ChatVisibilityTargetPreferenceKey: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+private struct ChatEnsureVisibleEnvironmentKey: EnvironmentKey {
+    static let defaultValue: (String) -> Void = { _ in }
+}
+
+extension EnvironmentValues {
+    var chatEnsureVisible: (String) -> Void {
+        get { self[ChatEnsureVisibleEnvironmentKey.self] }
+        set { self[ChatEnsureVisibleEnvironmentKey.self] = newValue }
+    }
+}
+
+extension View {
+    func chatVisibilityTarget(_ id: String) -> some View {
+        self
+            .id(id)
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: ChatVisibilityTargetPreferenceKey.self,
+                        value: [id: proxy.frame(in: .named(MessageListView.scrollCoordinateSpaceName))]
+                    )
+                }
+            }
     }
 }
 
@@ -241,9 +344,11 @@ private enum DisplayedSessionRow: Identifiable {
 ///     Call      {"command":"crontab -l"}
 ///     Response  Current crontab: ...
 struct ToolInteractionRow: View {
+    @Environment(\.chatEnsureVisible) private var ensureVisible
     let name: String
     let arguments: String
     let result: ToolResult?
+    let visibilityID: String
 
     @State private var isExpanded = false
 
@@ -251,8 +356,12 @@ struct ToolInteractionRow: View {
         HStack(alignment: .top, spacing: 0) {
             VStack(alignment: .leading, spacing: 8) {
                 Button {
+                    let willExpand = !isExpanded
                     withAnimation(.snappy(duration: 0.18)) {
                         isExpanded.toggle()
+                    }
+                    if willExpand {
+                        ensureVisible(visibilityID)
                     }
                 } label: {
                     HStack(spacing: 6) {
@@ -292,6 +401,7 @@ struct ToolInteractionRow: View {
             )
             Spacer(minLength: 60)
         }
+        .chatVisibilityTarget(visibilityID)
     }
 
     @ViewBuilder
@@ -390,7 +500,9 @@ struct ToolEventRow: View {
 
     }
 
+    @Environment(\.chatEnsureVisible) private var ensureVisible
     let kind: Kind
+    let visibilityID: String
 
     @State private var isExpanded = false
 
@@ -407,8 +519,12 @@ struct ToolEventRow: View {
         VStack(alignment: .leading, spacing: 6) {
             Button {
                 guard kind.expandedBody != nil else { return }
+                let willExpand = !isExpanded
                 withAnimation(.snappy(duration: 0.18)) {
                     isExpanded.toggle()
+                }
+                if willExpand {
+                    ensureVisible(visibilityID)
                 }
             } label: {
                 HStack(spacing: 6) {
@@ -454,5 +570,6 @@ struct ToolEventRow: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(Color.primary.opacity(0.04))
         )
+        .chatVisibilityTarget(visibilityID)
     }
 }

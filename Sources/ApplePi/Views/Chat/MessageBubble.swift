@@ -255,7 +255,10 @@ struct MessageBubble: View {
     private func bubbleColumn(alignment: HorizontalAlignment) -> some View {
         VStack(alignment: alignment, spacing: 6) {
             if !thinkingText.isEmpty {
-                ThinkingSummaryView(thinkingText: thinkingText)
+                ThinkingSummaryView(
+                    thinkingText: thinkingText,
+                    visibilityID: "visibility:thinking:\(message.id)"
+                )
             }
             if let presentation = userPresentation {
                 bubbleSurface(
