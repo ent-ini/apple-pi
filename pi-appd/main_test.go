@@ -1,9 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -90,6 +96,165 @@ func TestReadLastLinesTrimsTrailingEmptyLineAndPreservesLineNumbers(t *testing.T
 	}
 	if !reflect.DeepEqual(all, []string{"a", "b", "c"}) {
 		t.Fatalf("all lines = %#v", all)
+	}
+}
+
+func TestBearerTokenMatches(t *testing.T) {
+	if !bearerTokenMatches("Bearer secret-token", "secret-token") {
+		t.Fatal("valid bearer token did not match")
+	}
+	for _, header := range []string{"", "secret-token", "Bearer wrong", "Basic secret-token"} {
+		if bearerTokenMatches(header, "secret-token") {
+			t.Fatalf("header %q unexpectedly matched", header)
+		}
+	}
+}
+
+func TestHandleFilesRejectsPathsOutsideBrowsableRoots(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	agentDir := filepath.Join(home, ".pi", "agent")
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(agentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
+	server := &server{agentDir: agentDir}
+	request := httptest.NewRequest(http.MethodGet, "/files?path="+outside, nil)
+	response := httptest.NewRecorder()
+
+	server.handleFiles(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusForbidden, response.Body.String())
+	}
+}
+
+func TestHandleFilesRejectsSymlinkEscape(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	agentDir := filepath.Join(home, ".pi", "agent")
+	outside := filepath.Join(base, "outside")
+	if err := os.MkdirAll(agentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	symlinkPath := filepath.Join(home, "escape")
+	if err := os.Symlink(outside, symlinkPath); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	server := &server{agentDir: agentDir}
+	request := httptest.NewRequest(http.MethodGet, "/files?path="+symlinkPath, nil)
+	response := httptest.NewRecorder()
+
+	server.handleFiles(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusForbidden, response.Body.String())
+	}
+}
+
+func TestHandleFilesOmitsParentOutsideBrowsableRoots(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	agentDir := filepath.Join(home, ".pi", "agent")
+	if err := os.MkdirAll(agentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
+	server := &server{agentDir: agentDir}
+	request := httptest.NewRequest(http.MethodGet, "/files?path="+home, nil)
+	response := httptest.NewRecorder()
+
+	server.handleFiles(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var payload fileListResponse
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Parent != "" {
+		t.Fatalf("parent = %q, want empty", payload.Parent)
+	}
+}
+
+func TestHandleUploadsUsesPrivatePermissions(t *testing.T) {
+	agentDir := t.TempDir()
+	server := &server{agentDir: agentDir}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "notes.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("secret")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/uploads", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	response := httptest.NewRecorder()
+
+	server.handleUploads(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusOK, response.Body.String())
+	}
+	uploadDir := filepath.Join(agentDir, "uploads")
+	if info, err := os.Stat(uploadDir); err != nil || info.Mode().Perm() != 0o700 {
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Fatalf("upload dir mode = %o, want 700", info.Mode().Perm())
+	}
+	var payload uploadResponse
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(payload.Path, uploadDir+string(os.PathSeparator)) {
+		t.Fatalf("upload path %q outside %q", payload.Path, uploadDir)
+	}
+	if info, err := os.Stat(payload.Path); err != nil || info.Mode().Perm() != 0o600 {
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Fatalf("upload file mode = %o, want 600", info.Mode().Perm())
+	}
+}
+
+func TestResolveAttachmentPathsRejectsSymlinkEscape(t *testing.T) {
+	agentDir := t.TempDir()
+	uploadDir := filepath.Join(agentDir, "uploads")
+	outside := filepath.Join(agentDir, "outside")
+	if err := os.MkdirAll(uploadDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	secretPath := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(secretPath, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	linkPath := filepath.Join(uploadDir, "link.txt")
+	if err := os.Symlink(secretPath, linkPath); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	_, err := (&server{agentDir: agentDir}).resolveAttachmentPaths([]attachmentReference{{Path: linkPath}})
+	if err == nil || !strings.Contains(err.Error(), "outside uploads") {
+		t.Fatalf("err = %v, want outside uploads error", err)
 	}
 }
 

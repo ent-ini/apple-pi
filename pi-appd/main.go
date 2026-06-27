@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -365,8 +366,7 @@ func main() {
 func (s *server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.token != "" {
-			auth := strings.TrimSpace(r.Header.Get("Authorization"))
-			if auth != "Bearer "+s.token {
+			if !bearerTokenMatches(r.Header.Get("Authorization"), s.token) {
 				writeError(w, http.StatusUnauthorized, "unauthorized")
 				return
 			}
@@ -380,8 +380,17 @@ func (s *server) loggingMiddleware(next http.Handler) http.Handler {
 		started := time.Now()
 		writer := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
 		next.ServeHTTP(writer, r)
-		log.Printf("%s %s -> %d (%s) from %s", r.Method, r.URL.RequestURI(), writer.statusCode, time.Since(started).Round(time.Millisecond), r.RemoteAddr)
+		log.Printf("%s %s -> %d (%s) from %s", r.Method, r.URL.Path, writer.statusCode, time.Since(started).Round(time.Millisecond), r.RemoteAddr)
 	})
+}
+
+func bearerTokenMatches(header string, token string) bool {
+	header = strings.TrimSpace(header)
+	if token == "" || !strings.HasPrefix(header, "Bearer ") {
+		return false
+	}
+	candidate := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
+	return subtle.ConstantTimeCompare([]byte(candidate), []byte(token)) == 1
 }
 
 func (s *server) handleHealthz(w http.ResponseWriter, r *http.Request) {
@@ -1059,14 +1068,22 @@ func (s *server) handleSessionSteer(w http.ResponseWriter, r *http.Request, sess
 }
 
 func (s *server) handleFiles(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
 	requested := strings.TrimSpace(r.URL.Query().Get("path"))
 	if requested == "" {
 		requested = os.Getenv("HOME")
 		if strings.TrimSpace(requested) == "" {
-			requested = "."
+			requested = s.agentDir
 		}
 	}
-	path := expandHome(requested)
+	path, err := s.resolveBrowsablePath(requested)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -1095,10 +1112,76 @@ func (s *server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name)
 	})
 	parent := filepath.Dir(path)
-	if parent == path {
+	if parent == path || !s.isBrowsablePath(parent) {
 		parent = ""
 	}
 	writeJSON(w, http.StatusOK, fileListResponse{Path: path, Parent: parent, Items: items})
+}
+
+func (s *server) resolveBrowsablePath(requested string) (string, error) {
+	abs, err := filepath.Abs(expandHome(strings.TrimSpace(requested)))
+	if err != nil {
+		return "", errors.New("invalid path")
+	}
+	realPath, err := filepath.EvalSymlinks(filepath.Clean(abs))
+	if err != nil {
+		return "", errors.New("path does not exist")
+	}
+	realPath = filepath.Clean(realPath)
+	if !s.isBrowsablePath(realPath) {
+		return "", errors.New("path is outside allowed roots")
+	}
+	return realPath, nil
+}
+
+func (s *server) isBrowsablePath(path string) bool {
+	path = filepath.Clean(path)
+	for _, root := range s.browsableRoots() {
+		if pathWithinRoot(path, root) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *server) browsableRoots() []string {
+	candidates := []string{os.Getenv("HOME"), s.agentDir}
+	roots := make([]string, 0, len(candidates))
+	seen := map[string]struct{}{}
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		abs, err := filepath.Abs(expandHome(candidate))
+		if err != nil {
+			continue
+		}
+		realRoot, err := filepath.EvalSymlinks(filepath.Clean(abs))
+		if err != nil {
+			continue
+		}
+		realRoot = filepath.Clean(realRoot)
+		if _, ok := seen[realRoot]; ok {
+			continue
+		}
+		seen[realRoot] = struct{}{}
+		roots = append(roots, realRoot)
+	}
+	return roots
+}
+
+func pathWithinRoot(path string, root string) bool {
+	path = filepath.Clean(path)
+	root = filepath.Clean(root)
+	if path == root {
+		return true
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return false
+	}
+	return true
 }
 
 func (s *server) handleUploads(w http.ResponseWriter, r *http.Request) {
@@ -1118,14 +1201,14 @@ func (s *server) handleUploads(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 
 	uploadDir := filepath.Join(s.agentDir, "uploads")
-	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
+	if err := os.MkdirAll(uploadDir, 0o700); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	fileName := sanitizeUploadName(header.Filename)
 	targetPath := filepath.Join(uploadDir, uniqueUploadName(fileName))
-	targetFile, err := os.Create(targetPath)
+	targetFile, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1209,6 +1292,9 @@ func (s *server) resolveAttachmentPaths(attachments []attachmentReference) ([]at
 		return nil, nil
 	}
 	allowedRoot := filepath.Clean(filepath.Join(s.agentDir, "uploads"))
+	if realRoot, err := filepath.EvalSymlinks(allowedRoot); err == nil {
+		allowedRoot = filepath.Clean(realRoot)
+	}
 	resolved := make([]attachmentReference, 0, len(attachments))
 	for _, attachment := range attachments {
 		pathValue, err := filepath.Abs(expandHome(strings.TrimSpace(attachment.Path)))
@@ -1216,7 +1302,10 @@ func (s *server) resolveAttachmentPaths(attachments []attachmentReference) ([]at
 			return nil, errors.New("invalid attachment path")
 		}
 		pathValue = filepath.Clean(pathValue)
-		if !strings.HasPrefix(pathValue, allowedRoot+string(os.PathSeparator)) && pathValue != allowedRoot {
+		if realPath, err := filepath.EvalSymlinks(pathValue); err == nil {
+			pathValue = filepath.Clean(realPath)
+		}
+		if !pathWithinRoot(pathValue, allowedRoot) {
 			return nil, errors.New("attachment path is outside uploads directory")
 		}
 		if _, err := os.Stat(pathValue); err != nil {
@@ -1383,7 +1472,7 @@ func (s *server) streamPiRPCCommand(
 		_ = run.write(rpcSimpleCommand{ID: "pi-appd-client-disconnect-abort", Type: "abort"})
 	}()
 
-	reader := bufio.NewReader(stdout)
+	reader := bufio.NewReaderSize(stdout, 64*1024)
 	for {
 		line, readErr := reader.ReadBytes('\n')
 		if len(line) > 0 {
