@@ -58,6 +58,18 @@ func TestReadEventRecordsAfterSkipsPartialTrailingLine(t *testing.T) {
 	}
 }
 
+func TestReadAllLinesSkipsPartialTrailingLine(t *testing.T) {
+	path := writeTempSessionFile(t, "{\"type\":\"session\"}\n{\"type\":\"message\"")
+
+	lines, err := readAllLines(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(lines, []string{"{\"type\":\"session\"}"}) {
+		t.Fatalf("lines = %#v", lines)
+	}
+}
+
 func TestReadLastLinesTrimsTrailingEmptyLineAndPreservesLineNumbers(t *testing.T) {
 	path := writeTempSessionFile(t, "a\nb\nc\n")
 

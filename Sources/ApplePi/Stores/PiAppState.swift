@@ -81,6 +81,7 @@ final class PiAppState: ObservableObject {
     private var catalogPollingTask: Task<Void, Never>?
     private var selectedSessionPollingTask: Task<Void, Never>?
     private var selectedSessionStreamTask: Task<Void, Never>?
+    private var isSelectedSessionStreamConnected = false
     private var activityObservers: [NSObjectProtocol] = []
     private var isApplicationActive = true
     private var isCatalogStreamConnected = false
@@ -722,7 +723,8 @@ final class PiAppState: ObservableObject {
                     outcome = await self.runRemoteTurn(
                         session: session,
                         prompt: taggedPrompt,
-                        attachments: attachments
+                        attachments: attachments,
+                        sendGeneration: sendGeneration
                     )
                 } else {
                     outcome = .cancelled
@@ -876,7 +878,8 @@ final class PiAppState: ObservableObject {
     private func runRemoteTurn(
         session: ChatSession?,
         prompt: String,
-        attachments: [ChatAttachment]
+        attachments: [ChatAttachment],
+        sendGeneration: Int
     ) async -> SendOutcome {
         do {
             let daemonAttachments = try await self.uploadAttachmentsIfNeeded(attachments)
@@ -889,7 +892,8 @@ final class PiAppState: ObservableObject {
                     onEvent: { [weak self, weak session] event in
                         guard let self else { return }
                         await MainActor.run {
-                            guard let session else { return }
+                            guard let session,
+                                  session.currentSendGeneration == sendGeneration else { return }
                             self.applyTurnStreamEvent(event, to: session)
                         }
                     }
@@ -903,7 +907,8 @@ final class PiAppState: ObservableObject {
                     onEvent: { [weak self, weak session] event in
                         guard let self else { return }
                         await MainActor.run {
-                            guard let session else { return }
+                            guard let session,
+                                  session.currentSendGeneration == sendGeneration else { return }
                             self.applyTurnStreamEvent(event, to: session)
                         }
                     }
@@ -935,6 +940,7 @@ final class PiAppState: ObservableObject {
                 historyPageLoader: historyPageLoader
             )
             migrateSessionState(from: previousAliases, to: sessionAliases(for: session))
+            chatWorkspace.closeDuplicateTabs(keeping: session, matchingAliases: sessionAliases(for: session))
             upsertSidebarSession(for: session, previousAliases: previousAliases, fallbackWorkingDirectory: binding.workingDirectory)
             // The key changed from `new:<UUID>` to the real file path,
             // so the persisted tabs snapshot is now stale. Save again.
@@ -955,6 +961,7 @@ final class PiAppState: ObservableObject {
                     historyPageLoader: remoteHistoryPageLoader(sessionID: meta.id)
                 )
                 migrateSessionState(from: previousAliases, to: sessionAliases(for: session))
+                chatWorkspace.closeDuplicateTabs(keeping: session, matchingAliases: sessionAliases(for: session))
                 upsertSidebarSession(for: session, previousAliases: previousAliases, fallbackWorkingDirectory: meta.workingDirectory)
                 schedulePersistedChatTabsSave()
                 if !session.isSending {
@@ -1674,6 +1681,7 @@ final class PiAppState: ObservableObject {
     private func stopSelectedSessionEventStream() {
         selectedSessionStreamTask?.cancel()
         selectedSessionStreamTask = nil
+        isSelectedSessionStreamConnected = false
     }
 
     private func runSelectedSessionEventStream(
@@ -1703,6 +1711,7 @@ final class PiAppState: ObservableObject {
             do {
                 for try await page in stream {
                     receivedEvent = true
+                    isSelectedSessionStreamConnected = true
                     backoff = .seconds(1)
                     guard host == streamHost,
                           let currentSession = chatWorkspace.selectedTab,
@@ -1712,11 +1721,14 @@ final class PiAppState: ObservableObject {
                     }
                     applySessionStreamPage(page, to: currentSession)
                 }
+                isSelectedSessionStreamConnected = false
                 if Task.isCancelled { return }
                 try? await Task.sleep(for: backoff)
             } catch is CancellationError {
+                isSelectedSessionStreamConnected = false
                 return
             } catch {
+                isSelectedSessionStreamConnected = false
                 if Task.isCancelled { return }
                 let nsError = error as NSError
                 if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
@@ -1732,7 +1744,10 @@ final class PiAppState: ObservableObject {
     }
 
     private func applySessionStreamPage(_ page: SessionEventsPage, to session: ChatSession) {
-        guard !session.isLoading else { return }
+        if session.isLoading {
+            isSelectedSessionStreamConnected = false
+            return
+        }
         // While the user is actively sending, the POST NDJSON stream owns the
         // optimistic timeline. The final output_complete reload reconciles the
         // persisted log; the session SSE stream is the production live path for
@@ -1756,7 +1771,7 @@ final class PiAppState: ObservableObject {
                 // pure overhead (and risks racing with the optimistic
                 // in-flight state). Keep this loop only as a slow safety
                 // net for the rare case where the stream is down.
-                let interval: Duration = self.selectedSessionStreamTask == nil && self.isApplicationActive
+                let interval: Duration = !self.isSelectedSessionStreamConnected && self.isApplicationActive
                     ? .seconds(2)
                     : .seconds(30)
                 try? await Task.sleep(for: interval)
@@ -1771,7 +1786,7 @@ final class PiAppState: ObservableObject {
         // The per-session SSE stream is the primary live path. Polling is
         // only useful when the stream is down, so skip the round-trip
         // entirely while it is healthy.
-        guard selectedSessionStreamTask == nil else { return }
+        guard !isSelectedSessionStreamConnected else { return }
         guard let session = chatWorkspace.selectedTab,
               let sessionID = session.sessionID?.nilIfBlank,
               !session.isLoading,
@@ -1831,10 +1846,12 @@ final class PiAppState: ObservableObject {
         let maxBackoff = Duration.seconds(30)
 
         while !Task.isCancelled {
+            guard self.host == host else { return }
             let stream = client.streamCatalogSnapshots(host: host)
             var receivedEvent = false
             do {
                 for try await event in stream {
+                    guard self.host == host else { return }
                     receivedEvent = true
                     isCatalogStreamConnected = true
                     backoff = .seconds(1)

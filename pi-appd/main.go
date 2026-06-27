@@ -31,10 +31,11 @@ type server struct {
 	activeRunsMu sync.Mutex
 	activeRuns   map[string]*activeRun
 
-	mu           sync.RWMutex
-	lastRefresh  time.Time
-	snapshot     catalogResponse
-	sessionsByID map[string]sessionRecord
+	catalogRefreshMu sync.Mutex
+	mu               sync.RWMutex
+	lastRefresh      time.Time
+	snapshot         catalogResponse
+	sessionsByID     map[string]sessionRecord
 
 	modelsMu             sync.Mutex
 	modelsCache          []rpcModelRecord
@@ -51,11 +52,24 @@ type activeRun struct {
 	closed bool
 }
 
+func (r *activeRun) setStdin(stdin io.WriteCloser) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		_ = stdin.Close()
+		return
+	}
+	r.stdin = stdin
+}
+
 func (r *activeRun) write(payload any) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
 		return errors.New("active run is closed")
+	}
+	if r.stdin == nil {
+		return errors.New("active run is not ready")
 	}
 	return writeRPCCommand(r.stdin, payload)
 }
@@ -66,7 +80,9 @@ func (r *activeRun) close() {
 	if r.closed {
 		return
 	}
-	_ = r.stdin.Close()
+	if r.stdin != nil {
+		_ = r.stdin.Close()
+	}
 	r.closed = true
 }
 
@@ -876,17 +892,11 @@ func readEventRecordsAfter(path string, after int) ([]rawEventRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	lines := splitJSONLLines(data)
 	// The streaming endpoint must not advance its cursor over a partial
 	// trailing write. A closed JSONL file may legitimately omit the final
 	// newline, though, so keep a non-newline final record when it is already
 	// valid JSON and only defer malformed trailing fragments.
-	if len(data) > 0 && data[len(data)-1] != '\n' && len(lines) > 0 {
-		candidate := strings.TrimSpace(lines[len(lines)-1])
-		if candidate == "" || !json.Valid([]byte(candidate)) {
-			lines = lines[:len(lines)-1]
-		}
-	}
+	lines := splitCompleteJSONLLines(data)
 	start := after + 1
 	if start < 0 {
 		start = 0
@@ -942,7 +952,14 @@ func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		}
 		prePromptCommands = append(prePromptCommands, rpcSimpleCommand{Type: "set_model", Provider: provider, ModelID: modelID})
 	}
-	if level := strings.TrimSpace(request.InitialThinkingLevel); level != "" {
+	if level := strings.TrimSpace(strings.ToLower(request.InitialThinkingLevel)); level != "" {
+		if level == "none" {
+			level = "off"
+		}
+		if !isValidThinkingLevel(level) {
+			writeError(w, http.StatusBadRequest, "invalid initial thinking level")
+			return
+		}
 		prePromptCommands = append(prePromptCommands, rpcSimpleCommand{Type: "set_thinking_level", Level: level})
 	}
 
@@ -979,6 +996,10 @@ func (s *server) handleSessionSend(w http.ResponseWriter, r *http.Request, recor
 	}
 	args := []string{"--mode", "rpc", "--session", record.FilePath}
 	if err := s.streamPiRPCCommand(w, r.Context().Done(), cwd, args, rpcPrompt, nil, binding, record.Title, record.WorkingDirectory); err != nil {
+		if strings.Contains(err.Error(), "active run") {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -1197,17 +1218,21 @@ func (s *server) resolveAttachmentPaths(attachments []attachmentReference) ([]at
 	return resolved, nil
 }
 
-func (s *server) registerActiveRun(sessionID string, run *activeRun) {
+func (s *server) reserveActiveRun(sessionID string, run *activeRun) bool {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" || run == nil {
-		return
+		return false
 	}
 	s.activeRunsMu.Lock()
+	defer s.activeRunsMu.Unlock()
 	if s.activeRuns == nil {
 		s.activeRuns = map[string]*activeRun{}
 	}
+	if existing := s.activeRuns[sessionID]; existing != nil && existing != run {
+		return false
+	}
 	s.activeRuns[sessionID] = run
-	s.activeRunsMu.Unlock()
+	return true
 }
 
 func (s *server) unregisterActiveRun(sessionID string, run *activeRun) {
@@ -1243,6 +1268,34 @@ func (s *server) streamPiRPCCommand(
 	fallbackTitle string,
 	fallbackWorkingDirectory string,
 ) error {
+	run := &activeRun{}
+	activeSessionID := ""
+	registerBinding := func(candidate *sessionBoundRecord) bool {
+		if candidate == nil || strings.TrimSpace(candidate.SessionID) == "" {
+			return true
+		}
+		nextSessionID := strings.TrimSpace(candidate.SessionID)
+		if activeSessionID == nextSessionID {
+			return true
+		}
+		if !s.reserveActiveRun(nextSessionID, run) {
+			return false
+		}
+		if activeSessionID != "" {
+			s.unregisterActiveRun(activeSessionID, run)
+		}
+		activeSessionID = nextSessionID
+		return true
+	}
+	if binding != nil && !registerBinding(binding) {
+		return errors.New("session already has an active run")
+	}
+	defer func() {
+		if activeSessionID != "" {
+			s.unregisterActiveRun(activeSessionID, run)
+		}
+	}()
+
 	cmd := exec.Command(s.piExecutable, args...)
 	cmd.Dir = expandHome(cwd)
 	cmd.Env = append(os.Environ(), "PI_CODING_AGENT_DIR="+s.agentDir)
@@ -1251,6 +1304,7 @@ func (s *server) streamPiRPCCommand(
 	if err != nil {
 		return err
 	}
+	run.setStdin(stdin)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -1263,33 +1317,11 @@ func (s *server) streamPiRPCCommand(
 		return err
 	}
 
-	run := &activeRun{stdin: stdin}
-	activeSessionID := ""
-	registerBinding := func(candidate *sessionBoundRecord) {
-		if candidate == nil || strings.TrimSpace(candidate.SessionID) == "" {
-			return
-		}
-		if activeSessionID == candidate.SessionID {
-			return
-		}
-		if activeSessionID != "" {
-			s.unregisterActiveRun(activeSessionID, run)
-		}
-		activeSessionID = candidate.SessionID
-		s.registerActiveRun(activeSessionID, run)
-	}
-	defer func() {
-		if activeSessionID != "" {
-			s.unregisterActiveRun(activeSessionID, run)
-		}
-	}()
-
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no")
 	flusher, _ := w.(http.Flusher)
 	if binding != nil {
-		registerBinding(binding)
 		writeNDJSON(w, binding)
 		if flusher != nil {
 			flusher.Flush()
@@ -1349,7 +1381,14 @@ func (s *server) streamPiRPCCommand(
 			if binding == nil {
 				if parsedBinding, ok := parseRPCStateBindingLine(rawLine, fallbackTitle, fallbackWorkingDirectory); ok {
 					binding = &parsedBinding
-					registerBinding(binding)
+					if !registerBinding(binding) {
+						writeNDJSON(w, streamErrorRecord{Type: "stream_error", Error: "session already has an active run"})
+						if flusher != nil {
+							flusher.Flush()
+						}
+						closeStdin()
+						continue
+					}
 					writeNDJSON(w, binding)
 					if flusher != nil {
 						flusher.Flush()
@@ -1903,6 +1942,9 @@ func (s *server) lookupSessionRecord(sessionID string) (sessionRecord, bool, err
 }
 
 func (s *server) refreshCatalog(force bool) error {
+	s.catalogRefreshMu.Lock()
+	defer s.catalogRefreshMu.Unlock()
+
 	ttl := s.catalogCacheTTL()
 	s.mu.RLock()
 	fresh := time.Since(s.lastRefresh) < ttl
@@ -2192,7 +2234,18 @@ func readAllLines(path string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return splitJSONLLines(data), nil
+	return splitCompleteJSONLLines(data), nil
+}
+
+func splitCompleteJSONLLines(data []byte) []string {
+	lines := splitJSONLLines(data)
+	if len(data) > 0 && data[len(data)-1] != '\n' && len(lines) > 0 {
+		candidate := strings.TrimSpace(lines[len(lines)-1])
+		if candidate == "" || !json.Valid([]byte(candidate)) {
+			lines = lines[:len(lines)-1]
+		}
+	}
+	return lines
 }
 
 func splitJSONLLines(data []byte) []string {
@@ -2246,89 +2299,16 @@ func readPreviewLines(path string, limit int) ([]string, error) {
 }
 
 func readLastLines(path string, limit int) ([]string, int, error) {
-	if limit <= 0 {
-		lines, err := readAllLines(path)
-		if err != nil {
-			return nil, 0, err
-		}
-		return lines, len(lines), nil
-	}
-
-	file, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer file.Close()
-
-	info, err := file.Stat()
-	if err != nil {
-		return nil, 0, err
-	}
-	const chunkSize int64 = 64 * 1024
-	var offset = info.Size()
-	buffer := make([]byte, 0, chunkSize*2)
-	newlineCount := 0
-
-	for offset > 0 && newlineCount <= limit {
-		readSize := chunkSize
-		if offset < readSize {
-			readSize = offset
-		}
-		offset -= readSize
-		chunk := make([]byte, readSize)
-		if _, err := file.ReadAt(chunk, offset); err != nil && err != io.EOF {
-			return nil, 0, err
-		}
-		buffer = append(chunk, buffer...)
-		newlineCount = bytes.Count(buffer, []byte("\n"))
-	}
-
-	totalLines, err := countLines(path)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	lines := splitJSONLLines(buffer)
-	if len(lines) > limit {
+	lines := splitCompleteJSONLLines(data)
+	totalLines := len(lines)
+	if limit > 0 && len(lines) > limit {
 		lines = lines[len(lines)-limit:]
 	}
 	return lines, totalLines, nil
-}
-
-func countLines(path string) (int, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return 0, err
-	}
-	defer file.Close()
-
-	const chunkSize = 64 * 1024
-	buffer := make([]byte, chunkSize)
-	total := 0
-	readAny := false
-	lastEndedWithNewline := false
-	for {
-		n, err := file.Read(buffer)
-		if n > 0 {
-			readAny = true
-			chunk := buffer[:n]
-			total += bytes.Count(chunk, []byte("\n"))
-			lastEndedWithNewline = chunk[len(chunk)-1] == '\n'
-		}
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return 0, err
-		}
-	}
-	if !readAny {
-		return 0, nil
-	}
-	if !lastEndedWithNewline {
-		total++
-	}
-	return total, nil
 }
 
 func projectTitle(projectID string, sessions []sessionRecord) string {
@@ -2533,6 +2513,7 @@ func xmlEscape(value string) string {
 // intermediate events and receives the most recent snapshot on reconnect.
 type catalogBroker struct {
 	mu          sync.RWMutex
+	broadcastMu sync.Mutex
 	subscribers map[chan streamEvent]struct{}
 }
 
@@ -2563,6 +2544,8 @@ func (b *catalogBroker) unsubscribe(ch chan streamEvent) {
 }
 
 func (b *catalogBroker) broadcast(event streamEvent) {
+	b.broadcastMu.Lock()
+	defer b.broadcastMu.Unlock()
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	for ch := range b.subscribers {

@@ -849,6 +849,31 @@ final class ChatSessionStore: ObservableObject {
         onTabsChanged?()
     }
 
+    func closeDuplicateTabs(keeping keptTab: ChatSession, matchingAliases aliases: [String]) {
+        let aliasSet = Set(aliases.compactMap { $0.nilIfBlank })
+        guard !aliasSet.isEmpty else { return }
+        let removedSelectedTab = tabs.contains { tab in
+            tab.id != keptTab.id
+                && selectedTabID == tab.id
+                && !aliasSet.isDisjoint(with: Set(Self.aliases(for: tab)))
+        }
+        let originalCount = tabs.count
+        tabs.removeAll { tab in
+            guard tab.id != keptTab.id,
+                  !aliasSet.isDisjoint(with: Set(Self.aliases(for: tab))) else {
+                return false
+            }
+            tab.cancelSend()
+            return true
+        }
+        guard tabs.count != originalCount else { return }
+        if removedSelectedTab || selectedTabID == nil {
+            selectedTabID = keptTab.id
+        }
+        onSessionExit?()
+        onTabsChanged?()
+    }
+
     func select(_ tab: ChatSession) {
         selectedTabID = tab.id
         if let index = tabs.firstIndex(where: { $0.id == tab.id }), index != tabs.count - 1 {
@@ -856,6 +881,16 @@ final class ChatSessionStore: ObservableObject {
             tabs.append(cached)
         }
         onTabsChanged?()
+    }
+
+    private static func aliases(for tab: ChatSession) -> [String] {
+        var seen: Set<String> = []
+        var result: [String] = []
+        for alias in [tab.sessionID, tab.sessionPath, tab.key] {
+            guard let value = alias?.nilIfBlank, seen.insert(value).inserted else { continue }
+            result.append(value)
+        }
+        return result
     }
 
     private func trimCachedTabsIfNeeded() {

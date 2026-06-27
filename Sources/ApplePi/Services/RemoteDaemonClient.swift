@@ -155,7 +155,7 @@ struct RemoteDaemonClient {
                                 events: events,
                                 firstLine: record.line,
                                 lastLine: record.line,
-                                hasMoreBefore: record.line > 0,
+                                hasMoreBefore: false,
                                 hasMoreAfter: false
                             )
                         )
@@ -565,7 +565,9 @@ struct RemoteDaemonClient {
                 switch event {
                 case .streamError(let message):
                     throw RemoteDaemonError.requestFailed(status: 0, body: message)
-                case .turnEnd, .agentEnd, .abort, .outputComplete:
+                case .outputComplete:
+                    return
+                case .turnEnd, .agentEnd, .abort:
                     continue
                 case .sessionBound, .sessionHeader, .sessionEvents:
                     break
