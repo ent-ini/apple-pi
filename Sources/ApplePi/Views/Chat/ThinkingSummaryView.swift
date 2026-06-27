@@ -58,10 +58,8 @@ struct BouncingDotsView: View {
             dot(delay: 0.14)
             dot(delay: 0.28)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .background(Color.gray.opacity(0.10))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.horizontal, 2)
+        .padding(.vertical, 2)
         .onAppear {
             animate = true
         }
