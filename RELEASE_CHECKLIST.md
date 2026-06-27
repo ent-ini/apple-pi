@@ -1,6 +1,6 @@
 # Release Checklist
 
-Use this checklist for a public Apple Pi release. For the full maintainer workflow, see [Release Process](docs/RELEASE_PROCESS.md).
+Use this checklist for a public pi-app release. For the full maintainer workflow, see [Release Process](docs/RELEASE_PROCESS.md).
 
 ## Source Readiness
 
@@ -43,24 +43,24 @@ VERSION=<version> BUILD_NUMBER=<build> script/package_release.sh
 Expected outputs:
 
 ```text
-dist/Apple Pi.app
-dist/apple-pi-<version>-<build>.zip
+dist/pi-app.app
+dist/pi-app-<version>-<build>.zip
 ```
 
 ## Bundle Verification
 
 ```sh
-codesign --verify --deep --strict --verbose=2 "dist/Apple Pi.app"
-codesign --display --verbose=4 "dist/Apple Pi.app"
-plutil -lint "dist/Apple Pi.app/Contents/Info.plist"
-plutil -p "dist/Apple Pi.app/Contents/Info.plist"
-otool -L "dist/Apple Pi.app/Contents/MacOS/ApplePi"
+codesign --verify --deep --strict --verbose=2 "dist/pi-app.app"
+codesign --display --verbose=4 "dist/pi-app.app"
+plutil -lint "dist/pi-app.app/Contents/Info.plist"
+plutil -p "dist/pi-app.app/Contents/Info.plist"
+otool -L "dist/pi-app.app/Contents/MacOS/pi-app"
 ```
 
 Confirm:
 
 - ad-hoc signing identity, unless the release notes explicitly say otherwise.
-- `CFBundleExecutable` is `ApplePi`.
+- `CFBundleExecutable` is `pi-app`.
 - `CFBundlePackageType` is `APPL`.
 - `LSApplicationCategoryType` is `public.app-category.developer-tools`.
 - `LSMinimumSystemVersion` is `14.0`.
@@ -74,14 +74,14 @@ This project does not use a paid Apple Developer account for normal releases, so
 You can still run Gatekeeper assessment:
 
 ```sh
-spctl --assess --type execute --verbose=4 "dist/Apple Pi.app"
+spctl --assess --type execute --verbose=4 "dist/pi-app.app"
 ```
 
 For ad-hoc builds, rejection is expected. Do not present Gatekeeper acceptance as the trust proof for this release model. Publish the SHA-256 hash, source tag, and verification instructions instead.
 
 ## Manual App Test Pass
 
-- Launch `dist/Apple Pi.app`.
+- Launch `dist/pi-app.app`.
 - Confirm the app icon appears in Finder and the Dock.
 - Open Settings.
 - Verify local Pi executable and agent directory defaults.
@@ -103,7 +103,7 @@ For ad-hoc builds, rejection is expected. Do not present Gatekeeper acceptance a
 ## Remote API Test Pass
 
 Complete this section if remote support is included in the release notes.
-Apple Pi talks to the remote host through [pi-appd](https://github.com/ent-ini/apple-pi),
+pi-app talks to the remote host through [pi-appd](https://github.com/ent-ini/apple-pi),
 a separate HTTP daemon, not through a built-in SSH client.
 
 - Confirm `pi-appd` is installed on the remote host and reachable at the
@@ -131,7 +131,7 @@ a separate HTTP daemon, not through a built-in SSH client.
 Compute the zip hash:
 
 ```sh
-shasum -a 256 "dist/apple-pi-<version>-<build>.zip"
+shasum -a 256 "dist/pi-app-<version>-<build>.zip"
 ```
 
 Publish:

@@ -2,16 +2,16 @@
 set -euo pipefail
 
 # This script is the single source of truth for the bundle metadata
-# written into dist/Apple Pi.app/Contents/Info.plist. The plist body
+# written into dist/pi-app.app/Contents/Info.plist. The plist body
 # itself lives in script/Info.plist.tpl so the file is diffable and
 # reviewable in pull requests. This script only substitutes the
 # placeholder tokens, runs plutil -lint, signs, and zips.
 
-APP_NAME="${APP_NAME:-Apple Pi}"
-ARCHIVE_NAME="${ARCHIVE_NAME:-apple-pi}"
+APP_NAME="${APP_NAME:-pi-app}"
+ARCHIVE_NAME="${ARCHIVE_NAME:-pi-app}"
 PRODUCT_NAME="${PRODUCT_NAME:-ApplePi}"
-BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-com.dodoreach.ApplePi}"
-EXECUTABLE_NAME="${EXECUTABLE_NAME:-ApplePi}"
+BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-com.entini.piapp}"
+EXECUTABLE_NAME="${EXECUTABLE_NAME:-pi-app}"
 VERSION="${VERSION:-0.1.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-}"
 CONFIGURATION="${CONFIGURATION:-release}"
@@ -29,8 +29,8 @@ Usage: script/package_release.sh [--run] [--verify] [--no-zip] [--sign-identity 
 Environment:
   VERSION=0.1.0
   BUILD_NUMBER=<git commit count>
-  ARCHIVE_NAME=apple-pi
-  BUNDLE_IDENTIFIER=com.dodoreach.ApplePi
+  ARCHIVE_NAME=pi-app
+  BUNDLE_IDENTIFIER=com.entini.piapp
   SIGN_IDENTITY=-                  # ad-hoc local signing by default
 USAGE
 }
@@ -65,7 +65,7 @@ plist_escape() {
 # Escape a value for insertion into a bash `${var//pat/repl}` replacement.
 # `&` and `\` are special in the replacement text, so they have to be
 # doubled before the parameter expansion runs. Used below when we
-# render `script/Info.plist.tpl` into `dist/Apple Pi.app/Contents/Info.plist`.
+# render `script/Info.plist.tpl` into `dist/pi-app.app/Contents/Info.plist`.
 plist_subst_escape() {
   local value="$1"
   value="${value//\\/\\\\}"
@@ -162,10 +162,10 @@ swift build -c "${CONFIGURATION}" --product "ApplePiAskpass"
 rm -rf "${BUNDLE_DIR}"
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 cp ".build/${CONFIGURATION}/${PRODUCT_NAME}" "${EXECUTABLE_PATH}"
-cp ".build/${CONFIGURATION}/ApplePiAskpass" "${RESOURCES_DIR}/ApplePiAskpass"
+cp ".build/${CONFIGURATION}/ApplePiAskpass" "${RESOURCES_DIR}/pi-app-askpass"
 cp "${ICON_SOURCE}" "${RESOURCES_DIR}/AppIcon.icns"
-cp "${NOTIFY_EXTENSION_SOURCE}" "${RESOURCES_DIR}/ApplePiNotifyExtension.mjs"
-chmod +x "${EXECUTABLE_PATH}" "${RESOURCES_DIR}/ApplePiAskpass"
+cp "${NOTIFY_EXTENSION_SOURCE}" "${RESOURCES_DIR}/pi-app-notify-extension.mjs"
+chmod +x "${EXECUTABLE_PATH}" "${RESOURCES_DIR}/pi-app-askpass"
 
 # Render the Info.plist from script/Info.plist.tpl. The placeholders
 # are `__APP_NAME__`, `__BUNDLE_IDENTIFIER__`, `__EXECUTABLE_NAME__`,
@@ -190,7 +190,7 @@ printf "APPL????" > "${CONTENTS_DIR}/PkgInfo"
 
 /usr/bin/plutil -lint "${INFO_PLIST}" >/dev/null
 /usr/bin/xattr -cr "${BUNDLE_DIR}" 2>/dev/null || true
-/usr/bin/codesign --force --sign "${SIGN_IDENTITY}" "${RESOURCES_DIR}/ApplePiAskpass"
+/usr/bin/codesign --force --sign "${SIGN_IDENTITY}" "${RESOURCES_DIR}/pi-app-askpass"
 /usr/bin/codesign --force --deep --options runtime --entitlements "${APP_ENTITLEMENTS_SOURCE}" --sign "${SIGN_IDENTITY}" "${BUNDLE_DIR}"
 /usr/bin/codesign --verify --deep --strict --verbose=2 "${BUNDLE_DIR}"
 

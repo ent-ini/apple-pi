@@ -156,7 +156,7 @@ enum AudioRecordingError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .microphonePermissionDenied:
-            return "Microphone access was denied. Enable it for Apple Pi in System Settings."
+            return "Microphone access was denied. Enable it for pi-app in System Settings."
         case .couldNotStart:
             return "Could not start audio recording."
         case .notRecording:

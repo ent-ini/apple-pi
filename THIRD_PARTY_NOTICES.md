@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-Apple Pi vendors SwiftTerm for a future in-app terminal surface. The
+pi-app vendors SwiftTerm for a future in-app terminal surface. The
 current release does not link against SwiftTerm; the library is kept in
 `Vendor/SwiftTerm` so the next iteration that needs an embedded terminal
 does not have to round-trip the dependency.

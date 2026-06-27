@@ -1,6 +1,6 @@
 # Release Process
 
-This process is for maintainers preparing a public Apple Pi release.
+This process is for maintainers preparing a public pi-app release.
 
 ## 1. Confirm Release Metadata
 
@@ -16,10 +16,11 @@ Choose:
 The packaging script defaults are:
 
 ```text
-APP_NAME="Apple Pi"
-ARCHIVE_NAME=apple-pi
+APP_NAME=pi-app
+ARCHIVE_NAME=pi-app
 PRODUCT_NAME=ApplePi
-BUNDLE_IDENTIFIER=com.dodoreach.ApplePi
+BUNDLE_IDENTIFIER=com.entini.piapp
+EXECUTABLE_NAME=pi-app
 VERSION=0.1.0
 SIGN_IDENTITY=-
 ```
@@ -45,7 +46,7 @@ Review changes to:
 ### Bundle metadata source of truth
 
 `script/package_release.sh` is the single source of truth for the bundle
-metadata written into `dist/Apple Pi.app/Contents/Info.plist`. The actual
+metadata written into `dist/pi-app.app/Contents/Info.plist`. The actual
 plist payload is kept at `script/Info.plist.tpl` so the file is diffable
 and reviewable in PRs; `package_release.sh` substitutes the
 `APP_NAME`, `BUNDLE_IDENTIFIER`, `VERSION`, `BUILD_NUMBER`, and
@@ -65,17 +66,17 @@ script/package_release.sh
 Expected outputs:
 
 ```text
-dist/Apple Pi.app
-dist/apple-pi-<version>-<build>.zip
+dist/pi-app.app
+dist/pi-app-<version>-<build>.zip
 ```
 
 ## 4. Verify The Bundle
 
 ```sh
-codesign --verify --deep --strict --verbose=2 "dist/Apple Pi.app"
-codesign --display --verbose=4 "dist/Apple Pi.app"
-plutil -lint "dist/Apple Pi.app/Contents/Info.plist"
-plutil -p "dist/Apple Pi.app/Contents/Info.plist"
+codesign --verify --deep --strict --verbose=2 "dist/pi-app.app"
+codesign --display --verbose=4 "dist/pi-app.app"
+plutil -lint "dist/pi-app.app/Contents/Info.plist"
+plutil -p "dist/pi-app.app/Contents/Info.plist"
 ```
 
 Confirm:
@@ -94,7 +95,7 @@ Normal releases are ad-hoc signed and not Developer ID notarized.
 You can run:
 
 ```sh
-spctl --assess --type execute --verbose=4 "dist/Apple Pi.app"
+spctl --assess --type execute --verbose=4 "dist/pi-app.app"
 ```
 
 For ad-hoc builds, Gatekeeper may reject the app. That is expected. The release should be trusted through the source tag, SHA-256 hash, code signature structure, and reproducible local build path.
@@ -102,7 +103,7 @@ For ad-hoc builds, Gatekeeper may reject the app. That is expected. The release 
 ## 6. Compute Release Hash
 
 ```sh
-shasum -a 256 "dist/apple-pi-<version>-<build>.zip"
+shasum -a 256 "dist/pi-app-<version>-<build>.zip"
 ```
 
 Publish the SHA-256 hash next to the release artifact.

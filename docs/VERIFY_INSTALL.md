@@ -1,6 +1,6 @@
 # Verify An Install
 
-These checks let users inspect an Apple Pi release before launching it.
+These checks let users inspect an pi-app release before launching it.
 
 Replace `<version>` and `<build>` with the release values.
 
@@ -9,21 +9,21 @@ Replace `<version>` and `<build>` with the release values.
 Compare this output with the SHA-256 hash published by the release maintainer:
 
 ```sh
-shasum -a 256 "apple-pi-<version>-<build>.zip"
+shasum -a 256 "pi-app-<version>-<build>.zip"
 ```
 
 ## 2. Unzip To A Temporary Folder
 
 ```sh
-rm -rf /tmp/apple-pi-verify
-ditto -x -k "apple-pi-<version>-<build>.zip" /tmp/apple-pi-verify
+rm -rf /tmp/pi-app-verify
+ditto -x -k "pi-app-<version>-<build>.zip" /tmp/pi-app-verify
 ```
 
 ## 3. Verify Code Signature
 
 ```sh
-codesign --verify --deep --strict --verbose=2 "/tmp/apple-pi-verify/Apple Pi.app"
-codesign --display --verbose=4 "/tmp/apple-pi-verify/Apple Pi.app"
+codesign --verify --deep --strict --verbose=2 "/tmp/pi-app-verify/pi-app.app"
+codesign --display --verbose=4 "/tmp/pi-app-verify/pi-app.app"
 ```
 
 For the normal open-source release, the displayed authority is ad-hoc. That is expected.
@@ -33,7 +33,7 @@ Ad-hoc signing can verify structurally with `codesign`, but it is not Apple Deve
 ## 4. Verify Gatekeeper Assessment
 
 ```sh
-spctl --assess --type execute --verbose=4 "/tmp/apple-pi-verify/Apple Pi.app"
+spctl --assess --type execute --verbose=4 "/tmp/pi-app-verify/pi-app.app"
 ```
 
 An ad-hoc release may be rejected by Gatekeeper because it is not Developer ID notarized. That is expected. If the project later ships a Developer ID notarized build, the release notes should say so explicitly.
@@ -43,12 +43,12 @@ macOS may show wording such as Apple cannot check the app for malicious software
 ## 5. Inspect Bundle Metadata
 
 ```sh
-plutil -p "/tmp/apple-pi-verify/Apple Pi.app/Contents/Info.plist"
+plutil -p "/tmp/pi-app-verify/pi-app.app/Contents/Info.plist"
 ```
 
 Expected public metadata includes:
 
-- `CFBundleExecutable`: `ApplePi`
+- `CFBundleExecutable`: `pi-app`
 - `CFBundlePackageType`: `APPL`
 - `LSApplicationCategoryType`: `public.app-category.developer-tools`
 - `LSMinimumSystemVersion`: `14.0`
@@ -58,12 +58,12 @@ The bundle identifier and version should match the release notes.
 Expected app resources include:
 
 - `AppIcon.icns`
-- `ApplePiNotifyExtension.mjs`
+- `pi-app-notify-extension.mjs`
 
 ## 6. Inspect Linked System Libraries
 
 ```sh
-otool -L "/tmp/apple-pi-verify/Apple Pi.app/Contents/MacOS/ApplePi"
+otool -L "/tmp/pi-app-verify/pi-app.app/Contents/MacOS/pi-app"
 ```
 
 This shows the dynamic libraries loaded by the app executable.

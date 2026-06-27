@@ -115,18 +115,19 @@ enum RemoteSSHSupport {
         return arguments
     }
 
-    /// Returns the absolute path of the bundled `ApplePiAskpass` helper, or
+    /// Returns the absolute path of the bundled `pi-app-askpass` helper, or
     /// nil when the binary cannot be located (development builds, tests).
     static func bundledAskpassPath() -> String? {
-        let bundleResources = Bundle.main.bundlePath + "/Contents/Resources/ApplePiAskpass"
-        let bundleMacOS = Bundle.main.bundlePath + "/Contents/MacOS/ApplePiAskpass"
+        let bundleResources = Bundle.main.bundlePath + "/Contents/Resources/pi-app-askpass"
+        let legacyBundleResources = Bundle.main.bundlePath + "/Contents/Resources/ApplePiAskpass"
+        let bundleMacOS = Bundle.main.bundlePath + "/Contents/MacOS/pi-app-askpass"
         // `swift run` puts the helper next to the main executable, in the
         // same directory as `Bundle.main.executableURL`.
         let swiftRunCandidate = Bundle.main.executableURL?
             .deletingLastPathComponent()
             .appendingPathComponent("ApplePiAskpass")
             .path
-        let candidates: [String] = [bundleResources, bundleMacOS, swiftRunCandidate].compactMap { $0 }
+        let candidates: [String] = [bundleResources, legacyBundleResources, bundleMacOS, swiftRunCandidate].compactMap { $0 }
         let fileManager = Foundation.FileManager()
         for candidate in candidates {
             if fileManager.fileExists(atPath: candidate) {

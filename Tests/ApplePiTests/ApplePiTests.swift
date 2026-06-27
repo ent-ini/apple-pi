@@ -25,7 +25,7 @@ import Testing
         currentVersionProvider: { "1.2.3" },
         fetch: { request in
             #expect(request.value(forHTTPHeaderField: "Accept") == "application/vnd.github+json")
-            #expect(request.value(forHTTPHeaderField: "User-Agent") == "ApplePi")
+            #expect(request.value(forHTTPHeaderField: "User-Agent") == "pi-app")
             let data = """
             {"tag_name":"v1.3.0","html_url":"https://example.test/releases/v1.3.0"}
             """.data(using: .utf8)!

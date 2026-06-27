@@ -1,6 +1,6 @@
 # Security
 
-Apple Pi is a native macOS chat-style session UI for Pi. Local mode starts the configured Pi executable on your Mac; remote mode talks to a separate [pi-appd](https://github.com/ent-ini/apple-pi) HTTP daemon that lives next to Pi on the remote host. There is no built-in SSH client in the current codebase.
+pi-app is a native macOS chat-style session UI for Pi. Local mode starts the configured Pi executable on your Mac; remote mode talks to a separate [pi-appd](https://github.com/ent-ini/apple-pi) HTTP daemon that lives next to Pi on the remote host. There is no built-in SSH client in the current codebase.
 
 This page describes what the current codebase does, how to verify release artifacts, and what to report.
 
@@ -12,13 +12,13 @@ Ad-hoc signing is not Apple Developer ID notarization. It verifies bundle struct
 
 ## Trust Boundaries
 
-Apple Pi does not sandbox Pi. Pi sessions run with the same permissions they would have if you launched them yourself from Terminal.
+pi-app does not sandbox Pi. Pi sessions run with the same permissions they would have if you launched them yourself from Terminal.
 
 Local mode starts the configured Pi executable on your Mac and exchanges RPC traffic with it over stdin/stdout. The remote transport is never involved on the local path.
 
 Remote mode (titled "Remote API" in the UI) talks to `pi-appd` over bearer-token-authenticated HTTP. The Mac client never spawns `ssh`, `python3`, or any other tool on the remote host. Authentication, TLS, and host-key handling are `pi-appd`'s responsibility; the Mac side only stores a per-endpoint bearer token.
 
-The current codebase ships a small `ApplePiAskpass` helper binary, an `SSHConfigParser`, an `SSHKeyStore`, and SSH host fields (hostname, port, user, identity file, `~/.ssh/config` alias) on the host model. These were used by an earlier SSH-based remote runtime and are no longer reached from the production code paths. They are kept in the source so a future local-SSH passthrough can reuse them without re-deriving the password/identity plumbing. They are **not** exercised by the current release; in particular, no release of this code calls `ssh` for remote session browsing, turn streaming, or directory listing. Do not rely on them for security boundaries until they are wired up.
+The current codebase ships a small `pi-app-askpass` helper binary, an `SSHConfigParser`, an `SSHKeyStore`, and SSH host fields (hostname, port, user, identity file, `~/.ssh/config` alias) on the host model. These were used by an earlier SSH-based remote runtime and are no longer reached from the production code paths. They are kept in the source so a future local-SSH passthrough can reuse them without re-deriving the password/identity plumbing. They are **not** exercised by the current release; in particular, no release of this code calls `ssh` for remote session browsing, turn streaming, or directory listing. Do not rely on them for security boundaries until they are wired up.
 
 When notifications are enabled, local mode passes a bundled Pi extension to Pi with `--extension`. That helper listens for Pi notification-related events and writes OSC 777 terminal notification sequences. It is loaded per local session and does not modify the user's Pi agent configuration.
 
@@ -83,24 +83,24 @@ Remote mode talks to the configured `pi-appd` URL with bearer-token HTTP request
 
 The macOS app's `Info.plist` opens `NSAllowsArbitraryLoads` and `NSAllowsLocalNetworking` so a local `pi-appd` (and a few hard-coded Tailscale IPs the developer uses) can answer over plain HTTP during development. See `script/Info.plist.tpl` for the exact list.
 
-Any network access made by Pi itself (including outbound calls made on your behalf by the agent) is outside Apple Pi and should be evaluated as Pi behavior.
+Any network access made by Pi itself (including outbound calls made on your behalf by the agent) is outside pi-app and should be evaluated as Pi behavior.
 
 ## Release Artifact Verification
 
 Users can verify a release before launching it:
 
 ```sh
-shasum -a 256 "apple-pi-<version>-<build>.zip"
-ditto -x -k "apple-pi-<version>-<build>.zip" /tmp/apple-pi-verify
-codesign --verify --deep --strict --verbose=2 "/tmp/apple-pi-verify/Apple Pi.app"
-codesign --display --verbose=4 "/tmp/apple-pi-verify/Apple Pi.app"
-plutil -p "/tmp/apple-pi-verify/Apple Pi.app/Contents/Info.plist"
+shasum -a 256 "pi-app-<version>-<build>.zip"
+ditto -x -k "pi-app-<version>-<build>.zip" /tmp/pi-app-verify
+codesign --verify --deep --strict --verbose=2 "/tmp/pi-app-verify/pi-app.app"
+codesign --display --verbose=4 "/tmp/pi-app-verify/pi-app.app"
+plutil -p "/tmp/pi-app-verify/pi-app.app/Contents/Info.plist"
 ```
 
 Optional Gatekeeper check:
 
 ```sh
-spctl --assess --type execute --verbose=4 "/tmp/apple-pi-verify/Apple Pi.app"
+spctl --assess --type execute --verbose=4 "/tmp/pi-app-verify/pi-app.app"
 ```
 
 For ad-hoc builds, Gatekeeper may reject the app because it is not Developer ID notarized. That is expected. Treat the SHA-256 hash, source code, and local rebuild path as the release trust chain.
@@ -114,7 +114,7 @@ Developers can run:
 ```sh
 swift test
 script/package_release.sh
-codesign --verify --deep --strict --verbose=2 "dist/Apple Pi.app"
+codesign --verify --deep --strict --verbose=2 "dist/pi-app.app"
 ```
 
 The test suite currently covers shell quoting, local Pi command construction, the `RemoteSSHSupport` environment-variable allowlist that is shared by local and remote turn runners, session-root resolution, invalid settings handling, trust behavior, remote delete safety, remote configuration summaries, configuration summary counting, the secure 0600 secret-file writer, the turn-lifecycle / SSE-stream cancellation plumbing, the multipart filename whitelist used by `RemoteDaemonClient` and `GroqTranscriptionClient`, the redaction of bearer tokens in the Remote API section of `SettingsView`, and the non-crashing URL initialisation of the `UpdateCheckService` and Groq endpoints.
@@ -138,7 +138,7 @@ Do not include secrets, private API keys, `pi-appd` bearer tokens, or real sessi
 
 ## Security Non-Goals
 
-Apple Pi does not currently provide:
+pi-app does not currently provide:
 
 - process sandboxing for Pi
 - a built-in SSH client (remote mode is `pi-appd` over HTTP, by design)

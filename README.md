@@ -1,6 +1,6 @@
 <div align="center">
 
-# Apple Pi
+# pi-app
 
 **You already have Pi. Now give it a proper macOS home.**
 
@@ -34,7 +34,7 @@ No fake IDE. No Electron wrapper. No unreadable terminal UI pretending to be a c
 
 Pi is powerful. The terminal chaos around it is not.
 
-**Apple Pi** is the native macOS room you put Pi in. It keeps what is already great, the terminal, and gives it structure: a session browser, a project list, a workspace that stays oriented so you do not have to.
+**pi-app** is the native macOS room you put Pi in. It keeps what is already great, the terminal, and gives it structure: a session browser, a project list, a workspace that stays oriented so you do not have to.
 
 ## What it does
 
@@ -44,7 +44,7 @@ The detail pane renders each open Pi conversation as a chat — message bubbles 
 
 Local sessions can send a macOS notification when Pi is ready for your input again. The app bundles the small helper this needs and loads it only for sessions it starts. Your existing Pi agent settings are left exactly as they are.
 
-Run your local Pi with the configured `pi` executable, or talk to a remote machine through the lightweight `pi-appd` HTTP daemon. Apple Pi ships only the macOS client; `pi-appd` is a separate project that lives next to Pi on the remote host and exposes the same catalog, session, and turn APIs over a bearer-token-authenticated HTTP surface. No new password store on your Mac.
+Run your local Pi with the configured `pi` executable, or talk to a remote machine through the lightweight `pi-appd` HTTP daemon. pi-app ships only the macOS client; `pi-appd` is a separate project that lives next to Pi on the remote host and exposes the same catalog, session, and turn APIs over a bearer-token-authenticated HTTP surface. No new password store on your Mac.
 
 Remote API mode can browse, start, and resume sessions on the remote host. It intentionally does not delete remote session files from the app, and the Pi context panel stays limited because project trust and local file actions belong to the remote machine.
 
@@ -56,7 +56,7 @@ A clean translucent panel floating over your desktop is a legitimate aesthetic. 
 
 ## Session discovery
 
-**Apple Pi** looks where Pi already keeps sessions:
+**pi-app** looks where Pi already keeps sessions:
 
 ```sh
 ~/.pi/agent/sessions
@@ -64,20 +64,20 @@ A clean translucent panel floating over your desktop is a legitimate aesthetic. 
 
 If you changed Pi's session directory, the app follows that. Environment overrides, global settings, trusted project settings: all supported.
 
-Pi owns the sessions. Apple Pi makes them easier to find, read, start, and resume.
+Pi owns the sessions. pi-app makes them easier to find, read, start, and resume.
 
 ## What it is not
 
-Apple Pi is not a replacement for Pi, an IDE, an Electron dashboard, a cloud service, an account system, a model API key manager, an SSH key manager, or a generic terminal emulator host. (It is, by design, a chat-style session UI for Pi.)
+pi-app is not a replacement for Pi, an IDE, an Electron dashboard, a cloud service, an account system, a model API key manager, an SSH key manager, or a generic terminal emulator host. (It is, by design, a chat-style session UI for Pi.)
 
 ## Install
 
 Download the release zip, unzip it, move the app to `/Applications`:
 
 ```sh
-shasum -a 256 "apple-pi-<version>-<build>.zip"
-ditto -x -k "apple-pi-<version>-<build>.zip" /tmp/apple-pi
-mv "/tmp/apple-pi/Apple Pi.app" /Applications/
+shasum -a 256 "pi-app-<version>-<build>.zip"
+ditto -x -k "pi-app-<version>-<build>.zip" /tmp/pi-app
+mv "/tmp/pi-app/pi-app.app" /Applications/
 ```
 
 macOS may warn that the app cannot be verified. That is expected: this is an open source project and I am not paying Apple $99/year to make that dialog disappear. Launch once, then go to **System Settings -> Privacy & Security -> Security** and click **Open Anyway**.
@@ -90,11 +90,11 @@ Full details are in [Install](docs/INSTALL.md) and [Verify An Install](docs/VERI
 
 ```sh
 swift test
-swift run ApplePi
-VERSION=0.1.0 BUILD_NUMBER=1 script/package_release.sh
+swift run ApplePi          # development target
+script/install_app.sh      # builds and installs /Applications/pi-app.app
 ```
 
-The package script creates the `.app`, ad-hoc signs it, verifies it, and writes a versioned zip into `dist/`. Release maintainers should follow [Release Checklist](RELEASE_CHECKLIST.md) and [Release Process](docs/RELEASE_PROCESS.md).
+`script/package_release.sh` creates the `.app`, ad-hoc signs it, verifies it, and writes a versioned zip into `dist/`. `script/install_app.sh` is the convenience path for a permanent local install. Release maintainers should follow [Release Checklist](RELEASE_CHECKLIST.md) and [Release Process](docs/RELEASE_PROCESS.md).
 
 ## Trust, but verify
 
@@ -105,9 +105,9 @@ On launch, the app makes one anonymous GET to `api.github.com/repos/ent-ini/appl
 No bundled browser runtime. No SSH key manager. No password store. No model API key manager. No hidden Pi installs.
 
 ```sh
-codesign --verify --deep --strict --verbose=2 "Apple Pi.app"
-codesign --display --verbose=4 "Apple Pi.app"
-plutil -p "Apple Pi.app/Contents/Info.plist"
+codesign --verify --deep --strict --verbose=2 "pi-app.app"
+codesign --display --verbose=4 "pi-app.app"
+plutil -p "pi-app.app/Contents/Info.plist"
 ```
 
 [Security](SECURITY.md), [Privacy](PRIVACY.md), and [Third-Party Notices](THIRD_PARTY_NOTICES.md) if you want to know exactly what you are installing.
@@ -118,7 +118,7 @@ plutil -p "Apple Pi.app/Contents/Info.plist"
 - Pi installed locally, **or** a remote host running [pi-appd](https://github.com/ent-ini/apple-pi) and Pi
 - Swift 6.1 if building from source
 
-Remote sessions only require whatever `pi-appd` itself requires on the remote host — Apple Pi does not need `python3` or any other tool installed on the remote beyond what `pi-appd` documents.
+Remote sessions only require whatever `pi-appd` itself requires on the remote host — pi-app does not need `python3` or any other tool installed on the remote beyond what `pi-appd` documents.
 
 ## License
 

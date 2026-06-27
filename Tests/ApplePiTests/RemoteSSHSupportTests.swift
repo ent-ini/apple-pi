@@ -150,12 +150,12 @@ struct RemoteSSHSupportTests {
 
         let env = RemoteSSHSupport.remoteEnvironment(
             for: host,
-            askpassExecutable: "/Applications/ApplePi.app/Contents/MacOS/ApplePiAskpass",
+            askpassExecutable: "/Applications/pi-app.app/Contents/Resources/pi-app-askpass",
             parentEnvironment: parent
         )
 
         // The askpass plumbing is wired up …
-        #expect(env["SSH_ASKPASS"] == "/Applications/ApplePi.app/Contents/MacOS/ApplePiAskpass")
+        #expect(env["SSH_ASKPASS"] == "/Applications/pi-app.app/Contents/Resources/pi-app-askpass")
         #expect(env["SSH_ASKPASS_REQUIRE"] == "force")
         #expect(env["DISPLAY"] == ":0")
         // … and the parent's secret still does not leak.

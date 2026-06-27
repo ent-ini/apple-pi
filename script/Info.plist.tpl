@@ -3,7 +3,7 @@
 <plist version="1.0">
 <!--
   This is the source of truth for the bundle metadata written into
-  dist/Apple Pi.app/Contents/Info.plist. The packaging script
+  dist/pi-app.app/Contents/Info.plist. The packaging script
   (script/package_release.sh) substitutes the __TOKEN__ placeholders
   below with the values from its APP_NAME / BUNDLE_IDENTIFIER /
   EXECUTABLE_NAME / VERSION / BUILD_NUMBER environment variables and
@@ -34,13 +34,13 @@
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSDesktopFolderUsageDescription</key>
-    <string>Apple Pi launches terminal sessions in project folders you choose, including projects on your Desktop.</string>
+    <string>pi-app launches terminal sessions in project folders you choose, including projects on your Desktop.</string>
     <key>NSDocumentsFolderUsageDescription</key>
-    <string>Apple Pi launches terminal sessions in project folders you choose, including projects in Documents.</string>
+    <string>pi-app launches terminal sessions in project folders you choose, including projects in Documents.</string>
     <key>NSDownloadsFolderUsageDescription</key>
-    <string>Apple Pi launches terminal sessions in project folders you choose, including projects in Downloads.</string>
+    <string>pi-app launches terminal sessions in project folders you choose, including projects in Downloads.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Apple Pi can record voice prompts and transcribe them into chat messages before sending them to Pi.</string>
+    <string>pi-app can record voice prompts and transcribe them into chat messages before sending them to Pi.</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>

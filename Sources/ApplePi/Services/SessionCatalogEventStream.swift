@@ -1,6 +1,6 @@
 import Foundation
 
-/// One Server-Sent Event frame as delivered by the daemon. Apple Pi only
+/// One Server-Sent Event frame as delivered by the daemon. pi-app only
 /// needs the event name and the joined data payload — the catalog stream
 /// is fire-and-forget: each snapshot replaces the previous one and we
 /// never replay missed events.
@@ -106,7 +106,7 @@ struct RuntimePayloadContextUsage: Decodable {
 /// * A blank line dispatches the buffered event, or is a no-op when no
 ///   data was collected.
 /// * Unknown fields and the `id:` / `retry:` hints are intentionally
-///   dropped — Apple Pi owns its own reconnect cadence via the consumer's
+///   dropped — pi-app owns its own reconnect cadence via the consumer's
 ///   backoff loop.
 ///
 /// Malformed frames are dropped, not fatal. A single bad event from the

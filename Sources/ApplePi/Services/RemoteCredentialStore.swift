@@ -1,7 +1,7 @@
 import Foundation
 
 /// Stores SSH passwords on disk under Application Support, one file per host,
-/// mode 0600. The `ApplePiAskpass` helper reads the file path passed through
+/// mode 0600. The `pi-app-askpass` helper reads the file path passed through
 /// `SSH_ASKPASS_REQUIRE`-style env vars and prints the contents to stdout so
 /// OpenSSH can consume it as a password prompt answer.
 ///

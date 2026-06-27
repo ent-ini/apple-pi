@@ -1,10 +1,10 @@
-# Apple Pi <version>
+# pi-app <version>
 
-Public release of Apple Pi, a native macOS app for organising Pi coding-agent sessions.
+Public release of pi-app, a native macOS app for organising Pi coding-agent sessions.
 
 ## Download
 
-- `apple-pi-<version>-<build>.zip`
+- `pi-app-<version>-<build>.zip`
 - SHA-256: `<sha256>`
 
 ## Requirements
@@ -27,7 +27,7 @@ Public release of Apple Pi, a native macOS app for organising Pi coding-agent se
 
 ## Install
 
-Unzip the release, move `Apple Pi.app` to `/Applications`, and launch it.
+Unzip the release, move `pi-app.app` to `/Applications`, and launch it.
 
 macOS may warn that the app cannot be verified because the normal release is ad-hoc signed, not Developer ID notarized. See:
 
@@ -37,22 +37,22 @@ macOS may warn that the app cannot be verified because the normal release is ad-
 ## Verification
 
 ```sh
-shasum -a 256 "apple-pi-<version>-<build>.zip"
-codesign --verify --deep --strict --verbose=2 "Apple Pi.app"
-codesign --display --verbose=4 "Apple Pi.app"
-plutil -p "Apple Pi.app/Contents/Info.plist"
+shasum -a 256 "pi-app-<version>-<build>.zip"
+codesign --verify --deep --strict --verbose=2 "pi-app.app"
+codesign --display --verbose=4 "pi-app.app"
+plutil -p "pi-app.app/Contents/Info.plist"
 ```
 
 For ad-hoc builds, Gatekeeper assessment may reject the app. That is expected for this signing model. Use the published SHA-256 hash, source tag, code signature structure, and local rebuild path as the trust chain.
 
 ## Notes
 
-- Apple Pi does not install Pi.
-- Apple Pi does not manage SSH keys or store SSH passwords.
-- Apple Pi does not store model API keys or Pi session transcripts.
+- pi-app does not install Pi.
+- pi-app does not manage SSH keys or store SSH passwords.
+- pi-app does not store model API keys or Pi session transcripts.
 - The macOS client never shells out to `python3`, `ssh`, or any other tool on the remote host. Remote access is the `pi-appd` HTTP daemon, not a built-in SSH client.
 - Remote API mode can browse, start, and resume remote sessions, but it does not delete remote session files.
-- Remote notifications require notification support configured on the remote host; the bundled helper is only loaded into local sessions started by Apple Pi.
+- Remote notifications require notification support configured on the remote host; the bundled helper is only loaded into local sessions started by pi-app.
 - SwiftTerm is vendored at `Vendor/SwiftTerm` for a future in-app terminal surface. The current release renders Pi conversations as chat, not as a SwiftTerm-backed terminal view.
 - The app checks GitHub releases once every 24 hours and never updates itself automatically.
 

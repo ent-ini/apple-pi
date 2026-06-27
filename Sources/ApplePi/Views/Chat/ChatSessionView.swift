@@ -80,7 +80,7 @@ struct ChatSessionView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Allow microphone access for Apple Pi in System Settings → Privacy & Security → Microphone.")
+            Text("Allow microphone access for pi-app in System Settings → Privacy & Security → Microphone.")
         }
     }
 

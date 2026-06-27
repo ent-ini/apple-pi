@@ -36,7 +36,7 @@ struct UpdateCheckService: Sendable {
         request.httpMethod = "GET"
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-        request.setValue("ApplePi", forHTTPHeaderField: "User-Agent")
+        request.setValue("pi-app", forHTTPHeaderField: "User-Agent")
 
         let result = try await fetch(request)
         guard result.statusCode == 200 else { return nil }
