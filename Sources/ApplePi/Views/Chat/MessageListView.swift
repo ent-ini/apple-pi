@@ -46,7 +46,8 @@ struct MessageListView: View {
                             }
                             .id(Self.bottomAnchorID)
                     }
-                    .padding(20)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 20)
                     .frame(minHeight: proxy.size.height, alignment: .top)
                 }
                 .coordinateSpace(name: Self.scrollCoordinateSpaceName)
@@ -145,8 +146,9 @@ struct MessageListView: View {
     private static let pendingAssistantBubbleID = "chat.list.pending.assistant"
     static let scrollCoordinateSpaceName = "chat.list.scroll"
     private static let bottomStickinessBuffer: CGFloat = 96
-    private static let stickyAutoScrollDuration: TimeInterval = 0.75
-    private static let scrollSettleDelays: [TimeInterval] = [0, 0.016, 0.05, 0.12, 0.25, 0.45]
+    private static let bottomReachedEpsilon: CGFloat = 3
+    private static let stickyAutoScrollDuration: TimeInterval = 1.25
+    private static let scrollSettleDelays: [TimeInterval] = [0, 0.016, 0.05, 0.12, 0.25, 0.45, 0.8, 1.2]
 
     private var displayedRows: [DisplayedSessionRow] {
         DisplayedSessionRow.groupingToolResults(in: session.events.filter(\.isVisibleInTranscript))
@@ -194,7 +196,8 @@ struct MessageListView: View {
         let distanceToBottom = bottomMaxY - viewportHeight
         if isStickyAutoScrollActive {
             isAnchoredToBottom = true
-            if distanceToBottom > 1 {
+            if distanceToBottom > Self.bottomReachedEpsilon {
+                stickyAutoScrollUntil = Date().addingTimeInterval(Self.stickyAutoScrollDuration)
                 scrollToBottomSettled(using: scrollProxy, animated: false, completesInitialPlacement: false)
             }
             return
@@ -204,8 +207,12 @@ struct MessageListView: View {
 
     private func scrollToBottomIfNeeded(using scrollProxy: ScrollViewProxy) {
         guard isAnchoredToBottom || isStickyAutoScrollActive || transcriptEndsWithUserMessage else { return }
-        stickyAutoScrollUntil = Date().addingTimeInterval(Self.stickyAutoScrollDuration)
+        startStickyAutoScroll()
         scrollToBottomSettled(using: scrollProxy, animated: true, completesInitialPlacement: false)
+    }
+
+    private func startStickyAutoScroll() {
+        stickyAutoScrollUntil = Date().addingTimeInterval(Self.stickyAutoScrollDuration)
     }
 
     private func scrollToBottom(using scrollProxy: ScrollViewProxy, animated: Bool) {
