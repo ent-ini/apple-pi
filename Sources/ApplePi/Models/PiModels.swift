@@ -228,6 +228,8 @@ struct PiLaunchRequest: Hashable, Sendable {
     var initialModelProvider: String?
     var initialModelID: String?
     var initialThinkingLevel: String?
+    var hasExplicitInitialModel: Bool
+    var hasExplicitInitialThinkingLevel: Bool
 
     init(
         workingDirectory: String? = nil,
@@ -238,7 +240,9 @@ struct PiLaunchRequest: Hashable, Sendable {
         initialPrompt: String? = nil,
         initialModelProvider: String? = nil,
         initialModelID: String? = nil,
-        initialThinkingLevel: String? = nil
+        initialThinkingLevel: String? = nil,
+        hasExplicitInitialModel: Bool = false,
+        hasExplicitInitialThinkingLevel: Bool = false
     ) {
         self.workingDirectory = workingDirectory
         self.sessionPath = sessionPath
@@ -249,6 +253,8 @@ struct PiLaunchRequest: Hashable, Sendable {
         self.initialModelProvider = initialModelProvider
         self.initialModelID = initialModelID
         self.initialThinkingLevel = initialThinkingLevel
+        self.hasExplicitInitialModel = hasExplicitInitialModel
+        self.hasExplicitInitialThinkingLevel = hasExplicitInitialThinkingLevel
     }
 
     static func resume(_ session: PiSessionSummary) -> PiLaunchRequest {

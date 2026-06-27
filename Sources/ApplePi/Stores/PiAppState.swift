@@ -403,11 +403,9 @@ final class PiAppState: ObservableObject {
             return false
         }
 
-        // Display daemon defaults in the pending tab, but do not bake them
-        // into the launch request. The daemon should apply its current
-        // settings at send time unless the user explicitly chooses a model
-        // or thinking level for this pending session.
-        session.updateLaunchRequest(request)
+        var requestWithDefaults = request
+        requestWithDefaults.applyDefaults(from: snapshot.runtimeState)
+        session.updateLaunchRequest(requestWithDefaults)
         session.updateRuntimeState(snapshot.runtimeState)
         if session.availableModels.isEmpty {
             session.updateAvailableModels(snapshot.availableModels)
@@ -570,6 +568,7 @@ final class PiAppState: ObservableObject {
             sessionPath: nil,
             launchRequest: request
         )
+        selection = nil
         _ = applyBestKnownSessionDefaults(to: tab)
         hydratePendingSessionDefaults(for: tab)
         statusMessage = isTemporary ? "Started temporary Pi session" : "Started new Pi session"
@@ -900,9 +899,10 @@ final class PiAppState: ObservableObject {
                     }
                 )
             } else if let launchRequest = session?.launchRequest {
+                let effectiveLaunchRequest = await remoteLaunchRequestApplyingFreshDefaults(launchRequest)
                 try await RemoteDaemonClient().streamNewSession(
                     host: self.host,
-                    request: launchRequest,
+                    request: effectiveLaunchRequest,
                     prompt: prompt,
                     attachments: daemonAttachments,
                     onEvent: { [weak self, weak session] event in
@@ -923,6 +923,28 @@ final class PiAppState: ObservableObject {
         } catch {
             return .failure(error.localizedDescription)
         }
+    }
+
+    private func remoteLaunchRequestApplyingFreshDefaults(_ launchRequest: PiLaunchRequest) async -> PiLaunchRequest {
+        var request = launchRequest
+        guard host.usesRemoteDaemonTransport,
+              (!request.hasExplicitInitialModel || !request.hasExplicitInitialThinkingLevel) else {
+            return request
+        }
+
+        do {
+            let snapshot = try await RemoteDaemonClient().loadSessionDefaults(
+                host: host,
+                workingDirectory: request.workingDirectory
+            )
+            cacheSessionDefaults(snapshot, for: request.workingDirectory)
+            request.applyDefaults(from: snapshot.runtimeState)
+        } catch {
+            if let snapshot = sessionDefaultsCache[sessionDefaultsCacheKey(for: request.workingDirectory)] {
+                request.applyDefaults(from: snapshot.runtimeState)
+            }
+        }
+        return request
     }
 
     private func applyTurnStreamEvent(_ event: PiTurnStreamEvent, to session: ChatSession) {
@@ -1010,7 +1032,8 @@ final class PiAppState: ObservableObject {
                 await MainActor.run {
                     guard let self, let session, self.host == remoteHost, session.sessionID == nil else { return }
                     self.cacheSessionDefaults(snapshot, for: launchRequest.workingDirectory)
-                    let request = session.launchRequest ?? launchRequest
+                    var request = session.launchRequest ?? launchRequest
+                    request.applyDefaults(from: snapshot.runtimeState)
                     session.updateLaunchRequest(request)
                     session.updateRuntimeState(snapshot.runtimeState)
                     session.updateAvailableModels(snapshot.availableModels)
@@ -1120,6 +1143,7 @@ final class PiAppState: ObservableObject {
             if var request = session.launchRequest {
                 request.initialModelProvider = model.provider
                 request.initialModelID = model.modelID
+                request.hasExplicitInitialModel = true
                 session.updateLaunchRequest(request)
             }
             if let current = session.runtimeState {
@@ -1195,6 +1219,7 @@ final class PiAppState: ObservableObject {
             let nextLevel = nextThinkingLevel(after: session.runtimeState?.thinkingLevel ?? "off")
             if var request = session.launchRequest {
                 request.initialThinkingLevel = nextLevel
+                request.hasExplicitInitialThinkingLevel = true
                 session.updateLaunchRequest(request)
             }
             if let current = session.runtimeState {
@@ -2128,7 +2153,7 @@ final class PiAppState: ObservableObject {
             let aliases = Set(sessionAliases(for: session))
             let isSelected = chatWorkspace.selectedTab?.id == session.id
             let existsInSidebar = sessions.contains { !aliases.isDisjoint(with: Set(sessionAliases(for: $0))) }
-            let shouldPreserve = session.isSending || !Self.isPersistedTabKey(session.key) || (isSelected && !existsInSidebar)
+            let shouldPreserve = session.isSending || session.sessionID != nil || (isSelected && !existsInSidebar && session.sessionID != nil)
             guard shouldPreserve else { continue }
             upsertSidebarSession(for: session)
         }
@@ -2353,5 +2378,23 @@ final class PiAppState: ObservableObject {
             uploaded.append(try await client.uploadAttachment(host: host, attachment: attachment))
         }
         return uploaded
+    }
+}
+
+private extension PiLaunchRequest {
+    mutating func applyDefaults(from runtime: SessionRuntimeState) {
+        if !hasExplicitInitialModel {
+            if let provider = runtime.provider?.nilIfBlank,
+               let modelID = runtime.modelID?.nilIfBlank {
+                initialModelProvider = provider
+                initialModelID = modelID
+            } else {
+                initialModelProvider = nil
+                initialModelID = nil
+            }
+        }
+        if !hasExplicitInitialThinkingLevel {
+            initialThinkingLevel = runtime.thinkingLevel.nilIfBlank
+        }
     }
 }
