@@ -13,6 +13,10 @@ struct MessageListView: View {
     @State private var stickyAutoScrollUntil: Date?
     @State private var visibilityFrames: [String: CGRect] = [:]
     @State private var hasCompletedInitialPlacement = false
+    @State private var bottomScrollWorkItems: [DispatchWorkItem] = []
+    @State private var ensureVisibleWorkItems: [DispatchWorkItem] = []
+    @State private var bottomScrollGeneration = 0
+    @State private var ensureVisibleGeneration = 0
 
     var body: some View {
         GeometryReader { proxy in
@@ -63,7 +67,7 @@ struct MessageListView: View {
                 }
                 .onPreferenceChange(ChatVisibilityTargetPreferenceKey.self) { frames in
                     visibilityFrames = frames
-                    if isStickyAutoScrollActive {
+                    if isStickyAutoScrollActive, bottomScrollWorkItems.isEmpty {
                         scrollToBottomSettled(using: scrollProxy, animated: false, completesInitialPlacement: false)
                     }
                 }
@@ -91,6 +95,10 @@ struct MessageListView: View {
                         return
                     }
                     scrollToBottomSettled(using: scrollProxy, animated: false, completesInitialPlacement: true)
+                }
+                .onDisappear {
+                    cancelBottomScrollWorkItems()
+                    cancelEnsureVisibleWorkItems()
                 }
             }
         }
@@ -145,10 +153,11 @@ struct MessageListView: View {
     private static let bottomAnchorID = "chat.list.bottom"
     private static let pendingAssistantBubbleID = "chat.list.pending.assistant"
     static let scrollCoordinateSpaceName = "chat.list.scroll"
-    private static let bottomStickinessBuffer: CGFloat = 96
+    private static let bottomStickinessBuffer: CGFloat = 180
     private static let bottomReachedEpsilon: CGFloat = 3
-    private static let stickyAutoScrollDuration: TimeInterval = 1.25
-    private static let scrollSettleDelays: [TimeInterval] = [0, 0.016, 0.05, 0.12, 0.25, 0.45, 0.8, 1.2]
+    private static let stickyAutoScrollDuration: TimeInterval = 1.6
+    private static let scrollSettleDelays: [TimeInterval] = [0, 0.025, 0.08, 0.18, 0.36, 0.7, 1.15]
+    private static let ensureVisibleSettleDelays: [TimeInterval] = [0.04, 0.16, 0.34, 0.65]
 
     private var displayedRows: [DisplayedSessionRow] {
         DisplayedSessionRow.groupingToolResults(in: session.events.filter(\.isVisibleInTranscript))
@@ -198,7 +207,9 @@ struct MessageListView: View {
             isAnchoredToBottom = true
             if distanceToBottom > Self.bottomReachedEpsilon {
                 stickyAutoScrollUntil = Date().addingTimeInterval(Self.stickyAutoScrollDuration)
-                scrollToBottomSettled(using: scrollProxy, animated: false, completesInitialPlacement: false)
+                if bottomScrollWorkItems.isEmpty {
+                    scrollToBottomSettled(using: scrollProxy, animated: false, completesInitialPlacement: false)
+                }
             }
             return
         }
@@ -226,21 +237,40 @@ struct MessageListView: View {
     }
 
     private func scrollToBottomSettled(using scrollProxy: ScrollViewProxy, animated: Bool, completesInitialPlacement: Bool) {
-        for (index, delay) in Self.scrollSettleDelays.enumerated() {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+        cancelEnsureVisibleWorkItems()
+        cancelBottomScrollWorkItems()
+        bottomScrollGeneration &+= 1
+        let generation = bottomScrollGeneration
+
+        let workItems = Self.scrollSettleDelays.enumerated().map { index, delay in
+            let item = DispatchWorkItem {
+                guard bottomScrollGeneration == generation else { return }
                 scrollToBottom(using: scrollProxy, animated: animated && index == 0)
-                if completesInitialPlacement, index == Self.scrollSettleDelays.count - 1 {
-                    hasCompletedInitialPlacement = true
+                if index == Self.scrollSettleDelays.count - 1 {
+                    if completesInitialPlacement {
+                        hasCompletedInitialPlacement = true
+                    }
+                    if bottomScrollGeneration == generation {
+                        bottomScrollWorkItems = []
+                    }
                 }
             }
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+            return item
         }
+        bottomScrollWorkItems = workItems
     }
 
     private func ensureVisible(_ targetID: String, using scrollProxy: ScrollViewProxy, viewportHeight: CGFloat) {
         stickyAutoScrollUntil = nil
-        let settleDelays: [TimeInterval] = [0.04, 0.16, 0.32, 0.55, 0.85]
-        for delay in settleDelays {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+        cancelBottomScrollWorkItems()
+        cancelEnsureVisibleWorkItems()
+        ensureVisibleGeneration &+= 1
+        let generation = ensureVisibleGeneration
+
+        let workItems = Self.ensureVisibleSettleDelays.enumerated().map { index, delay in
+            let item = DispatchWorkItem {
+                guard ensureVisibleGeneration == generation else { return }
                 guard let frame = visibilityFrames[targetID] else { return }
                 let topInset: CGFloat = 24
                 let bottomInset: CGFloat = 24
@@ -258,8 +288,27 @@ struct MessageListView: View {
                 withAnimation(.easeOut(duration: 0.18)) {
                     scrollProxy.scrollTo(targetID, anchor: anchor)
                 }
+                if index == Self.ensureVisibleSettleDelays.count - 1,
+                   ensureVisibleGeneration == generation {
+                    ensureVisibleWorkItems = []
+                }
             }
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+            return item
         }
+        ensureVisibleWorkItems = workItems
+    }
+
+    private func cancelBottomScrollWorkItems() {
+        bottomScrollGeneration &+= 1
+        bottomScrollWorkItems.forEach { $0.cancel() }
+        bottomScrollWorkItems = []
+    }
+
+    private func cancelEnsureVisibleWorkItems() {
+        ensureVisibleGeneration &+= 1
+        ensureVisibleWorkItems.forEach { $0.cancel() }
+        ensureVisibleWorkItems = []
     }
 }
 
