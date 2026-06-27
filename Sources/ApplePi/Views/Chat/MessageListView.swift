@@ -263,11 +263,11 @@ struct ChatVisibilityTargetPreferenceKey: PreferenceKey {
 }
 
 private struct ChatEnsureVisibleEnvironmentKey: EnvironmentKey {
-    static let defaultValue: (String) -> Void = { _ in }
+    @MainActor static let defaultValue: @MainActor @Sendable (String) -> Void = { _ in }
 }
 
 extension EnvironmentValues {
-    var chatEnsureVisible: (String) -> Void {
+    var chatEnsureVisible: @MainActor @Sendable (String) -> Void {
         get { self[ChatEnsureVisibleEnvironmentKey.self] }
         set { self[ChatEnsureVisibleEnvironmentKey.self] = newValue }
     }
