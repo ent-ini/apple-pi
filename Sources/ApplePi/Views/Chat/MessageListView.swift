@@ -50,9 +50,9 @@ struct MessageListView: View {
                     .frame(minHeight: proxy.size.height, alignment: .top)
                 }
                 .coordinateSpace(name: Self.scrollCoordinateSpaceName)
-                .environment(\.chatEnsureVisible) { targetID in
+                .environment(\.chatEnsureVisible, ChatEnsureVisibleAction { targetID in
                     ensureVisible(targetID, using: scrollProxy, viewportHeight: proxy.size.height)
-                }
+                })
                 .onPreferenceChange(BottomAnchorMaxYPreferenceKey.self) { bottomMaxY in
                     updateBottomAnchoring(
                         bottomMaxY: bottomMaxY,
@@ -262,12 +262,21 @@ struct ChatVisibilityTargetPreferenceKey: PreferenceKey {
     }
 }
 
+struct ChatEnsureVisibleAction: @unchecked Sendable {
+    let action: @MainActor (String) -> Void
+
+    @MainActor
+    func callAsFunction(_ targetID: String) {
+        action(targetID)
+    }
+}
+
 private struct ChatEnsureVisibleEnvironmentKey: EnvironmentKey {
-    @MainActor static let defaultValue: @MainActor @Sendable (String) -> Void = { _ in }
+    static let defaultValue = ChatEnsureVisibleAction { _ in }
 }
 
 extension EnvironmentValues {
-    var chatEnsureVisible: @MainActor @Sendable (String) -> Void {
+    var chatEnsureVisible: ChatEnsureVisibleAction {
         get { self[ChatEnsureVisibleEnvironmentKey.self] }
         set { self[ChatEnsureVisibleEnvironmentKey.self] = newValue }
     }
