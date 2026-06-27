@@ -943,16 +943,26 @@ func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	} else if strings.TrimSpace(request.SessionName) != "" {
 		args = append(args, "--name", strings.TrimSpace(request.SessionName))
 	}
+	settings := s.loadAgentSettings()
 	prePromptCommands := make([]any, 0, 2)
-	if provider := strings.TrimSpace(request.InitialModelProvider); provider != "" {
-		modelID := strings.TrimSpace(request.InitialModelID)
+	provider := strings.TrimSpace(request.InitialModelProvider)
+	modelID := strings.TrimSpace(request.InitialModelID)
+	if provider == "" && modelID == "" {
+		provider = strings.TrimSpace(settings.DefaultProvider)
+		modelID = strings.TrimSpace(settings.DefaultModel)
+	}
+	if provider != "" {
 		if modelID == "" {
 			writeError(w, http.StatusBadRequest, "initialModelId is required when initialModelProvider is set")
 			return
 		}
 		prePromptCommands = append(prePromptCommands, rpcSimpleCommand{Type: "set_model", Provider: provider, ModelID: modelID})
 	}
-	if level := strings.TrimSpace(strings.ToLower(request.InitialThinkingLevel)); level != "" {
+	level := strings.TrimSpace(strings.ToLower(request.InitialThinkingLevel))
+	if level == "" {
+		level = strings.TrimSpace(strings.ToLower(settings.DefaultThinkingLevel))
+	}
+	if level != "" {
 		if level == "none" {
 			level = "off"
 		}

@@ -38,7 +38,7 @@ struct MessageListView: View {
                                     Color.clear
                                         .preference(
                                             key: BottomAnchorMaxYPreferenceKey.self,
-                                            value: anchorProxy.frame(in: .global).maxY
+                                            value: anchorProxy.frame(in: .named(Self.scrollCoordinateSpaceName)).maxY
                                         )
                                 }
                             }
@@ -49,7 +49,7 @@ struct MessageListView: View {
                 }
                 .coordinateSpace(name: Self.scrollCoordinateSpaceName)
                 .onPreferenceChange(BottomAnchorMaxYPreferenceKey.self) { bottomMaxY in
-                    isAnchoredToBottom = bottomMaxY <= proxy.frame(in: .global).maxY + 72
+                    isAnchoredToBottom = bottomMaxY <= proxy.size.height + Self.bottomStickinessBuffer
                 }
                 .onChange(of: session.streamRevision) { _, _ in
                     scrollToBottomIfNeeded(using: scrollProxy)
@@ -117,6 +117,7 @@ struct MessageListView: View {
     private static let bottomAnchorID = "chat.list.bottom"
     private static let pendingAssistantBubbleID = "chat.list.pending.assistant"
     private static let scrollCoordinateSpaceName = "chat.list.scroll"
+    private static let bottomStickinessBuffer: CGFloat = 96
 
     private var displayedRows: [DisplayedSessionRow] {
         DisplayedSessionRow.groupingToolResults(in: session.events.filter(\.isVisibleInTranscript))
@@ -147,7 +148,7 @@ struct MessageListView: View {
 
     private func scrollToBottomIfNeeded(using scrollProxy: ScrollViewProxy) {
         guard isAnchoredToBottom else { return }
-        scrollToBottom(using: scrollProxy, animated: true)
+        scrollToBottomSettled(using: scrollProxy, animated: true, completesInitialPlacement: false)
     }
 
     private func scrollToBottom(using scrollProxy: ScrollViewProxy, animated: Bool) {

@@ -72,6 +72,7 @@ extension PiHostConfiguration {
             components.append(remotePiExecutable)
         }
         components.append(remoteDaemonURL)
+        components.append(defaultWorkingDirectory)
         return components.joined(separator: "|")
     }
 }

@@ -3,57 +3,20 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var appState: PiAppState
-    @AppStorage("ApplePi.showsProjectSidebar") private var wantsProjectSidebar = true
     @AppStorage("ApplePi.showsSessionList") private var wantsSessionList = true
-    @AppStorage("ApplePi.projectSidebarWidth") private var storedProjectSidebarWidth = PaneLayout.projectSidebarDefault
     @AppStorage("ApplePi.sessionListWidth") private var storedSessionListWidth = PaneLayout.sessionListDefault
-    @State private var liveProjectSidebarWidth: Double?
     @State private var liveSessionListWidth: Double?
     @State private var activeResize: ActivePaneResize?
 
     var body: some View {
         GeometryReader { proxy in
-            let projectSidebarWidth = liveProjectSidebarWidth ?? storedProjectSidebarWidth
             let sessionListWidth = liveSessionListWidth ?? storedSessionListWidth
             let paneVisibility = AdaptivePaneVisibility(
                 windowWidth: proxy.size.width,
-                wantsProjectSidebar: wantsProjectSidebar,
                 wantsSessionList: wantsSessionList
             )
 
             HStack(spacing: 0) {
-                if paneVisibility.showsProjectSidebar {
-                    ProjectSidebarView()
-                        .frame(width: PaneLayout.clampedProjectSidebarWidth(projectSidebarWidth))
-                        .transition(.move(edge: .leading).combined(with: .opacity))
-                    PaneResizeHandle(
-                        topInset: proxy.safeAreaInsets.top,
-                        onDragStart: {
-                            activeResize = ActivePaneResize(
-                                startingProjectWidth: projectSidebarWidth,
-                                startingSessionWidth: sessionListWidth
-                            )
-                        },
-                        onDrag: { translation in
-                            let startWidth = activeResize?.startingProjectWidth ?? projectSidebarWidth
-                            let nextWidth = PaneLayout.clampedProjectSidebarWidth(startWidth + translation)
-                            withTransaction(Transaction(animation: nil)) {
-                                liveProjectSidebarWidth = Double(nextWidth)
-                            }
-                        },
-                        onDragEnd: {
-                            let finalWidth = liveProjectSidebarWidth ?? projectSidebarWidth
-                            storedProjectSidebarWidth = finalWidth
-                            activeResize = nil
-                            if finalWidth <= PaneLayout.projectSidebarCollapseThreshold {
-                                withAnimation(.snappy(duration: 0.18)) {
-                                    wantsProjectSidebar = false
-                                }
-                            }
-                        }
-                    )
-                }
-
                 if paneVisibility.showsSessionList {
                     SessionListView()
                         .frame(width: PaneLayout.clampedSessionListWidth(sessionListWidth))
@@ -61,10 +24,7 @@ struct ContentView: View {
                     PaneResizeHandle(
                         topInset: proxy.safeAreaInsets.top,
                         onDragStart: {
-                            activeResize = ActivePaneResize(
-                                startingProjectWidth: projectSidebarWidth,
-                                startingSessionWidth: sessionListWidth
-                            )
+                            activeResize = ActivePaneResize(startingSessionWidth: sessionListWidth)
                         },
                         onDrag: { translation in
                             let startWidth = activeResize?.startingSessionWidth ?? sessionListWidth
@@ -93,12 +53,7 @@ struct ContentView: View {
         }
         .background(AppBackdrop(appearance: appState.appearance))
         .onAppear {
-            liveProjectSidebarWidth = storedProjectSidebarWidth
             liveSessionListWidth = storedSessionListWidth
-        }
-        .onChange(of: storedProjectSidebarWidth) { _, newValue in
-            guard activeResize == nil else { return }
-            liveProjectSidebarWidth = newValue
         }
         .onChange(of: storedSessionListWidth) { _, newValue in
             guard activeResize == nil else { return }
@@ -125,13 +80,6 @@ struct ContentView: View {
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
                 Button {
-                    toggleProjectSidebar()
-                } label: {
-                    Label("Projects", systemImage: "sidebar.left")
-                }
-                .help(wantsProjectSidebar ? "Hide projects" : "Show projects")
-
-                Button {
                     toggleSessionList()
                 } label: {
                     Label("Sessions", systemImage: "sidebar.right")
@@ -152,10 +100,6 @@ struct ContentView: View {
                     Button("New Temporary Session") {
                         appState.openTemporarySessionInCurrentFolder()
                     }
-                    Button("New Session in Folder...") {
-                        appState.presentNewSessionInFolder()
-                    }
-                    Divider()
                     Button("Refresh Sessions") {
                         appState.refreshCatalog()
                     }
@@ -185,16 +129,6 @@ struct ContentView: View {
         }
     }
 
-    private func toggleProjectSidebar() {
-        if !wantsProjectSidebar && storedProjectSidebarWidth <= PaneLayout.projectSidebarCollapseThreshold {
-            storedProjectSidebarWidth = PaneLayout.projectSidebarReopenWidth
-            liveProjectSidebarWidth = PaneLayout.projectSidebarReopenWidth
-        }
-        withAnimation(.snappy(duration: 0.18)) {
-            wantsProjectSidebar.toggle()
-        }
-    }
-
     private func toggleSessionList() {
         if !wantsSessionList && storedSessionListWidth <= PaneLayout.sessionListCollapseThreshold {
             storedSessionListWidth = PaneLayout.sessionListReopenWidth
@@ -220,20 +154,11 @@ struct ContentView: View {
 private enum PaneLayout {
     static let resizeHandleWidth: CGFloat = 1
     static let resizeHandleHitWidth: CGFloat = 14
-    static let projectSidebarMinimum: Double = 72
-    static let projectSidebarDefault: Double = 252
-    static let projectSidebarMaximum: Double = 360
-    static let projectSidebarCollapseThreshold: Double = 84
-    static let projectSidebarReopenWidth: Double = 148
     static let sessionListMinimum: Double = 88
     static let sessionListDefault: Double = 330
     static let sessionListMaximum: Double = 480
     static let sessionListCollapseThreshold: Double = 104
     static let sessionListReopenWidth: Double = 176
-
-    static func clampedProjectSidebarWidth(_ width: Double) -> CGFloat {
-        CGFloat(min(max(width, projectSidebarMinimum), projectSidebarMaximum))
-    }
 
     static func clampedSessionListWidth(_ width: Double) -> CGFloat {
         CGFloat(min(max(width, sessionListMinimum), sessionListMaximum))
@@ -241,7 +166,6 @@ private enum PaneLayout {
 }
 
 private struct ActivePaneResize {
-    let startingProjectWidth: Double
     let startingSessionWidth: Double
 }
 
@@ -304,29 +228,13 @@ private struct PaneResizeHandle: View {
 }
 
 private struct AdaptivePaneVisibility: Equatable {
-    let showsProjectSidebar: Bool
     let showsSessionList: Bool
 
-    init(windowWidth: CGFloat, wantsProjectSidebar: Bool, wantsSessionList: Bool) {
+    init(windowWidth: CGFloat, wantsSessionList: Bool) {
         let minimumDetailWidth: CGFloat = 320
-        let minimumProjectWidth: CGFloat = CGFloat(PaneLayout.projectSidebarMinimum)
         let minimumSessionWidth: CGFloat = CGFloat(PaneLayout.sessionListMinimum)
         let resizeHandleWidth = PaneLayout.resizeHandleWidth
-
-        switch (wantsProjectSidebar, wantsSessionList) {
-        case (true, true):
-            showsSessionList = windowWidth >= minimumDetailWidth + minimumSessionWidth + resizeHandleWidth
-            showsProjectSidebar = windowWidth >= minimumDetailWidth + minimumSessionWidth + minimumProjectWidth + (resizeHandleWidth * 2)
-        case (true, false):
-            showsSessionList = false
-            showsProjectSidebar = windowWidth >= minimumDetailWidth + minimumProjectWidth + resizeHandleWidth
-        case (false, true):
-            showsProjectSidebar = false
-            showsSessionList = windowWidth >= minimumDetailWidth + minimumSessionWidth + resizeHandleWidth
-        case (false, false):
-            showsProjectSidebar = false
-            showsSessionList = false
-        }
+        showsSessionList = wantsSessionList && windowWidth >= minimumDetailWidth + minimumSessionWidth + resizeHandleWidth
     }
 }
 
@@ -718,7 +626,7 @@ struct SessionListView: View {
 
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(appState.filteredSessions(for: appState.activeProject)) { session in
+                    ForEach(appState.filteredSessions()) { session in
                         SessionListRow(
                             session: session,
                             isSelected: appState.selectedSession?.id == session.id,
@@ -736,8 +644,7 @@ struct SessionListView: View {
             }
             .overlay {
                 if !appState.isLoadingCatalog,
-                   (appState.activeProject != nil || appState.hasActiveSessionSearch),
-                   appState.filteredSessions(for: appState.activeProject).isEmpty {
+                   appState.filteredSessions().isEmpty {
                     EmptyCatalogView(
                         title: appState.hasActiveSessionSearch ? "No Matches" : "No Sessions",
                         systemImage: appState.hasActiveSessionSearch ? "magnifyingglass" : "text.bubble",

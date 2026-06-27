@@ -270,6 +270,7 @@ struct SettingsView: View {
             }
             TextField("Local Pi executable", text: editingHostBinding(\.piExecutable))
             TextField("Agent directory", text: editingHostBinding(\.agentDirectory))
+            TextField("Default workspace", text: editingHostBinding(\.defaultWorkingDirectory))
         } header: {
             Text("Pi Host")
         } footer: {

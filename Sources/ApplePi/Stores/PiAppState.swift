@@ -227,11 +227,10 @@ final class PiAppState: ObservableObject {
             .sorted { effectiveLastActivity(for: $0) > effectiveLastActivity(for: $1) }
     }
 
-    func filteredSessions(for project: PiProject?) -> [PiSessionSummary] {
+    func filteredSessions(for project: PiProject? = nil) -> [PiSessionSummary] {
         let query = sessionSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let baseSessions: [PiSessionSummary]
-        if query.isEmpty {
-            guard let project else { return [] }
+        if let project, query.isEmpty {
             baseSessions = sessions(for: project)
         } else {
             baseSessions = sessions.sorted { effectiveLastActivity(for: $0) > effectiveLastActivity(for: $1) }
@@ -370,11 +369,14 @@ final class PiAppState: ObservableObject {
     }
 
     private var fallbackWorkingDirectory: String {
-        host.usesRemoteDaemonTransport || host.mode == .remoteSSH ? "~" : NSHomeDirectory()
+        if let configured = host.defaultWorkingDirectory.nilIfBlank {
+            return configured
+        }
+        return host.usesRemoteDaemonTransport || host.mode == .remoteSSH ? "~/ai-agent/workspace" : NSHomeDirectory()
     }
 
     private var preferredWorkingDirectory: String {
-        selectedWorkingDirectory?.nilIfBlank ?? fallbackWorkingDirectory
+        fallbackWorkingDirectory
     }
 
     private func sessionDefaultsCacheKey(for workingDirectory: String?) -> String {
@@ -401,11 +403,11 @@ final class PiAppState: ObservableObject {
             return false
         }
 
-        var nextRequest = request
-        if nextRequest.initialModelProvider == nil { nextRequest.initialModelProvider = snapshot.runtimeState.provider }
-        if nextRequest.initialModelID == nil { nextRequest.initialModelID = snapshot.runtimeState.modelID }
-        if nextRequest.initialThinkingLevel == nil { nextRequest.initialThinkingLevel = snapshot.runtimeState.thinkingLevel }
-        session.updateLaunchRequest(nextRequest)
+        // Display daemon defaults in the pending tab, but do not bake them
+        // into the launch request. The daemon should apply its current
+        // settings at send time unless the user explicitly chooses a model
+        // or thinking level for this pending session.
+        session.updateLaunchRequest(request)
         session.updateRuntimeState(snapshot.runtimeState)
         if session.availableModels.isEmpty {
             session.updateAvailableModels(snapshot.availableModels)
@@ -441,7 +443,6 @@ final class PiAppState: ObservableObject {
         newSessionName = ""
         newSessionIsTemporary = isTemporary
         showsNewSessionSheet = true
-        prepareRemoteDirectoryBrowserIfNeeded()
     }
 
     func openNewSession() {
@@ -744,7 +745,7 @@ final class PiAppState: ObservableObject {
         }
 
         let launchRequest = session.launchRequest ?? PiLaunchRequest(
-            workingDirectory: selectedWorkingDirectory,
+            workingDirectory: preferredWorkingDirectory,
             sessionPath: session.sessionPath,
             forkPath: nil,
             sessionName: nil,
@@ -1009,10 +1010,7 @@ final class PiAppState: ObservableObject {
                 await MainActor.run {
                     guard let self, let session, self.host == remoteHost, session.sessionID == nil else { return }
                     self.cacheSessionDefaults(snapshot, for: launchRequest.workingDirectory)
-                    var request = session.launchRequest ?? launchRequest
-                    if request.initialModelProvider == nil { request.initialModelProvider = snapshot.runtimeState.provider }
-                    if request.initialModelID == nil { request.initialModelID = snapshot.runtimeState.modelID }
-                    if request.initialThinkingLevel == nil { request.initialThinkingLevel = snapshot.runtimeState.thinkingLevel }
+                    let request = session.launchRequest ?? launchRequest
                     session.updateLaunchRequest(request)
                     session.updateRuntimeState(snapshot.runtimeState)
                     session.updateAvailableModels(snapshot.availableModels)

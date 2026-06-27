@@ -32,6 +32,7 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
     ///
     /// Example: `http://100.100.20.10:8787`.
     var remoteDaemonURL: String = ""
+    var defaultWorkingDirectory: String = "~/ai-agent/workspace"
 
     init(
         mode: PiHostMode = .local,
@@ -44,7 +45,8 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
         remoteAuthMethod: RemoteAuthMethod = .publicKey,
         remoteIdentityFile: String = "",
         remoteSSHConfigAlias: String = "",
-        remoteDaemonURL: String = ""
+        remoteDaemonURL: String = "",
+        defaultWorkingDirectory: String = "~/ai-agent/workspace"
     ) {
         self.mode = mode
         self.piExecutable = piExecutable
@@ -57,6 +59,7 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
         self.remoteIdentityFile = remoteIdentityFile
         self.remoteSSHConfigAlias = remoteSSHConfigAlias
         self.remoteDaemonURL = remoteDaemonURL
+        self.defaultWorkingDirectory = defaultWorkingDirectory
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -71,6 +74,7 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
         case remoteIdentityFile
         case remoteSSHConfigAlias
         case remoteDaemonURL
+        case defaultWorkingDirectory
     }
 
     init(from decoder: Decoder) throws {
@@ -86,6 +90,7 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
         remoteIdentityFile = try container.decodeIfPresent(String.self, forKey: .remoteIdentityFile) ?? ""
         remoteSSHConfigAlias = try container.decodeIfPresent(String.self, forKey: .remoteSSHConfigAlias) ?? ""
         remoteDaemonURL = try container.decodeIfPresent(String.self, forKey: .remoteDaemonURL) ?? ""
+        defaultWorkingDirectory = try container.decodeIfPresent(String.self, forKey: .defaultWorkingDirectory) ?? "~/ai-agent/workspace"
     }
 
     func encode(to encoder: Encoder) throws {
@@ -101,6 +106,7 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
         try container.encode(remoteIdentityFile, forKey: .remoteIdentityFile)
         try container.encode(remoteSSHConfigAlias, forKey: .remoteSSHConfigAlias)
         try container.encode(remoteDaemonURL, forKey: .remoteDaemonURL)
+        try container.encode(defaultWorkingDirectory, forKey: .defaultWorkingDirectory)
     }
 
     var sessionRoot: String {
