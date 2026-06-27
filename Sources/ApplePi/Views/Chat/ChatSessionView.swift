@@ -14,6 +14,7 @@ struct ChatSessionView: View {
     @State private var transcriptionTask: Task<Void, Never>?
     @State private var showMicrophonePermissionAlert = false
     @State private var showsModelPicker = false
+    @State private var modelPickerButtonFrame: CGRect = .zero
     @StateObject private var audioRecorder = AudioRecordingController()
 
     private let attachmentStagingService = AttachmentStagingService()
@@ -35,10 +36,24 @@ struct ChatSessionView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            MessageListView(session: session)
-            Divider().opacity(0.25)
-            composerArea
+        GeometryReader { proxy in
+            ZStack(alignment: .topLeading) {
+                VStack(spacing: 0) {
+                    MessageListView(session: session)
+                    Divider().opacity(0.25)
+                    composerArea
+                }
+
+                if showsModelPicker {
+                    modelPickerOverlay(containerSize: proxy.size)
+                        .zIndex(20)
+                        .transition(.opacity)
+                }
+            }
+            .coordinateSpace(name: Self.modelPickerCoordinateSpace)
+            .onPreferenceChange(ModelPickerButtonFramePreferenceKey.self) { frame in
+                modelPickerButtonFrame = frame
+            }
         }
         .onAppear {
             if session.sessionID != nil {
@@ -168,14 +183,7 @@ struct ChatSessionView: View {
             }
             .buttonStyle(.plain)
             .disabled(!canAdjustSessionOptions)
-            .overlay(alignment: .bottomTrailing) {
-                if showsModelPicker {
-                    modelPickerList
-                        .offset(y: -30)
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
-                        .zIndex(5)
-                }
-            }
+            .background(ModelPickerButtonFrameReader())
             .zIndex(5)
 
             Button {
@@ -213,12 +221,61 @@ struct ChatSessionView: View {
             .sorted { $0.provider.localizedCaseInsensitiveCompare($1.provider) == .orderedAscending }
     }
 
-    private var modelPickerList: some View {
+    fileprivate static let modelPickerCoordinateSpace = "chat.session.model.picker"
+    private static let modelPickerWidth: CGFloat = 320
+    private static let modelPickerMargin: CGFloat = 12
+    private static let modelPickerGap: CGFloat = 8
+
+    private var modelPickerIdealHeight: CGFloat {
+        guard !groupedModels.isEmpty else { return 52 }
+        let modelCount = groupedModels.reduce(0) { $0 + $1.models.count }
+        let groupCount = groupedModels.count
+        let groupSpacingCount = max(0, groupCount - 1)
+        return 16
+            + CGFloat(groupCount * 22)
+            + CGFloat(modelCount * 30)
+            + CGFloat(groupSpacingCount * 6)
+    }
+
+    private func modelPickerOverlay(containerSize: CGSize) -> some View {
+        let margin = Self.modelPickerMargin
+        let width = min(Self.modelPickerWidth, max(240, containerSize.width - (margin * 2)))
+        let hasButtonFrame = !modelPickerButtonFrame.isEmpty
+        let availableAboveButton = hasButtonFrame
+            ? max(160, modelPickerButtonFrame.minY - (margin * 2))
+            : max(160, containerSize.height - 80)
+        let height = min(modelPickerIdealHeight, availableAboveButton)
+        let x = hasButtonFrame
+            ? min(max(margin, modelPickerButtonFrame.maxX - width), max(margin, containerSize.width - width - margin))
+            : max(margin, containerSize.width - width - margin)
+        let y = hasButtonFrame
+            ? max(margin, modelPickerButtonFrame.minY - height - Self.modelPickerGap)
+            : max(margin, containerSize.height - height - 56)
+
+        return ZStack(alignment: .topLeading) {
+            Color.clear
+                .contentShape(Rectangle())
+                .frame(width: containerSize.width, height: containerSize.height)
+                .onTapGesture {
+                    withAnimation(.snappy(duration: 0.16)) {
+                        showsModelPicker = false
+                    }
+                }
+
+            modelPickerList(maxHeight: height)
+                .frame(width: width, height: height, alignment: .top)
+                .position(x: x + (width / 2), y: y + (height / 2))
+                .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .bottomTrailing)))
+        }
+    }
+
+    private func modelPickerList(maxHeight: CGFloat) -> some View {
         ModelPickerDropdown(
             groupedModels: groupedModels,
             accentColor: appState.appearance.accentColor,
             currentProvider: session.runtimeState?.provider,
             currentModelID: session.runtimeState?.modelID,
+            maxHeight: maxHeight,
             onSelect: { model in
                 withAnimation(.snappy(duration: 0.18)) {
                     showsModelPicker = false
@@ -556,11 +613,34 @@ private struct ModelGroup: Identifiable {
     var id: String { provider }
 }
 
+private struct ModelPickerButtonFramePreferenceKey: PreferenceKey {
+    static let defaultValue: CGRect = .zero
+
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if !next.isEmpty {
+            value = next
+        }
+    }
+}
+
+private struct ModelPickerButtonFrameReader: View {
+    var body: some View {
+        GeometryReader { proxy in
+            Color.clear.preference(
+                key: ModelPickerButtonFramePreferenceKey.self,
+                value: proxy.frame(in: .named(ChatSessionView.modelPickerCoordinateSpace))
+            )
+        }
+    }
+}
+
 private struct ModelPickerDropdown: View {
     let groupedModels: [ModelGroup]
     let accentColor: Color
     let currentProvider: String?
     let currentModelID: String?
+    let maxHeight: CGFloat
     let onSelect: (PiModelOption) -> Void
 
     var body: some View {
@@ -586,8 +666,8 @@ private struct ModelPickerDropdown: View {
             }
             .padding(8)
         }
-        .frame(width: 260)
-        .frame(maxHeight: 340, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxHeight: maxHeight, alignment: .top)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(.regularMaterial)
