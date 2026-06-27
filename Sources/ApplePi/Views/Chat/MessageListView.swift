@@ -238,12 +238,24 @@ struct MessageListView: View {
 
     private func ensureVisible(_ targetID: String, using scrollProxy: ScrollViewProxy, viewportHeight: CGFloat) {
         stickyAutoScrollUntil = nil
-        for delay in [0.20, 0.36] {
+        let settleDelays: [TimeInterval] = [0.04, 0.16, 0.32, 0.55, 0.85]
+        for delay in settleDelays {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                let frame = visibilityFrames[targetID]
-                let contentHeight = frame?.height ?? 0
-                let anchor: UnitPoint = contentHeight > max(120, viewportHeight - 24) ? .top : .bottom
-                withAnimation(.easeOut(duration: 0.16)) {
+                guard let frame = visibilityFrames[targetID] else { return }
+                let topInset: CGFloat = 24
+                let bottomInset: CGFloat = 24
+                let height = frame.height
+                // If the block fits inside the viewport with a small inset, do
+                // not touch the scroll position at all — it is already where
+                // the user expects to see it (e.g. short thinking disclosure
+                // sitting in the middle of the screen).
+                if height <= viewportHeight - topInset - bottomInset {
+                    let overlapsTop = frame.minY < topInset
+                    let overlapsBottom = frame.maxY > viewportHeight - bottomInset
+                    if !overlapsTop && !overlapsBottom { return }
+                }
+                let anchor: UnitPoint = height > viewportHeight - topInset - bottomInset ? .top : .bottom
+                withAnimation(.easeOut(duration: 0.18)) {
                     scrollProxy.scrollTo(targetID, anchor: anchor)
                 }
             }
