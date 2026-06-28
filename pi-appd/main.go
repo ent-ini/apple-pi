@@ -46,6 +46,7 @@ type server struct {
 	activeRuns   map[string]*activeRun
 
 	catalogRefreshMu sync.Mutex
+	catalogChangeMu  sync.Mutex
 	mu               sync.RWMutex
 	lastRefresh      time.Time
 	snapshot         catalogResponse
@@ -1709,6 +1710,7 @@ func (s *server) streamPiRPCCommand(
 		if flusher != nil {
 			flusher.Flush()
 		}
+		s.handleCatalogChange()
 		return nil
 	}
 
@@ -2286,7 +2288,7 @@ func findSessionRecordFast(agentDir string, sessionID string) (sessionRecord, bo
 			Title:              firstNonBlank(parsed.DisplayName, parsed.FirstUserMessage, base),
 			WorkingDirectory:   parsed.WorkingDirectory,
 			MessageCount:       parsed.MessageCount,
-			ModifiedAt:         info.ModTime().UTC(),
+			ModifiedAt:         boundedFileModTime(info.ModTime()),
 			DisplayName:        parsed.DisplayName,
 			ParentSession:      parsed.ParentSession,
 			BranchCount:        parsed.BranchCount,
@@ -2332,7 +2334,7 @@ func buildCatalog(agentDir string) (catalogResponse, map[string]sessionRecord, e
 			Title:              title,
 			WorkingDirectory:   parsed.WorkingDirectory,
 			MessageCount:       parsed.MessageCount,
-			ModifiedAt:         info.ModTime().UTC(),
+			ModifiedAt:         boundedFileModTime(info.ModTime()),
 			DisplayName:        parsed.DisplayName,
 			ParentSession:      parsed.ParentSession,
 			BranchCount:        parsed.BranchCount,
@@ -2345,8 +2347,8 @@ func buildCatalog(agentDir string) (catalogResponse, map[string]sessionRecord, e
 		return nil
 	})
 
-	sort.Slice(sessions, func(i, j int) bool {
-		return sessions[i].ModifiedAt.After(sessions[j].ModifiedAt)
+	sort.SliceStable(sessions, func(i, j int) bool {
+		return sessionRecordLess(sessions[i], sessions[j])
 	})
 	projects := buildProjects(sessions)
 	return catalogResponse{Projects: projects, Sessions: sessions}, byID, nil
@@ -2379,18 +2381,47 @@ func buildProjects(sessions []sessionRecord) []projectRecord {
 			LastActivity:     last,
 		})
 	}
-	sort.Slice(projects, func(i, j int) bool {
-		left := time.Time{}
-		right := time.Time{}
-		if projects[i].LastActivity != nil {
-			left = *projects[i].LastActivity
-		}
-		if projects[j].LastActivity != nil {
-			right = *projects[j].LastActivity
-		}
-		return left.After(right)
+	sort.SliceStable(projects, func(i, j int) bool {
+		return projectRecordLess(projects[i], projects[j])
 	})
 	return projects
+}
+
+func sessionRecordLess(left, right sessionRecord) bool {
+	if !left.ModifiedAt.Equal(right.ModifiedAt) {
+		return left.ModifiedAt.After(right.ModifiedAt)
+	}
+	if !strings.EqualFold(left.Title, right.Title) {
+		return strings.ToLower(left.Title) < strings.ToLower(right.Title)
+	}
+	return left.ID < right.ID
+}
+
+func projectRecordLess(left, right projectRecord) bool {
+	leftActivity := time.Time{}
+	rightActivity := time.Time{}
+	if left.LastActivity != nil {
+		leftActivity = *left.LastActivity
+	}
+	if right.LastActivity != nil {
+		rightActivity = *right.LastActivity
+	}
+	if !leftActivity.Equal(rightActivity) {
+		return leftActivity.After(rightActivity)
+	}
+	if !strings.EqualFold(left.Title, right.Title) {
+		return strings.ToLower(left.Title) < strings.ToLower(right.Title)
+	}
+	return left.ID < right.ID
+}
+
+func boundedFileModTime(modTime time.Time) time.Time {
+	modTime = modTime.UTC()
+	now := time.Now().UTC()
+	if modTime.After(now) {
+		return now
+	}
+	return modTime
 }
 
 func parseSessionFile(path string) (parsedSession, error) {
@@ -2892,6 +2923,9 @@ func (b *catalogBroker) subscriberCount() int {
 // `session_removed`). A full `snapshot` is only sent when project topology
 // changes or when the catalog was not initialized yet.
 func (s *server) handleCatalogChange() {
+	s.catalogChangeMu.Lock()
+	defer s.catalogChangeMu.Unlock()
+
 	previousSessions, previousProjects, hadCatalog := func() (map[string]sessionRecord, []projectRecord, bool) {
 		s.mu.RLock()
 		defer s.mu.RUnlock()
@@ -2919,16 +2953,29 @@ func (s *server) handleCatalogChange() {
 		s.broker.broadcastSnapshot(snapshot)
 		return
 	}
-	for id, record := range newSessions {
-		if previous, ok := previousSessions[id]; !ok || previous != record {
+	for _, record := range snapshot.Sessions {
+		previous, ok := previousSessions[record.ID]
+		if !ok || previous != record {
 			s.broker.publishSessionUpdated(record)
 		}
 	}
+	removedIDs := make([]string, 0)
 	for id := range previousSessions {
 		if _, ok := newSessions[id]; !ok {
-			s.broker.publishSessionRemoved(id)
+			removedIDs = append(removedIDs, id)
 		}
 	}
+	sort.Strings(removedIDs)
+	for _, id := range removedIDs {
+		s.broker.publishSessionRemoved(id)
+	}
+}
+
+func timePtrEqual(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
 }
 
 func projectsEqual(a, b []projectRecord) bool {
@@ -2940,7 +2987,8 @@ func projectsEqual(a, b []projectRecord) bool {
 			a[i].Title != b[i].Title ||
 			a[i].WorkingDirectory != b[i].WorkingDirectory ||
 			a[i].SessionDirectory != b[i].SessionDirectory ||
-			a[i].SessionCount != b[i].SessionCount {
+			a[i].SessionCount != b[i].SessionCount ||
+			!timePtrEqual(a[i].LastActivity, b[i].LastActivity) {
 			return false
 		}
 	}

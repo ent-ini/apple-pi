@@ -818,8 +818,7 @@ final class ChatSessionStore: ObservableObject {
             if tabs.isEmpty {
                 selectedTabID = nil
             } else {
-                let fallback = tabs[max(0, index - 1)]
-                selectedTabID = fallback.id
+                selectedTabID = tabs.last?.id
             }
         }
         onSessionExit?()
@@ -875,12 +874,17 @@ final class ChatSessionStore: ObservableObject {
     }
 
     func select(_ tab: ChatSession) {
+        let previousSelection = selectedTabID
+        var didReorder = false
         selectedTabID = tab.id
         if let index = tabs.firstIndex(where: { $0.id == tab.id }), index != tabs.count - 1 {
             let cached = tabs.remove(at: index)
             tabs.append(cached)
+            didReorder = true
         }
-        onTabsChanged?()
+        if previousSelection != selectedTabID || didReorder {
+            onTabsChanged?()
+        }
     }
 
     private static func aliases(for tab: ChatSession) -> [String] {

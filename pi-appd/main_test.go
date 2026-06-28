@@ -11,7 +11,39 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestSessionRecordLessUsesStableTieBreakers(t *testing.T) {
+	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
+	older := now.Add(-time.Minute)
+
+	if !sessionRecordLess(sessionRecord{ID: "b", ModifiedAt: now}, sessionRecord{ID: "a", ModifiedAt: older}) {
+		t.Fatal("newer session should sort before older session")
+	}
+	if !sessionRecordLess(sessionRecord{ID: "a", Title: "Alpha", ModifiedAt: now}, sessionRecord{ID: "b", Title: "Beta", ModifiedAt: now}) {
+		t.Fatal("equal mtimes should sort by title/id instead of unstable walk order")
+	}
+}
+
+func TestProjectsEqualIncludesLastActivity(t *testing.T) {
+	first := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
+	second := first.Add(time.Second)
+	left := []projectRecord{{ID: "p", Title: "Project", SessionDirectory: "p", SessionCount: 1, LastActivity: &first}}
+	right := []projectRecord{{ID: "p", Title: "Project", SessionDirectory: "p", SessionCount: 1, LastActivity: &second}}
+
+	if projectsEqual(left, right) {
+		t.Fatal("project LastActivity changes must trigger a snapshot so clients can reorder projects")
+	}
+}
+
+func TestBoundedFileModTimeClampsFutureTimestamps(t *testing.T) {
+	future := time.Now().Add(time.Hour)
+	bounded := boundedFileModTime(future)
+	if bounded.After(time.Now().Add(time.Second)) {
+		t.Fatalf("boundedFileModTime(%s) = %s, want close to now", future, bounded)
+	}
+}
 
 func TestSplitJSONLLinesDropsOnlyTrailingEmptyLine(t *testing.T) {
 	if lines := splitJSONLLines([]byte{}); len(lines) != 0 {

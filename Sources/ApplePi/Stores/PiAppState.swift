@@ -79,6 +79,7 @@ final class PiAppState: ObservableObject {
     private var catalogRefreshID = UUID()
     private var remoteDirectoryRefreshID = UUID()
     private var catalogPollingTask: Task<Void, Never>?
+    private var catalogRefreshTask: Task<Void, Never>?
     private var selectedSessionPollingTask: Task<Void, Never>?
     private var selectedSessionStreamTask: Task<Void, Never>?
     private var isSelectedSessionStreamConnected = false
@@ -241,9 +242,7 @@ final class PiAppState: ObservableObject {
     }
 
     func sessions(for project: PiProject) -> [PiSessionSummary] {
-        sessions
-            .filter { $0.projectID == project.id }
-            .sorted { effectiveLastActivity(for: $0) > effectiveLastActivity(for: $1) }
+        sessions.filter { $0.projectID == project.id }
     }
 
     func filteredSessions(for project: PiProject? = nil) -> [PiSessionSummary] {
@@ -252,7 +251,7 @@ final class PiAppState: ObservableObject {
         if let project, query.isEmpty {
             baseSessions = sessions(for: project)
         } else {
-            baseSessions = sessions.sorted { effectiveLastActivity(for: $0) > effectiveLastActivity(for: $1) }
+            baseSessions = sessions
         }
 
         guard !query.isEmpty else { return baseSessions }
@@ -343,6 +342,7 @@ final class PiAppState: ObservableObject {
                     self.projects = snapshot.projects
                     self.sessions = snapshot.sessions
                     self.preserveOpenChatSessionSidebarEntries()
+                    self.sortCatalogState()
                     self.isLoadingCatalog = false
                     if !quietly {
                         self.statusMessage = PiAppState.catalogStatusMessage(
@@ -375,6 +375,7 @@ final class PiAppState: ObservableObject {
         self.selection = selection
         if case .session = selection, let selectedSession {
             markSessionRead(selectedSession)
+            markSessionActive(sessionAliases(for: selectedSession))
         }
         refreshConfigurationSummary()
         prefetchSessionDefaultsForCurrentContext()
@@ -604,6 +605,7 @@ final class PiAppState: ObservableObject {
     }
 
     func resume(_ session: PiSessionSummary) {
+        markSessionActive(sessionAliases(for: session))
         let tab = chatWorkspace.openOrSelectTab(
             key: session.filePath,
             title: session.title,
@@ -1522,10 +1524,17 @@ final class PiAppState: ObservableObject {
     }
 
     private func scheduleCatalogRefresh(after delay: Duration = .seconds(1)) {
-        Task { [weak self] in
-            try? await Task.sleep(for: delay)
+        catalogRefreshTask?.cancel()
+        catalogRefreshTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: delay)
+            } catch {
+                return
+            }
             await MainActor.run {
-                self?.refreshCatalog()
+                guard let self, !Task.isCancelled else { return }
+                self.refreshCatalog()
+                self.catalogRefreshTask = nil
             }
         }
     }
@@ -1589,6 +1598,31 @@ final class PiAppState: ObservableObject {
         return Foundation.FileManager().fileExists(atPath: path)
     }
 
+    private func sortCatalogState() {
+        sessions.sort { lhs, rhs in
+            let lhsActivity = effectiveLastActivity(for: lhs)
+            let rhsActivity = effectiveLastActivity(for: rhs)
+            if lhsActivity != rhsActivity {
+                return lhsActivity > rhsActivity
+            }
+            if lhs.title.localizedCaseInsensitiveCompare(rhs.title) != .orderedSame {
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            }
+            return lhs.id < rhs.id
+        }
+        projects.sort { lhs, rhs in
+            let lhsActivity = lhs.lastActivity ?? .distantPast
+            let rhsActivity = rhs.lastActivity ?? .distantPast
+            if lhsActivity != rhsActivity {
+                return lhsActivity > rhsActivity
+            }
+            if lhs.title.localizedCaseInsensitiveCompare(rhs.title) != .orderedSame {
+                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+            }
+            return lhs.id < rhs.id
+        }
+    }
+
     private func repairSelectionIfNeeded() {
         guard let selection else {
             self.selection = projects.first.map { .project($0.id) }
@@ -1608,6 +1642,8 @@ final class PiAppState: ObservableObject {
     }
 
     private func clearCatalog() {
+        catalogRefreshTask?.cancel()
+        catalogRefreshTask = nil
         projects = []
         sessions = []
         selection = nil
@@ -1939,6 +1975,7 @@ final class PiAppState: ObservableObject {
             projects = snapshot.projects
             sessions = snapshot.sessions
             preserveOpenChatSessionSidebarEntries()
+            sortCatalogState()
             if !snapshot.warnings.isEmpty {
                 statusMessage = PiAppState.catalogStatusMessage(
                     sessionCount: snapshot.sessions.count,
@@ -1952,11 +1989,12 @@ final class PiAppState: ObservableObject {
                 sessions[index] = summary
             } else {
                 sessions.append(summary)
-                sessions.sort { $0.modifiedAt > $1.modifiedAt }
             }
+            sortCatalogState()
             repairSelectionIfNeeded()
         case .sessionRemoved(let sessionId):
             sessions.removeAll { $0.id == sessionId || $0.filePath == sessionId }
+            sortCatalogState()
             repairSelectionIfNeeded()
         case .runtimeChanged(let sessionId, let runtime):
             if sessionId.isEmpty { return }
@@ -2182,7 +2220,7 @@ final class PiAppState: ObservableObject {
             let aliases = Set(sessionAliases(for: session))
             let isSelected = chatWorkspace.selectedTab?.id == session.id
             let existsInSidebar = sessions.contains { !aliases.isDisjoint(with: Set(sessionAliases(for: $0))) }
-            let shouldPreserve = session.isSending || session.sessionID != nil || (isSelected && !existsInSidebar && session.sessionID != nil)
+            let shouldPreserve = session.isSending || session.sessionID != nil || session.launchRequest != nil || (isSelected && !existsInSidebar)
             guard shouldPreserve else { continue }
             upsertSidebarSession(for: session)
         }
@@ -2299,7 +2337,7 @@ final class PiAppState: ObservableObject {
         } else {
             projects.append(updated)
         }
-        projects.sort { ($0.lastActivity ?? .distantPast) > ($1.lastActivity ?? .distantPast) }
+        sortCatalogState()
     }
 
     private func sessionAliases(for session: PiSessionSummary) -> [String] {
@@ -2326,6 +2364,7 @@ final class PiAppState: ObservableObject {
         for alias in aliases {
             sessionActivityOverrides[alias] = date
         }
+        sortCatalogState()
     }
 
     private func setSessionSending(_ isSending: Bool, aliases: [String]) {
