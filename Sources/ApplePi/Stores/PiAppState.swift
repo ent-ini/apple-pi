@@ -267,11 +267,6 @@ final class PiAppState: ObservableObject {
     }
 
     private func sessionComesBefore(_ lhs: PiSessionSummary, _ rhs: PiSessionSummary) -> Bool {
-        let lhsRank = sessionListRank(lhs)
-        let rhsRank = sessionListRank(rhs)
-        if lhsRank != rhsRank {
-            return lhsRank < rhsRank
-        }
         let lhsActivity = effectiveLastActivity(for: lhs)
         let rhsActivity = effectiveLastActivity(for: rhs)
         if lhsActivity != rhsActivity {
@@ -282,12 +277,6 @@ final class PiAppState: ObservableObject {
             return titleOrder == .orderedAscending
         }
         return lhs.id < rhs.id
-    }
-
-    private func sessionListRank(_ session: PiSessionSummary) -> Int {
-        if isSelectedSession(session) { return 0 }
-        if isSessionSending(session) { return 1 }
-        return 2
     }
 
     func isSessionSending(_ session: PiSessionSummary) -> Bool {
@@ -405,7 +394,6 @@ final class PiAppState: ObservableObject {
         self.selection = selection
         if case .session = selection, let selectedSession {
             markSessionRead(selectedSession)
-            markSessionActive(sessionAliases(for: selectedSession))
         }
         refreshConfigurationSummary()
         prefetchSessionDefaultsForCurrentContext()
@@ -618,8 +606,8 @@ final class PiAppState: ObservableObject {
             sessionPath: nil,
             launchRequest: request
         )
-        selection = nil
         _ = applyBestKnownSessionDefaults(to: tab)
+        upsertSidebarSession(for: tab, fallbackWorkingDirectory: workingDirectory)
         hydratePendingSessionDefaults(for: tab)
         statusMessage = isTemporary ? "Started temporary Pi session" : "Started new Pi session"
     }
@@ -635,7 +623,6 @@ final class PiAppState: ObservableObject {
     }
 
     func resume(_ session: PiSessionSummary) {
-        markSessionActive(sessionAliases(for: session))
         let tab = chatWorkspace.openOrSelectTab(
             key: session.filePath,
             title: session.title,
@@ -1644,21 +1631,33 @@ final class PiAppState: ObservableObject {
     }
 
     private func repairSelectionIfNeeded() {
-        guard let selection else {
-            self.selection = projects.first.map { .project($0.id) }
-            return
+        defer { refreshConfigurationSummary() }
+
+        if let tab = chatWorkspace.selectedTab {
+            let aliases = Set(sessionAliases(for: tab))
+            if let matched = sessions.first(where: { !aliases.isDisjoint(with: Set(sessionAliases(for: $0))) }) {
+                selection = .session(matched.id)
+                return
+            }
+            if tab.isSending || tab.sessionID != nil || tab.launchRequest != nil {
+                upsertSidebarSession(for: tab)
+                return
+            }
         }
+
+        guard let selection else { return }
         switch selection {
         case .project(let id):
             if !projects.contains(where: { $0.id == id }) {
-                self.selection = projects.first.map { .project($0.id) }
+                self.selection = nil
             }
         case .session(let id):
-            if !sessions.contains(where: { $0.id == id || $0.filePath == id }) {
-                self.selection = projects.first.map { .project($0.id) }
+            if let matched = sessions.first(where: { $0.id == id || $0.filePath == id }) {
+                self.selection = .session(matched.id)
+            } else {
+                self.selection = nil
             }
         }
-        refreshConfigurationSummary()
     }
 
     private func clearCatalog() {
@@ -2246,8 +2245,13 @@ final class PiAppState: ObservableObject {
         for session in chatWorkspace.tabs {
             let aliases = Set(sessionAliases(for: session))
             let isSelected = chatWorkspace.selectedTab?.id == session.id
-            let existsInSidebar = sessions.contains { !aliases.isDisjoint(with: Set(sessionAliases(for: $0))) }
-            let shouldPreserve = session.isSending || session.sessionID != nil || session.launchRequest != nil || (isSelected && !existsInSidebar)
+            if let existing = sessions.first(where: { !aliases.isDisjoint(with: Set(sessionAliases(for: $0))) }) {
+                if isSelected {
+                    selection = .session(existing.id)
+                }
+                continue
+            }
+            let shouldPreserve = session.isSending || session.launchRequest != nil || isSelected
             guard shouldPreserve else { continue }
             upsertSidebarSession(for: session)
         }

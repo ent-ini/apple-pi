@@ -443,6 +443,86 @@ import Testing
 }
 
 @MainActor
+@Test func selectingOlderSessionDoesNotPromoteItInSessionList() async throws {
+    let defaults = isolatedDefaults()
+    defaults.set(Date(), forKey: "ApplePi.updateCheck.lastCheckedAt")
+    let now = Date()
+    let newer = PiSessionSummary(id: "newer", filePath: "/tmp/newer.jsonl", projectID: "p", title: "Newer", workingDirectory: "/tmp/project", messageCount: 1, modifiedAt: now, displayName: nil, parentSession: nil, branchCount: 0, labelCount: 0, branchSummaryCount: 0, latestModel: nil)
+    let older = PiSessionSummary(id: "older", filePath: "/tmp/older.jsonl", projectID: "p", title: "Older", workingDirectory: "/tmp/project", messageCount: 1, modifiedAt: now.addingTimeInterval(-3600), displayName: nil, parentSession: nil, branchCount: 0, labelCount: 0, branchSummaryCount: 0, latestModel: nil)
+    let snapshot = PiCatalogSnapshot(
+        projects: [PiProject(id: "p", title: "Project", workingDirectory: "/tmp/project", sessionDirectory: "p", sessionCount: 2, lastActivity: now)],
+        sessions: [newer, older]
+    )
+    let state = PiAppState(
+        defaults: defaults,
+        configurationService: PiConfigurationService(environment: [:]),
+        catalogLoader: { _, _ in snapshot },
+        startsBackgroundWork: false
+    )
+
+    state.refreshCatalog()
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(state.filteredSessions().map(\.id) == ["newer", "older"])
+
+    state.select(.session("older"))
+
+    #expect(state.filteredSessions().map(\.id) == ["newer", "older"])
+    #expect(state.isSelectedSession(older))
+}
+
+@MainActor
+@Test func catalogRefreshDoesNotReplaceRealSessionSummaryWithSyntheticOpenTab() async throws {
+    let defaults = isolatedDefaults()
+    defaults.set(Date(), forKey: "ApplePi.updateCheck.lastCheckedAt")
+    let now = Date()
+    let real = PiSessionSummary(id: "real", filePath: "/tmp/real.jsonl", projectID: "p", title: "Real summary", workingDirectory: "/tmp/project", messageCount: 12, modifiedAt: now, displayName: "Real summary", parentSession: nil, branchCount: 1, labelCount: 2, branchSummaryCount: 3, latestModel: "provider/model")
+    let snapshot = PiCatalogSnapshot(
+        projects: [PiProject(id: "p", title: "Project", workingDirectory: "/tmp/project", sessionDirectory: "p", sessionCount: 1, lastActivity: now)],
+        sessions: [real]
+    )
+    let state = PiAppState(
+        defaults: defaults,
+        configurationService: PiConfigurationService(environment: [:]),
+        catalogLoader: { _, _ in snapshot },
+        startsBackgroundWork: false
+    )
+
+    state.refreshCatalog()
+    try await Task.sleep(for: .milliseconds(100))
+    state.select(.session("real"))
+    state.refreshCatalog()
+    try await Task.sleep(for: .milliseconds(100))
+
+    #expect(state.sessions.first?.messageCount == 12)
+    #expect(state.sessions.first?.branchCount == 1)
+    #expect(state.sessions.first?.labelCount == 2)
+    #expect(state.sessions.first?.branchSummaryCount == 3)
+    #expect(state.sessions.first?.latestModel == "provider/model")
+}
+
+@MainActor
+@Test func openingNewSessionAddsStableSelectedSidebarEntryBeforeFirstSend() async throws {
+    let defaults = isolatedDefaults()
+    defaults.set(Date(), forKey: "ApplePi.updateCheck.lastCheckedAt")
+    let state = PiAppState(
+        defaults: defaults,
+        configurationService: PiConfigurationService(environment: [:]),
+        catalogLoader: { _, _ in PiCatalogSnapshot(projects: [], sessions: []) },
+        startsBackgroundWork: false
+    )
+
+    state.openNewSession(in: "/tmp/project")
+
+    guard let tab = state.chatWorkspace.selectedTab else {
+        Issue.record("expected a selected new tab")
+        return
+    }
+    #expect(state.sessions.map(\.id) == [tab.key])
+    #expect(state.selection == .session(tab.key))
+    #expect(state.filteredSessions().map(\.id) == [tab.key])
+}
+
+@MainActor
 @Test func sessionSearchCanMatchAcrossProjects() async throws {
     let defaults = isolatedDefaults()
     defaults.set(Date(), forKey: "ApplePi.updateCheck.lastCheckedAt")

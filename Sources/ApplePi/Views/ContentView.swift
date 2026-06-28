@@ -769,12 +769,6 @@ private struct SessionListRow: View {
                     .font(.headline.weight(.semibold))
                     .lineLimit(1)
 
-                Text(session.subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-
                 HStack(spacing: 8) {
                     Text(appState.effectiveLastActivity(for: session), style: .date)
                         .lineLimit(1)
