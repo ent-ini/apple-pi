@@ -67,7 +67,7 @@ enum ChatNotificationPreferenceReader {
     private static let appearanceDefaultsKey = "ApplePi.appearance"
 
     static func current() -> TerminalNotificationPreferences {
-        let defaults = Foundation.UserDefaults(suiteName: nil) ?? Foundation.UserDefaults()
+        let defaults = Foundation.UserDefaults.standard
         guard let data = defaults.data(forKey: appearanceDefaultsKey),
               let appearance = try? JSONDecoder().decode(AppAppearance.self, from: data) else {
             return TerminalNotificationPreferences()

@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 /// Lightweight Markdown renderer for chat messages. It intentionally avoids
@@ -13,7 +14,7 @@ struct MarkdownText: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Self.parseBlocks(text)) { block in
+            ForEach(Self.cachedBlocks(for: text)) { block in
                 blockView(block)
             }
         }
@@ -105,6 +106,16 @@ struct MarkdownText: View {
     }
 
     static func parseBlocks(_ markdown: String) -> [MarkdownBlock] {
+        cachedBlocks(for: markdown)
+    }
+
+    private static func cachedBlocks(for markdown: String) -> [MarkdownBlock] {
+        MarkdownBlockCache.shared.blocks(for: markdown) {
+            parseBlocksUncached(markdown)
+        }
+    }
+
+    private static func parseBlocksUncached(_ markdown: String) -> [MarkdownBlock] {
         let lines = markdown
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
@@ -263,6 +274,34 @@ struct MarkdownText: View {
         return withoutSpaces.allSatisfy { $0 == "-" }
             || withoutSpaces.allSatisfy { $0 == "*" }
             || withoutSpaces.allSatisfy { $0 == "_" }
+    }
+}
+
+private final class MarkdownBlockCache: @unchecked Sendable {
+    static let shared = MarkdownBlockCache()
+
+    private final class Box {
+        let blocks: [MarkdownBlock]
+
+        init(_ blocks: [MarkdownBlock]) {
+            self.blocks = blocks
+        }
+    }
+
+    private let cache = NSCache<NSString, Box>()
+
+    private init() {
+        cache.countLimit = 500
+    }
+
+    func blocks(for markdown: String, build: () -> [MarkdownBlock]) -> [MarkdownBlock] {
+        let key = markdown as NSString
+        if let box = cache.object(forKey: key) {
+            return box.blocks
+        }
+        let blocks = build()
+        cache.setObject(Box(blocks), forKey: key)
+        return blocks
     }
 }
 

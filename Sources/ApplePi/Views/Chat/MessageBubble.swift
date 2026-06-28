@@ -228,6 +228,33 @@ private struct UserMessagePresentation {
     }
 }
 
+private final class ChatImageCache: @unchecked Sendable {
+    static let shared = ChatImageCache()
+
+    private let cache = NSCache<NSString, NSImage>()
+
+    private init() {
+        cache.countLimit = 200
+        cache.totalCostLimit = 64 * 1024 * 1024
+    }
+
+    func image(for key: String, load: () -> NSImage?) -> NSImage? {
+        let cacheKey = key as NSString
+        if let cached = cache.object(forKey: cacheKey) {
+            return cached
+        }
+        guard let image = load() else { return nil }
+        cache.setObject(image, forKey: cacheKey, cost: imageCacheCost(image))
+        return image
+    }
+
+    private func imageCacheCost(_ image: NSImage) -> Int {
+        let size = image.size
+        guard size.width.isFinite, size.height.isFinite else { return 1 }
+        return max(1, Int(size.width * size.height * 4))
+    }
+}
+
 /// One chat bubble. User messages are right-aligned with the accent
 /// background; assistant messages span almost the full width with a
 /// neutral surface so long responses are easy to read.
@@ -482,17 +509,16 @@ struct MessageBubble: View {
     private func resolvedImage(for path: String) -> NSImage? {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != "inline-image" else { return nil }
-        if trimmed.hasPrefix("data:"),
-           let commaIndex = trimmed.firstIndex(of: ",") {
-            let base64 = String(trimmed[trimmed.index(after: commaIndex)...])
-            if let data = Data(base64Encoded: base64) {
-                return NSImage(data: data)
+        return ChatImageCache.shared.image(for: trimmed) {
+            if trimmed.hasPrefix("data:"),
+               let commaIndex = trimmed.firstIndex(of: ",") {
+                let base64 = String(trimmed[trimmed.index(after: commaIndex)...])
+                if let data = Data(base64Encoded: base64) {
+                    return NSImage(data: data)
+                }
             }
+            return NSImage(contentsOfFile: trimmed)
         }
-        if let image = NSImage(contentsOfFile: trimmed) {
-            return image
-        }
-        return nil
     }
 
     private static let timeFormatter: DateFormatter = {

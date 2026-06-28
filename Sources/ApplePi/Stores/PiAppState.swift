@@ -102,7 +102,7 @@ final class PiAppState: ObservableObject {
     private var modelMutationVersionBySessionKey: [String: Int] = [:]
 
     init(
-        defaults: UserDefaults = Foundation.UserDefaults(suiteName: nil) ?? Foundation.UserDefaults(),
+        defaults: UserDefaults = Foundation.UserDefaults.standard,
         configurationService: PiConfigurationService = PiConfigurationService(),
         updateCheckService: UpdateCheckService = UpdateCheckService(),
         remoteDirectoryService: RemoteDirectoryService = RemoteDirectoryService(),
@@ -125,6 +125,7 @@ final class PiAppState: ObservableObject {
             defaultsKey: chatTabDefaultsKey
         )
 
+        migrateLegacyDefaultsIfNeeded()
         isLoadingPersistedState = true
         loadHost()
         loadAppearance()
@@ -160,6 +161,23 @@ final class PiAppState: ObservableObject {
             startSelectedSessionEventPolling()
             restartSelectedSessionEventStream()
         }
+    }
+
+    private func migrateLegacyDefaultsIfNeeded() {
+        guard defaults === UserDefaults.standard else { return }
+        let migrationMarker = "pi-app.defaultsMigration.com.dodoreach.ApplePi"
+        guard !defaults.bool(forKey: migrationMarker) else { return }
+        guard let legacyDomain = UserDefaults.standard.persistentDomain(forName: "com.dodoreach.ApplePi") else {
+            defaults.set(true, forKey: migrationMarker)
+            return
+        }
+
+        for key in [hostDefaultsKey, appearanceDefaultsKey, shortcutDefaultsKey, chatTabDefaultsKey, lastUpdateCheckKey] {
+            guard defaults.object(forKey: key) == nil,
+                  let value = legacyDomain[key] else { continue }
+            defaults.set(value, forKey: key)
+        }
+        defaults.set(true, forKey: migrationMarker)
     }
 
     func dismissAvailableUpdate() {

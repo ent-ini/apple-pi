@@ -17,6 +17,7 @@ struct MessageListView: View {
     @State private var ensureVisibleWorkItems: [DispatchWorkItem] = []
     @State private var bottomScrollGeneration = 0
     @State private var ensureVisibleGeneration = 0
+    @State private var displayedRowsCache: [DisplayedSessionRow] = []
 
     var body: some View {
         GeometryReader { proxy in
@@ -26,7 +27,7 @@ struct MessageListView: View {
                         if session.hasEarlierHistory || session.isLoadingEarlierHistory {
                             historyLoadRow
                         }
-                        ForEach(displayedRows) { row in
+                        ForEach(displayedRowsCache) { row in
                             eventRow(for: row)
                                 .id(row.id)
                         }
@@ -72,15 +73,18 @@ struct MessageListView: View {
                     }
                 }
                 .onChange(of: session.streamRevision) { _, _ in
+                    refreshDisplayedRowsCache()
                     scrollToBottomIfNeeded(using: scrollProxy)
                 }
                 .onChange(of: session.historyRevision) { _, _ in
+                    refreshDisplayedRowsCache()
                     if let anchorID = session.consumePendingHistoryAnchorID() {
                         scrollProxy.scrollTo(anchorID, anchor: .top)
                     }
                 }
                 .onChange(of: session.isLoading) { _, isLoading in
                     guard !isLoading else { return }
+                    refreshDisplayedRowsCache()
                     if !hasCompletedInitialPlacement || isAnchoredToBottom {
                         scrollToBottomSettled(
                             using: scrollProxy,
@@ -91,6 +95,7 @@ struct MessageListView: View {
                 }
                 .onAppear {
                     hasCompletedInitialPlacement = false
+                    refreshDisplayedRowsCache()
                     if session.isLoading {
                         return
                     }
@@ -159,14 +164,13 @@ struct MessageListView: View {
     private static let scrollSettleDelays: [TimeInterval] = [0, 0.025, 0.08, 0.18, 0.36, 0.7, 1.15]
     private static let ensureVisibleSettleDelays: [TimeInterval] = [0.04, 0.16, 0.34, 0.65]
 
-    private var displayedRows: [DisplayedSessionRow] {
-        DisplayedSessionRow.groupingToolResults(in: session.events.filter(\.isVisibleInTranscript))
+    private func refreshDisplayedRowsCache() {
+        displayedRowsCache = DisplayedSessionRow.groupingToolResults(in: session.events.filter(\.isVisibleInTranscript))
     }
 
     private var transcriptEndsWithUserMessage: Bool {
-        guard let last = session.events.filter(\.isVisibleInTranscript).last,
-              case .message(let message, _) = last else { return false }
-        return message.role == .user
+        guard let last = displayedRowsCache.reversed().compactMap(\.message).first else { return false }
+        return last.role == .user
     }
 
     @ViewBuilder
@@ -375,6 +379,15 @@ private enum DisplayedSessionRow: Identifiable {
             return event.id
         case .toolInteraction(let call, _, _):
             return "toolInteraction:\(call.id)"
+        }
+    }
+
+    var message: Message? {
+        switch self {
+        case .event(.message(let message, _)):
+            return message
+        case .event, .toolInteraction:
+            return nil
         }
     }
 
