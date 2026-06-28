@@ -69,7 +69,8 @@ struct BouncingDotsView: View {
         Circle()
             .fill(Color.secondary)
             .frame(width: 6, height: 6)
-            .offset(y: animate ? -3 : 3)
+            .scaleEffect(animate ? 1.0 : 0.45)
+            .opacity(animate ? 1.0 : 0.35)
             .animation(
                 .easeInOut(duration: 0.45)
                     .repeatForever(autoreverses: true)

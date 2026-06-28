@@ -623,7 +623,7 @@ struct SessionListView: View {
                     ForEach(appState.filteredSessions()) { session in
                         SessionListRow(
                             session: session,
-                            isSelected: appState.selectedSession?.id == session.id,
+                            isSelected: appState.isSelectedSession(session),
                             onSelect: {
                                 appState.select(.session(session.id))
                             },

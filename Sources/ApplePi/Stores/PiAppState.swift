@@ -242,20 +242,17 @@ final class PiAppState: ObservableObject {
     }
 
     func sessions(for project: PiProject) -> [PiSessionSummary] {
-        sessions.filter { $0.projectID == project.id }
+        sessions
+            .filter { $0.projectID == project.id }
+            .sorted(by: sessionComesBefore)
     }
 
     func filteredSessions(for project: PiProject? = nil) -> [PiSessionSummary] {
         let query = sessionSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let baseSessions: [PiSessionSummary]
-        if let project, query.isEmpty {
-            baseSessions = sessions(for: project)
-        } else {
-            baseSessions = sessions
-        }
+        let scopedSessions = project.map { sessions(for: $0) } ?? sessions.sorted(by: sessionComesBefore)
 
-        guard !query.isEmpty else { return baseSessions }
-        return baseSessions.filter { session in
+        guard !query.isEmpty else { return scopedSessions }
+        return scopedSessions.filter { session in
             session.title.localizedCaseInsensitiveContains(query) ||
             session.subtitle.localizedCaseInsensitiveContains(query)
         }
@@ -269,8 +266,41 @@ final class PiAppState: ObservableObject {
             ?? session.modifiedAt
     }
 
+    private func sessionComesBefore(_ lhs: PiSessionSummary, _ rhs: PiSessionSummary) -> Bool {
+        let lhsRank = sessionListRank(lhs)
+        let rhsRank = sessionListRank(rhs)
+        if lhsRank != rhsRank {
+            return lhsRank < rhsRank
+        }
+        let lhsActivity = effectiveLastActivity(for: lhs)
+        let rhsActivity = effectiveLastActivity(for: rhs)
+        if lhsActivity != rhsActivity {
+            return lhsActivity > rhsActivity
+        }
+        let titleOrder = lhs.title.localizedCaseInsensitiveCompare(rhs.title)
+        if titleOrder != .orderedSame {
+            return titleOrder == .orderedAscending
+        }
+        return lhs.id < rhs.id
+    }
+
+    private func sessionListRank(_ session: PiSessionSummary) -> Int {
+        if isSelectedSession(session) { return 0 }
+        if isSessionSending(session) { return 1 }
+        return 2
+    }
+
     func isSessionSending(_ session: PiSessionSummary) -> Bool {
         !sendingSessionKeys.isDisjoint(with: Set(sessionAliases(for: session)))
+    }
+
+    func isSelectedSession(_ session: PiSessionSummary) -> Bool {
+        if case .session(let selectedID) = selection,
+           selectedID == session.id || selectedID == session.filePath {
+            return true
+        }
+        guard let tab = chatWorkspace.selectedTab else { return false }
+        return !Set(sessionAliases(for: session)).isDisjoint(with: Set(sessionAliases(for: tab)))
     }
 
     func hasUnreadIndicator(_ session: PiSessionSummary) -> Bool {
@@ -734,7 +764,7 @@ final class PiAppState: ObservableObject {
         markSessionActive(initialAliases)
         setSessionSending(true, aliases: initialAliases)
         clearUnread(aliases: initialAliases)
-        insertOptimisticSidebarSession(for: session, fallbackAliases: initialAliases)
+        promoteSidebarSession(for: session, fallbackAliases: initialAliases)
         statusMessage = "Sending to Pi..."
 
         if host.usesRemoteDaemonTransport || host.mode == .remoteSSH {
@@ -1599,17 +1629,7 @@ final class PiAppState: ObservableObject {
     }
 
     private func sortCatalogState() {
-        sessions.sort { lhs, rhs in
-            let lhsActivity = effectiveLastActivity(for: lhs)
-            let rhsActivity = effectiveLastActivity(for: rhs)
-            if lhsActivity != rhsActivity {
-                return lhsActivity > rhsActivity
-            }
-            if lhs.title.localizedCaseInsensitiveCompare(rhs.title) != .orderedSame {
-                return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-            }
-            return lhs.id < rhs.id
-        }
+        sessions.sort(by: sessionComesBefore)
         projects.sort { lhs, rhs in
             let lhsActivity = lhs.lastActivity ?? .distantPast
             let rhsActivity = rhs.lastActivity ?? .distantPast
@@ -2193,9 +2213,16 @@ final class PiAppState: ObservableObject {
         return "\(tag)\n\(text)"
     }
 
-    private func insertOptimisticSidebarSession(for session: ChatSession, fallbackAliases: [String]) {
-        guard !Self.isPersistedTabKey(session.key) else { return }
-        upsertSidebarSession(for: session, previousAliases: fallbackAliases)
+    private func promoteSidebarSession(for session: ChatSession, fallbackAliases: [String]) {
+        let aliases = Set(sessionAliases(for: session, fallback: fallbackAliases))
+        if let existing = sessions.first(where: { !aliases.isDisjoint(with: Set(sessionAliases(for: $0))) }) {
+            if chatWorkspace.selectedTab?.id == session.id {
+                selection = .session(existing.id)
+            }
+            sortCatalogState()
+        } else {
+            upsertSidebarSession(for: session, previousAliases: fallbackAliases)
+        }
     }
 
     private func removeOptimisticSidebarSessionIfNeeded(matching aliases: [String]) {

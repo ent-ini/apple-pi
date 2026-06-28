@@ -81,6 +81,12 @@ struct MessageListView: View {
                         scrollProxy.scrollTo(anchorID, anchor: .top)
                     }
                 }
+                .onChange(of: session.isSending) { _, isSending in
+                    guard isSending else { return }
+                    refreshDisplayedRowsCache()
+                    startStickyAutoScroll()
+                    scrollToBottomSettled(using: scrollProxy, animated: false, completesInitialPlacement: false)
+                }
                 .onChange(of: session.isLoading) { _, isLoading in
                     guard !isLoading else { return }
                     refreshDisplayedRowsCache()
@@ -158,7 +164,7 @@ struct MessageListView: View {
     private static let pendingAssistantBubbleID = "chat.list.pending.assistant"
     static let scrollCoordinateSpaceName = "chat.list.scroll"
     private static let bottomStickinessBuffer: CGFloat = 180
-    private static let stickyBreakawayDistance: CGFloat = 260
+    private static let stickyBreakawayDistance: CGFloat = 180
     private static let bottomReachedEpsilon: CGFloat = 3
     private static let stickyAutoScrollDuration: TimeInterval = 0.7
     private static let scrollSettleDelays: [TimeInterval] = [0, 0.08, 0.22]
