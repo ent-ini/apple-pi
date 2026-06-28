@@ -58,8 +58,8 @@ struct BouncingDotsView: View {
             dot(delay: 0.14)
             dot(delay: 0.28)
         }
+        .frame(height: 14, alignment: .center)
         .padding(.horizontal, 2)
-        .padding(.vertical, 2)
         .onAppear {
             animate = true
         }
@@ -69,7 +69,7 @@ struct BouncingDotsView: View {
         Circle()
             .fill(Color.secondary)
             .frame(width: 6, height: 6)
-            .offset(y: animate ? -4 : 2)
+            .offset(y: animate ? -3 : 3)
             .animation(
                 .easeInOut(duration: 0.45)
                     .repeatForever(autoreverses: true)

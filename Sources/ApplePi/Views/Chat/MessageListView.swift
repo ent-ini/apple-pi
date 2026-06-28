@@ -67,9 +67,8 @@ struct MessageListView: View {
                     )
                 }
                 .onPreferenceChange(ChatVisibilityTargetPreferenceKey.self) { frames in
-                    visibilityFrames = frames
-                    if isStickyAutoScrollActive, bottomScrollWorkItems.isEmpty {
-                        scrollToBottomSettled(using: scrollProxy, animated: false, completesInitialPlacement: false)
+                    if visibilityFrames != frames {
+                        visibilityFrames = frames
                     }
                 }
                 .onChange(of: session.streamRevision) { _, _ in
@@ -159,18 +158,14 @@ struct MessageListView: View {
     private static let pendingAssistantBubbleID = "chat.list.pending.assistant"
     static let scrollCoordinateSpaceName = "chat.list.scroll"
     private static let bottomStickinessBuffer: CGFloat = 180
+    private static let stickyBreakawayDistance: CGFloat = 260
     private static let bottomReachedEpsilon: CGFloat = 3
-    private static let stickyAutoScrollDuration: TimeInterval = 1.6
-    private static let scrollSettleDelays: [TimeInterval] = [0, 0.025, 0.08, 0.18, 0.36, 0.7, 1.15]
+    private static let stickyAutoScrollDuration: TimeInterval = 0.7
+    private static let scrollSettleDelays: [TimeInterval] = [0, 0.08, 0.22]
     private static let ensureVisibleSettleDelays: [TimeInterval] = [0.04, 0.16, 0.34, 0.65]
 
     private func refreshDisplayedRowsCache() {
         displayedRowsCache = DisplayedSessionRow.groupingToolResults(in: session.events.filter(\.isVisibleInTranscript))
-    }
-
-    private var transcriptEndsWithUserMessage: Bool {
-        guard let last = displayedRowsCache.reversed().compactMap(\.message).first else { return false }
-        return last.role == .user
     }
 
     @ViewBuilder
@@ -208,12 +203,15 @@ struct MessageListView: View {
     ) {
         let distanceToBottom = bottomMaxY - viewportHeight
         if isStickyAutoScrollActive {
+            if distanceToBottom > Self.stickyBreakawayDistance {
+                stickyAutoScrollUntil = nil
+                isAnchoredToBottom = false
+                cancelBottomScrollWorkItems()
+                return
+            }
             isAnchoredToBottom = true
-            if distanceToBottom > Self.bottomReachedEpsilon {
-                stickyAutoScrollUntil = Date().addingTimeInterval(Self.stickyAutoScrollDuration)
-                if bottomScrollWorkItems.isEmpty {
-                    scrollToBottomSettled(using: scrollProxy, animated: false, completesInitialPlacement: false)
-                }
+            if distanceToBottom > Self.bottomReachedEpsilon, bottomScrollWorkItems.isEmpty {
+                scrollToBottomSettled(using: scrollProxy, animated: false, completesInitialPlacement: false)
             }
             return
         }
@@ -221,9 +219,9 @@ struct MessageListView: View {
     }
 
     private func scrollToBottomIfNeeded(using scrollProxy: ScrollViewProxy) {
-        guard isAnchoredToBottom || isStickyAutoScrollActive || transcriptEndsWithUserMessage else { return }
+        guard isAnchoredToBottom || isStickyAutoScrollActive else { return }
         startStickyAutoScroll()
-        scrollToBottomSettled(using: scrollProxy, animated: true, completesInitialPlacement: false)
+        scrollToBottomSettled(using: scrollProxy, animated: false, completesInitialPlacement: false)
     }
 
     private func startStickyAutoScroll() {
@@ -379,15 +377,6 @@ private enum DisplayedSessionRow: Identifiable {
             return event.id
         case .toolInteraction(let call, _, _):
             return "toolInteraction:\(call.id)"
-        }
-    }
-
-    var message: Message? {
-        switch self {
-        case .event(.message(let message, _)):
-            return message
-        case .event, .toolInteraction:
-            return nil
         }
     }
 
