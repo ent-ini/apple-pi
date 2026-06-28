@@ -81,7 +81,7 @@ Remote mode talks to the configured `pi-appd` URL with bearer-token HTTP request
 - `GET /sessions/stream` is a long-lived SSE feed of catalog snapshots; it auto-reconnects on transient failure.
 - `POST /sessions/...` and friends are used for browsing, starting, resuming, and turn streaming.
 
-The macOS app's `Info.plist` opens `NSAllowsArbitraryLoads` and `NSAllowsLocalNetworking` so a local `pi-appd` (and a few hard-coded Tailscale IPs the developer uses) can answer over plain HTTP during development. See `script/Info.plist.tpl` for the exact list.
+The macOS app's `Info.plist` enables `NSAllowsLocalNetworking` and explicit HTTP exceptions for localhost plus the configured Tailscale daemon IP used during development. It does not enable global `NSAllowsArbitraryLoads`. See `script/Info.plist.tpl` for the exact list.
 
 Any network access made by Pi itself (including outbound calls made on your behalf by the agent) is outside pi-app and should be evaluated as Pi behavior.
 

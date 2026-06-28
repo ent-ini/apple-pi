@@ -43,8 +43,6 @@
     <string>pi-app can record voice prompts and transcribe them into chat messages before sending them to Pi.</string>
     <key>NSAppTransportSecurity</key>
     <dict>
-        <key>NSAllowsArbitraryLoads</key>
-        <true/>
         <key>NSAllowsLocalNetworking</key>
         <true/>
         <key>NSExceptionDomains</key>
