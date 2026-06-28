@@ -77,7 +77,8 @@ Download the release zip, unzip it, move the app to `/Applications`:
 ```sh
 shasum -a 256 "pi-app-<version>-<build>.zip"
 ditto -x -k "pi-app-<version>-<build>.zip" /tmp/pi-app
-mv "/tmp/pi-app/pi-app.app" /Applications/
+rm -rf "/Applications/pi-app.app"
+ditto "/tmp/pi-app/pi-app.app" "/Applications/pi-app.app"
 ```
 
 macOS may warn that the app cannot be verified. That is expected: this is an open source project and I am not paying Apple $99/year to make that dialog disappear. Launch once, then go to **System Settings -> Privacy & Security -> Security** and click **Open Anyway**.

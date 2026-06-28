@@ -99,6 +99,7 @@ final class PiAppState: ObservableObject {
     private var isLoadingAvailableModels = false
     private var pendingThinkingLevelBySessionKey: [String: String] = [:]
     private var thinkingLevelMutationVersionBySessionKey: [String: Int] = [:]
+    private var modelMutationVersionBySessionKey: [String: Int] = [:]
 
     init(
         defaults: UserDefaults = Foundation.UserDefaults(suiteName: nil) ?? Foundation.UserDefaults(),
@@ -1184,6 +1185,8 @@ final class PiAppState: ObservableObject {
             )
         }
 
+        let sessionKey = runtimeSessionKey(for: session)
+        let mutationVersion = nextModelMutationVersion(for: sessionKey)
         let remoteHost = host
         statusMessage = "Switching model..."
         Task { [weak self, weak session] in
@@ -1196,12 +1199,14 @@ final class PiAppState: ObservableObject {
                 )
                 await MainActor.run {
                     guard let self, let session, self.host == remoteHost else { return }
+                    guard (self.modelMutationVersionBySessionKey[sessionKey] ?? 0) == mutationVersion else { return }
                     session.updateRuntimeState(runtime)
                     self.statusMessage = "Model: \(runtime.modelDisplayName)"
                 }
             } catch {
                 await MainActor.run {
                     guard let self, let session else { return }
+                    guard (self.modelMutationVersionBySessionKey[sessionKey] ?? 0) == mutationVersion else { return }
                     self.statusMessage = error.localizedDescription
                     self.refreshSessionRuntime(for: session, updatesStatus: false)
                 }
@@ -1319,6 +1324,12 @@ final class PiAppState: ObservableObject {
             return "path:\(sessionPath)"
         }
         return "key:\(session.key)"
+    }
+
+    private func nextModelMutationVersion(for sessionKey: String) -> Int {
+        let next = (modelMutationVersionBySessionKey[sessionKey] ?? 0) + 1
+        modelMutationVersionBySessionKey[sessionKey] = next
+        return next
     }
 
     private func nextThinkingLevelMutationVersion(for sessionKey: String) -> Int {

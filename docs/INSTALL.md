@@ -27,7 +27,8 @@ Command-line example:
 ```sh
 shasum -a 256 "pi-app-<version>-<build>.zip"
 ditto -x -k "pi-app-<version>-<build>.zip" /tmp/pi-app-install
-mv "/tmp/pi-app-install/pi-app.app" /Applications/
+rm -rf "/Applications/pi-app.app"
+ditto "/tmp/pi-app-install/pi-app.app" "/Applications/pi-app.app"
 ```
 
 Apple documents the override flow in [Open a Mac app from an unknown developer](https://support.apple.com/guide/mac-help/open-a-mac-app-from-an-unknown-developer-mh40616/mac): after a blocked launch attempt, the Open Anyway button is available for about an hour.

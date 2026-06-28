@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
@@ -22,6 +23,18 @@ import (
 	"unicode/utf8"
 
 	"github.com/fsnotify/fsnotify"
+)
+
+const (
+	maxUploadBodyBytes        int64 = 64 << 20
+	maxUploadFileBytes        int64 = 32 << 20
+	maxAttachmentCount              = 16
+	maxAttachmentBytes        int64 = 32 << 20
+	maxImageAttachmentBytes   int64 = 10 << 20
+	serverReadHeaderTimeout         = 5 * time.Second
+	serverIdleTimeout               = 60 * time.Second
+	rpcCommandTimeout               = 2 * time.Minute
+	streamDisconnectKillGrace       = 5 * time.Second
 )
 
 type server struct {
@@ -358,18 +371,26 @@ func main() {
 	go srv.watchCatalog()
 
 	log.Printf("pi-appd listening on %s (agentDir=%s)", addr, srv.agentDir)
-	if err := http.ListenAndServe(addr, srv.loggingMiddleware(srv.authMiddleware(mux))); err != nil {
+	httpServer := &http.Server{
+		Addr:              addr,
+		Handler:           srv.loggingMiddleware(srv.authMiddleware(mux)),
+		ReadHeaderTimeout: serverReadHeaderTimeout,
+		IdleTimeout:       serverIdleTimeout,
+	}
+	if err := httpServer.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
 }
 
 func (s *server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.token != "" {
-			if !bearerTokenMatches(r.Header.Get("Authorization"), s.token) {
-				writeError(w, http.StatusUnauthorized, "unauthorized")
-				return
-			}
+		if r.URL.Path == "/healthz" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if s.token == "" || !bearerTokenMatches(r.Header.Get("Authorization"), s.token) {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -1189,9 +1210,13 @@ func (s *server) handleUploads(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid multipart form")
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBodyBytes)
+	if err := r.ParseMultipartForm(8 << 20); err != nil {
+		writeError(w, http.StatusRequestEntityTooLarge, "multipart form is too large")
 		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
@@ -1215,9 +1240,16 @@ func (s *server) handleUploads(w http.ResponseWriter, r *http.Request) {
 	}
 	defer targetFile.Close()
 
-	size, err := io.Copy(targetFile, file)
+	limitedFile := &io.LimitedReader{R: file, N: maxUploadFileBytes + 1}
+	size, err := io.Copy(targetFile, limitedFile)
 	if err != nil {
+		_ = os.Remove(targetPath)
 		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if size > maxUploadFileBytes {
+		_ = os.Remove(targetPath)
+		writeError(w, http.StatusRequestEntityTooLarge, "file is too large")
 		return
 	}
 
@@ -1230,6 +1262,9 @@ func (s *server) handleUploads(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) buildRPCPromptPayload(prompt string, attachments []attachmentReference) (rpcPromptCommand, error) {
+	if len(attachments) > maxAttachmentCount {
+		return rpcPromptCommand{}, errors.New("too many attachments")
+	}
 	prefix := strings.Builder{}
 	images := make([]rpcImageContent, 0, len(attachments))
 	resolved, err := s.resolveAttachmentPaths(attachments)
@@ -1238,12 +1273,23 @@ func (s *server) buildRPCPromptPayload(prompt string, attachments []attachmentRe
 	}
 
 	for _, attachment := range resolved {
+		info, statErr := os.Stat(attachment.Path)
+		if statErr != nil {
+			return rpcPromptCommand{}, errors.New("attachment file does not exist")
+		}
+		if info.Size() > maxAttachmentBytes {
+			return rpcPromptCommand{}, errors.New("attachment is too large")
+		}
+		isImageAttachment := strings.HasPrefix(strings.ToLower(strings.TrimSpace(attachment.MimeType)), "image/")
+		if isImageAttachment && info.Size() > maxImageAttachmentBytes {
+			return rpcPromptCommand{}, errors.New("image attachment is too large")
+		}
 		data, readErr := os.ReadFile(attachment.Path)
 		if readErr != nil {
 			return rpcPromptCommand{}, errors.New("attachment file does not exist")
 		}
 
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(attachment.MimeType)), "image/") {
+		if isImageAttachment {
 			images = append(images, rpcImageContent{
 				Type:     "image",
 				Data:     base64.StdEncoding.EncodeToString(data),
@@ -1415,6 +1461,16 @@ func (s *server) streamPiRPCCommand(
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	processDone := make(chan struct{})
+	var waitOnce sync.Once
+	var waitResult error
+	waitForCommand := func() error {
+		waitOnce.Do(func() {
+			waitResult = cmd.Wait()
+			close(processDone)
+		})
+		return waitResult
+	}
 
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -1439,7 +1495,7 @@ func (s *server) streamPiRPCCommand(
 			flusher.Flush()
 		}
 		run.close()
-		_ = cmd.Wait()
+		_ = waitForCommand()
 		<-stderrDone
 		return nil
 	}
@@ -1450,7 +1506,7 @@ func (s *server) streamPiRPCCommand(
 				flusher.Flush()
 			}
 			run.close()
-			_ = cmd.Wait()
+			_ = waitForCommand()
 			<-stderrDone
 			return nil
 		}
@@ -1461,7 +1517,7 @@ func (s *server) streamPiRPCCommand(
 			flusher.Flush()
 		}
 		run.close()
-		_ = cmd.Wait()
+		_ = waitForCommand()
 		<-stderrDone
 		return nil
 	}
@@ -1470,6 +1526,13 @@ func (s *server) streamPiRPCCommand(
 	go func() {
 		<-requestDone
 		_ = run.write(rpcSimpleCommand{ID: "pi-appd-client-disconnect-abort", Type: "abort"})
+		select {
+		case <-processDone:
+		case <-time.After(streamDisconnectKillGrace):
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+		}
 	}()
 
 	reader := bufio.NewReaderSize(stdout, 64*1024)
@@ -1538,7 +1601,7 @@ func (s *server) streamPiRPCCommand(
 	}
 
 	closeStdin()
-	waitErr := cmd.Wait()
+	waitErr := waitForCommand()
 	stderrText := <-stderrDone
 	if waitErr != nil {
 		message := stderrText
@@ -1819,7 +1882,9 @@ func (s *server) runPiRPCCommandsInContext(cwd string, sessionFile string, comma
 	if strings.TrimSpace(sessionFile) != "" {
 		args = append(args, "--session", sessionFile)
 	}
-	cmd := exec.Command(s.piExecutable, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), rpcCommandTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, s.piExecutable, args...)
 	cmd.Dir = expandHome(cwd)
 	cmd.Env = append(os.Environ(), "PI_CODING_AGENT_DIR="+s.agentDir)
 
@@ -1880,6 +1945,9 @@ func (s *server) runPiRPCCommandsInContext(cwd string, sessionFile string, comma
 	waitErr := cmd.Wait()
 	stderrText := <-stderrDone
 	if waitErr != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if stderrText != "" {
 			return nil, errors.New(stderrText)
 		}
@@ -2078,6 +2146,15 @@ func (s *server) catalogCacheTTL() time.Duration {
 	return 30 * time.Second
 }
 
+func sessionFilenameMatchesID(base string, sessionID string) bool {
+	base = strings.TrimSpace(base)
+	sessionID = strings.TrimSpace(sessionID)
+	if base == "" || sessionID == "" {
+		return false
+	}
+	return base == sessionID || strings.HasSuffix(base, "_"+sessionID)
+}
+
 func findSessionRecordFast(agentDir string, sessionID string) (sessionRecord, bool) {
 	root := filepath.Join(agentDir, "sessions")
 	var found sessionRecord
@@ -2087,7 +2164,7 @@ func findSessionRecordFast(agentDir string, sessionID string) (sessionRecord, bo
 			return nil
 		}
 		base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-		if !strings.Contains(base, sessionID) {
+		if !sessionFilenameMatchesID(base, sessionID) {
 			return nil
 		}
 		info, statErr := d.Info()
@@ -2096,6 +2173,9 @@ func findSessionRecordFast(agentDir string, sessionID string) (sessionRecord, bo
 		}
 		parsed, parseErr := parseSessionFile(path)
 		if parseErr != nil {
+			return nil
+		}
+		if parsedID := strings.TrimSpace(parsed.ID); parsedID != "" && parsedID != sessionID {
 			return nil
 		}
 		projectID := filepath.Base(filepath.Dir(path))

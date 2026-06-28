@@ -99,6 +99,44 @@ func TestReadLastLinesTrimsTrailingEmptyLineAndPreservesLineNumbers(t *testing.T
 	}
 }
 
+func TestAuthMiddlewareRequiresTokenExceptHealthz(t *testing.T) {
+	server := &server{token: ""}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	handler := server.authMiddleware(next)
+
+	healthRequest := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	healthResponse := httptest.NewRecorder()
+	handler.ServeHTTP(healthResponse, healthRequest)
+	if healthResponse.Code != http.StatusNoContent {
+		t.Fatalf("health status = %d, want %d", healthResponse.Code, http.StatusNoContent)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/sessions", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestAuthMiddlewareAcceptsBearerToken(t *testing.T) {
+	server := &server{token: "secret-token"}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	handler := server.authMiddleware(next)
+
+	request := httptest.NewRequest(http.MethodGet, "/sessions", nil)
+	request.Header.Set("Authorization", "Bearer secret-token")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusNoContent, response.Body.String())
+	}
+}
+
 func TestBearerTokenMatches(t *testing.T) {
 	if !bearerTokenMatches("Bearer secret-token", "secret-token") {
 		t.Fatal("valid bearer token did not match")
@@ -186,6 +224,33 @@ func TestHandleFilesOmitsParentOutsideBrowsableRoots(t *testing.T) {
 	}
 }
 
+func TestHandleUploadsRejectsLargeFiles(t *testing.T) {
+	agentDir := t.TempDir()
+	server := &server{agentDir: agentDir}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "large.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write(bytes.Repeat([]byte{'x'}, int(maxUploadFileBytes)+1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/uploads", &body)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	response := httptest.NewRecorder()
+
+	server.handleUploads(response, request)
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusRequestEntityTooLarge, response.Body.String())
+	}
+}
+
 func TestHandleUploadsUsesPrivatePermissions(t *testing.T) {
 	agentDir := t.TempDir()
 	server := &server{agentDir: agentDir}
@@ -230,6 +295,68 @@ func TestHandleUploadsUsesPrivatePermissions(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Fatalf("upload file mode = %o, want 600", info.Mode().Perm())
+	}
+}
+
+func TestBuildRPCPromptPayloadRejectsTooManyAttachments(t *testing.T) {
+	attachments := make([]attachmentReference, maxAttachmentCount+1)
+	_, err := (&server{agentDir: t.TempDir()}).buildRPCPromptPayload("hello", attachments)
+	if err == nil || !strings.Contains(err.Error(), "too many attachments") {
+		t.Fatalf("err = %v, want too many attachments", err)
+	}
+}
+
+func TestBuildRPCPromptPayloadRejectsLargeAttachment(t *testing.T) {
+	agentDir := t.TempDir()
+	uploadDir := filepath.Join(agentDir, "uploads")
+	if err := os.MkdirAll(uploadDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	largePath := filepath.Join(uploadDir, "large.txt")
+	file, err := os.OpenFile(largePath, os.O_WRONLY|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(maxAttachmentBytes + 1); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = (&server{agentDir: agentDir}).buildRPCPromptPayload("hello", []attachmentReference{{Path: largePath}})
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("err = %v, want too large", err)
+	}
+}
+
+func TestSessionFilenameMatchesID(t *testing.T) {
+	if !sessionFilenameMatchesID("2026-01-01T00-00-00-000Z_abc123", "abc123") {
+		t.Fatal("timestamp_id filename did not match")
+	}
+	if !sessionFilenameMatchesID("abc123", "abc123") {
+		t.Fatal("exact filename did not match")
+	}
+	for _, base := range []string{"xabc123", "abc123x", "prefix_abc123_suffix", ""} {
+		if sessionFilenameMatchesID(base, "abc123") {
+			t.Fatalf("base %q unexpectedly matched", base)
+		}
+	}
+}
+
+func TestFindSessionRecordFastRequiresExactParsedID(t *testing.T) {
+	agentDir := t.TempDir()
+	sessionsDir := filepath.Join(agentDir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	wrongPath := filepath.Join(sessionsDir, "2026-01-01T00-00-00-000Z_target.jsonl")
+	if err := os.WriteFile(wrongPath, []byte(`{"type":"session","id":"other","cwd":"/tmp"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if record, ok := findSessionRecordFast(agentDir, "target"); ok {
+		t.Fatalf("record = %#v, want no match", record)
 	}
 }
 

@@ -32,7 +32,9 @@ struct ChatSessionView: View {
     }
 
     private var canAdjustSessionOptions: Bool {
-        (session.sessionID != nil || session.launchRequest != nil) && !session.isSending
+        appState.host.usesRemoteDaemonTransport &&
+        (session.sessionID != nil || session.launchRequest != nil) &&
+        !session.isSending
     }
 
     var body: some View {

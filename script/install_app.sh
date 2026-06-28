@@ -17,6 +17,7 @@ DEST_DIR="${DEST_DIR:-/Applications}"
 OPEN_AFTER_INSTALL="${OPEN_AFTER_INSTALL:-1}"
 BUNDLE_DIR="${ROOT_DIR}/dist/${APP_NAME}.app"
 DEST_APP="${DEST_DIR}/${APP_NAME}.app"
+LEGACY_APP_PATHS=("${DEST_DIR}/Apple Pi.app" "${DEST_DIR}/ApplePi.app")
 
 cd "${ROOT_DIR}"
 
@@ -26,16 +27,24 @@ BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-com.entini.piapp}" \
 EXECUTABLE_NAME="${EXECUTABLE_NAME:-pi-app}" \
 script/package_release.sh --no-zip
 
-# Quit the installed app if it is currently running. Ignore failures: first
-# install, renamed bundle, or ad-hoc signing can all make osascript return
-# non-zero even though it is safe to continue.
+# Quit both the new app and legacy pre-rename bundles/processes. Ignore
+# failures: first install, renamed bundle, or ad-hoc signing can all make
+# osascript return non-zero even though it is safe to continue.
 /usr/bin/osascript -e "tell application id \"${BUNDLE_IDENTIFIER:-com.entini.piapp}\" to quit" >/dev/null 2>&1 || true
+/usr/bin/osascript -e 'tell application id "com.dodoreach.ApplePi" to quit' >/dev/null 2>&1 || true
 pkill -x "${EXECUTABLE_NAME:-pi-app}" >/dev/null 2>&1 || true
+pkill -x "ApplePi" >/dev/null 2>&1 || true
 sleep 0.4
 
 mkdir -p "${DEST_DIR}"
 rm -rf "${DEST_APP}"
 /usr/bin/ditto "${BUNDLE_DIR}" "${DEST_APP}"
+for legacy_app in "${LEGACY_APP_PATHS[@]}"; do
+  if [[ -d "${legacy_app}" ]]; then
+    echo "Removing legacy app bundle ${legacy_app}"
+    rm -rf "${legacy_app}"
+  fi
+done
 /usr/bin/xattr -dr com.apple.quarantine "${DEST_APP}" 2>/dev/null || true
 
 /usr/bin/codesign --verify --deep --strict --verbose=2 "${DEST_APP}"

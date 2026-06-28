@@ -93,11 +93,6 @@ struct ApplePiCommands: Commands {
             }
             .keyboardShortcut(shortcut(for: .newSession).keyEquivalent, modifiers: shortcut(for: .newSession).eventModifiers)
 
-            Button("New Temporary Session") {
-                appState.openTemporarySessionInCurrentFolder()
-            }
-            .keyboardShortcut(shortcut(for: .newTemporarySession).keyEquivalent, modifiers: shortcut(for: .newTemporarySession).eventModifiers)
-
             Button("New Session in Folder...") {
                 appState.presentNewSessionInFolder()
             }

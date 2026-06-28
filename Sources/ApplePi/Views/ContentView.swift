@@ -97,9 +97,6 @@ struct ContentView: View {
                 .help("New session")
 
                 Menu {
-                    Button("New Temporary Session") {
-                        appState.openTemporarySessionInCurrentFolder()
-                    }
                     Button("Refresh Sessions") {
                         appState.refreshCatalog()
                     }
@@ -339,9 +336,6 @@ private struct ProjectRow: View {
             .contextMenu {
                 Button("New Session") {
                     appState.openNewSession(in: project.workingDirectory)
-                }
-                Button("New Temporary Session") {
-                    appState.openNewSession(in: project.workingDirectory, isTemporary: true)
                 }
                 Divider()
                 Button("Show in Finder") {

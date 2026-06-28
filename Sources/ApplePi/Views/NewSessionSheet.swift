@@ -24,7 +24,6 @@ struct NewSessionSheet: View {
                         .truncationMode(.middle)
                 }
                 TextField("Name", text: $appState.newSessionName)
-                Toggle("Temporary", isOn: $appState.newSessionIsTemporary)
             }
             .formStyle(.grouped)
 
