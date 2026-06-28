@@ -64,6 +64,39 @@ func TestReadEventRecordsAfterSkipsPartialTrailingLine(t *testing.T) {
 	}
 }
 
+func TestSessionEventTailerReadsOnlyAppendedCompleteLines(t *testing.T) {
+	path := writeTempSessionFile(t, "{\"type\":\"session\"}\n{\"type\":\"message\",\"id\":\"b\"}\n{\"type\":\"message\"")
+	tailer, err := newSessionEventTailer(path, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := tailer.readNewRecords()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(initial) != 1 || initial[0].Line != 1 {
+		t.Fatalf("initial = %#v, want line 1 only", initial)
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString(",\"id\":\"c\"}\n{\"type\":\"message\",\"id\":\"d\"}\n"); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	appended, err := tailer.readNewRecords()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(appended) != 2 || appended[0].Line != 2 || appended[1].Line != 3 {
+		t.Fatalf("appended = %#v, want lines 2 and 3", appended)
+	}
+}
+
 func TestReadAllLinesSkipsPartialTrailingLine(t *testing.T) {
 	path := writeTempSessionFile(t, "{\"type\":\"session\"}\n{\"type\":\"message\"")
 

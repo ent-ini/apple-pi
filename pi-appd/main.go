@@ -842,9 +842,13 @@ func (s *server) handleSessionEventStream(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	cursor := after
+	tailer, err := newSessionEventTailer(record.FilePath, after)
+	if err != nil {
+		writeSSEError(w, flusher, err.Error())
+		return
+	}
 	sendAfterCursor := func() bool {
-		records, err := readEventRecordsAfter(record.FilePath, cursor)
+		records, err := tailer.readNewRecords()
 		if err != nil {
 			writeSSEError(w, flusher, err.Error())
 			return false
@@ -853,7 +857,6 @@ func (s *server) handleSessionEventStream(w http.ResponseWriter, r *http.Request
 			if !writeSSE(w, flusher, "event", event) {
 				return false
 			}
-			cursor = event.Line
 		}
 		return true
 	}
@@ -884,6 +887,9 @@ func (s *server) handleSessionEventStream(w http.ResponseWriter, r *http.Request
 		case <-r.Context().Done():
 			return
 		case <-heartbeat.C:
+			if !sendAfterCursor() {
+				return
+			}
 			if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
 				return
 			}
@@ -917,16 +923,90 @@ func (s *server) handleSessionEventStream(w http.ResponseWriter, r *http.Request
 	}
 }
 
+type sessionEventTailer struct {
+	path   string
+	cursor int
+	offset int64
+}
+
+func newSessionEventTailer(path string, after int) (*sessionEventTailer, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	lines, offset := splitCompleteJSONLLinesWithOffset(data)
+	tailer := &sessionEventTailer{path: path, cursor: after, offset: offset}
+	start := after + 1
+	if start < 0 {
+		start = 0
+	}
+	if start > len(lines) {
+		start = len(lines)
+	}
+	// Rewind offset to the start of the first unsent complete line so the
+	// initial readNewRecords call can emit catch-up records through the same
+	// append-tail path used for live updates.
+	if start < len(lines) {
+		tailer.offset = offsetForLineStart(data, start)
+		tailer.cursor = start - 1
+	}
+	return tailer, nil
+}
+
+func (t *sessionEventTailer) readNewRecords() ([]rawEventRecord, error) {
+	file, err := os.Open(t.path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() < t.offset {
+		// File was truncated/rotated. Fall back to a fresh full catch-up from the
+		// current cursor, then continue tailing from the new complete offset.
+		data, err := os.ReadFile(t.path)
+		if err != nil {
+			return nil, err
+		}
+		lines, offset := splitCompleteJSONLLinesWithOffset(data)
+		t.offset = offset
+		records := recordsAfterLines(lines, t.cursor)
+		if len(records) > 0 {
+			t.cursor = records[len(records)-1].Line
+		}
+		return records, nil
+	}
+	if _, err := file.Seek(t.offset, io.SeekStart); err != nil {
+		return nil, err
+	}
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return nil, err
+	}
+	lines, consumed := splitCompleteJSONLLinesWithOffset(data)
+	if consumed > 0 {
+		t.offset += consumed
+	}
+	records := make([]rawEventRecord, 0, len(lines))
+	for _, line := range lines {
+		t.cursor++
+		records = append(records, rawEventRecord{Line: t.cursor, Raw: line})
+	}
+	return records, nil
+}
+
 func readEventRecordsAfter(path string, after int) ([]rawEventRecord, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	// The streaming endpoint must not advance its cursor over a partial
-	// trailing write. A closed JSONL file may legitimately omit the final
-	// newline, though, so keep a non-newline final record when it is already
-	// valid JSON and only defer malformed trailing fragments.
-	lines := splitCompleteJSONLLines(data)
+	lines, _ := splitCompleteJSONLLinesWithOffset(data)
+	return recordsAfterLines(lines, after), nil
+}
+
+func recordsAfterLines(lines []string, after int) []rawEventRecord {
 	start := after + 1
 	if start < 0 {
 		start = 0
@@ -938,7 +1018,24 @@ func readEventRecordsAfter(path string, after int) ([]rawEventRecord, error) {
 	for i := start; i < len(lines); i++ {
 		records = append(records, rawEventRecord{Line: i, Raw: lines[i]})
 	}
-	return records, nil
+	return records
+}
+
+func offsetForLineStart(data []byte, lineIndex int) int64 {
+	if lineIndex <= 0 {
+		return 0
+	}
+	line := 0
+	for index, b := range data {
+		if b != '\n' {
+			continue
+		}
+		line++
+		if line == lineIndex {
+			return int64(index + 1)
+		}
+	}
+	return int64(len(data))
 }
 
 func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
@@ -2417,14 +2514,31 @@ func readAllLines(path string) ([]string, error) {
 }
 
 func splitCompleteJSONLLines(data []byte) []string {
-	lines := splitJSONLLines(data)
-	if len(data) > 0 && data[len(data)-1] != '\n' && len(lines) > 0 {
-		candidate := strings.TrimSpace(lines[len(lines)-1])
-		if candidate == "" || !json.Valid([]byte(candidate)) {
-			lines = lines[:len(lines)-1]
+	lines, _ := splitCompleteJSONLLinesWithOffset(data)
+	return lines
+}
+
+func splitCompleteJSONLLinesWithOffset(data []byte) ([]string, int64) {
+	lines := make([]string, 0, bytes.Count(data, []byte("\n"))+1)
+	lineStart := 0
+	completeOffset := 0
+	for index, b := range data {
+		if b != '\n' {
+			continue
+		}
+		lines = append(lines, string(data[lineStart:index]))
+		lineStart = index + 1
+		completeOffset = lineStart
+	}
+	if lineStart < len(data) {
+		tail := data[lineStart:]
+		candidate := strings.TrimSpace(string(tail))
+		if candidate != "" && json.Valid([]byte(candidate)) {
+			lines = append(lines, string(tail))
+			completeOffset = len(data)
 		}
 	}
-	return lines
+	return lines, int64(completeOffset)
 }
 
 func splitJSONLLines(data []byte) []string {

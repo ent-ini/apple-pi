@@ -32,6 +32,7 @@ Normal releases use the default ad-hoc signing identity (`SIGN_IDENTITY=-`). Thi
 ```sh
 git status --short
 swift test
+(cd pi-appd && go test ./...)
 ```
 
 Review changes to:

@@ -17,6 +17,7 @@ Use this checklist for a public pi-app release. For the full maintainer workflow
 
 ```sh
 swift test
+(cd pi-appd && go test ./...)
 ```
 
 Expected coverage areas:
