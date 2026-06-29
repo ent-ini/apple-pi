@@ -1052,11 +1052,14 @@ private final class ComposerNSTextView: NSTextView {
     var onPasteAttachments: ((NSPasteboard) -> Void)?
 
     override func keyDown(with event: NSEvent) {
-        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
-           event.charactersIgnoringModifiers?.lowercased() == "v" {
+        if Self.isPasteShortcut(event) {
             let pasteboard = NSPasteboard.general
             if Self.hasAttachmentPayload(in: pasteboard) {
                 onPasteAttachments?(pasteboard)
+                return
+            }
+            if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.control) {
+                paste(nil)
                 return
             }
         }
@@ -1079,6 +1082,13 @@ private final class ComposerNSTextView: NSTextView {
             return
         }
         super.paste(sender)
+    }
+
+    private static func isPasteShortcut(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard flags.contains(.command) || flags.contains(.control) else { return false }
+        if event.keyCode == 9 { return true }
+        return event.charactersIgnoringModifiers?.lowercased() == "v"
     }
 
     private static func hasAttachmentPayload(in pasteboard: NSPasteboard) -> Bool {
