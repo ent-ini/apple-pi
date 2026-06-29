@@ -145,9 +145,12 @@ final class ChatSession: ObservableObject, Identifiable {
 
     func abortSend() {
         didAbortCurrentSend = true
-        isSending = false
-        isAwaitingTurnCommit = false
-        canAcceptSteering = false
+        // Do not cancel or mark the active stream as non-steerable here.
+        // Until output_complete arrives, this is still the current live RPC
+        // turn; starting a new send would reset transient transcript state and
+        // make pre-abort messages appear to vanish. Keep the stream steerable
+        // so any next composer submit before stream close goes through the
+        // existing run instead of racing it.
         statusMessage = "Aborting..."
         appendAbortCommandIfNeeded()
         rebuildEvents()
@@ -389,19 +392,30 @@ final class ChatSession: ObservableObject, Identifiable {
         rebuildEvents()
     }
 
+    func recordAbortAcknowledged() {
+        didAbortCurrentSend = true
+        statusMessage = "Aborted"
+        appendAbortEventIfNeeded()
+        rebuildEvents()
+    }
+
     func finishSendingAborted() {
         pendingSendCompletionGeneration = nil
         isSending = false
         isAwaitingTurnCommit = false
         canAcceptSteering = false
         statusMessage = "Aborted"
+        appendAbortEventIfNeeded()
+        rebuildEvents()
+    }
+
+    private func appendAbortEventIfNeeded() {
         if !transientStreamEvents.contains(where: { event in
             if case .other(let type, _) = event { return type == "abort" }
             return false
         }) {
             transientStreamEvents.append(.other(type: "abort", lineIndex: nextTransientLineIndex(for: transientStreamEvents.count)))
         }
-        rebuildEvents()
     }
 
     func finishSendingWithError(_ message: String) {

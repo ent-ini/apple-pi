@@ -844,11 +844,9 @@ final class PiAppState: ObservableObject {
             return steerMessage(prompt, attachments: attachments, in: session)
         }
         if session.isSending || session.isAwaitingTurnCommit || session.hasActiveSend {
-            // Generation has already ended (canAcceptSteering=false) or the
-            // previous stream is only doing final catch-up. Do not block the
-            // composer: clear the finalizing flags and start a normal new send.
-            // If pi-appd has not released its active-run guard yet, the remote
-            // client retries the POST /send briefly instead of surfacing a UI lock.
+            // If the live run is no longer steerable, generation has ended and
+            // this submit should become a normal new prompt. This mirrors TUI:
+            // during generation -> steer, after generation -> next message.
             session.finishFinalizingForFollowUp()
             setSessionSending(false, aliases: sessionAliases(for: session))
         }
@@ -1174,7 +1172,10 @@ final class PiAppState: ObservableObject {
         case .agentEnd:
             session.markTurnOutputComplete()
         case .abort:
-            session.finishSendingAborted()
+            // Abort is an event inside the current live run, not the end of the
+            // client stream. Keep sendTask/isSending intact until output_complete
+            // so any follow-up typed before stream close is routed as steer.
+            session.recordAbortAcknowledged()
             setSessionSending(false, aliases: sessionAliases(for: session))
         case .outputComplete:
             if !session.hasAbortedCurrentSend {
