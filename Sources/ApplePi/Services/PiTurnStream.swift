@@ -47,6 +47,10 @@ enum PiTurnStreamParser {
         case "session":
             guard let meta = SessionEventParser.decodeSessionMeta(from: object) else { return nil }
             return .sessionHeader(meta)
+        case "session_info":
+            let events = SessionEventParser.decodeAll(line: trimmed, at: 0)
+            guard !events.isEmpty else { return nil }
+            return .sessionEvents(events, isFinal: false)
         case "message_update", "message_end":
             let events = SessionEventParser.decodeMessageEvents(from: object, lineIndex: 0)
             guard !events.isEmpty else { return nil }

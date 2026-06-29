@@ -241,7 +241,9 @@ final class ChatSession: ObservableObject, Identifiable {
         rebuildEvents()
     }
 
-    func applyStreamingEvents(_ events: [SessionEvent], isFinal: Bool) {
+    @discardableResult
+    func applyStreamingEvents(_ events: [SessionEvent], isFinal: Bool) -> Bool {
+        let didUpdateTitle = updateTitleFromSessionMetadata(in: events)
         var nextStreamEvents = transientStreamEvents
 
         for event in events {
@@ -275,6 +277,7 @@ final class ChatSession: ObservableObject, Identifiable {
         transientStreamEvents = nextStreamEvents
         statusMessage = isFinal ? "Finishing..." : "Streaming response..."
         rebuildEvents()
+        return didUpdateTitle
     }
 
     func finishSendingAndReload() {
@@ -364,7 +367,9 @@ final class ChatSession: ObservableObject, Identifiable {
         appendPersistedPage(SessionEventsPage.fromEvents(newEvents))
     }
 
-    func appendPersistedPage(_ page: SessionEventsPage) {
+    @discardableResult
+    func appendPersistedPage(_ page: SessionEventsPage) -> Bool {
+        let didUpdateTitle = updateTitleFromSessionMetadata(in: page.events)
         let filtered = page.events.filter { $0.lineIndex > lastPersistedLineIndex }
         if !filtered.isEmpty {
             persistedEvents.append(contentsOf: filtered)
@@ -375,6 +380,7 @@ final class ChatSession: ObservableObject, Identifiable {
         if page.hasMoreBefore {
             hasEarlierHistory = true
         }
+        return didUpdateTitle
     }
 
     func loadEarlierHistory(limit: Int = 60) {
@@ -458,6 +464,7 @@ final class ChatSession: ObservableObject, Identifiable {
             case .loaded(let page, let modificationDate):
                 persistedEvents = page.events
                 hasEarlierHistory = page.hasMoreBefore
+                updateTitleFromSessionMetadata(in: page.events)
                 reconcileTransientEvents(with: page.events)
                 rebuildEvents()
                 statusMessage = page.events.isEmpty ? "Session is empty." : "\(page.events.count) events"
@@ -489,6 +496,20 @@ final class ChatSession: ObservableObject, Identifiable {
         let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         title = trimmed
+    }
+
+    @discardableResult
+    private func updateTitleFromSessionMetadata(in events: [SessionEvent]) -> Bool {
+        for event in events.reversed() {
+            guard case .meta(let meta, _) = event,
+                  let displayName = meta.displayName?.nilIfBlank,
+                  displayName != title else {
+                continue
+            }
+            title = displayName
+            return true
+        }
+        return false
     }
 
     private func rebuildEvents() {

@@ -54,7 +54,7 @@ enum SessionEventParser {
         else { return [] }
 
         switch type {
-        case "session":
+        case "session", "session_info":
             guard let meta = decodeSessionMeta(from: object) else { return [] }
             return [.meta(meta, lineIndex: lineIndex)]
         case "message":

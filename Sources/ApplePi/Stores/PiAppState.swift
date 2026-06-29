@@ -1037,7 +1037,9 @@ final class PiAppState: ObservableObject {
                 applyCachedAvailableModels(to: session)
             }
         case .sessionEvents(let events, let isFinal):
+            let previousTitle = session.title
             session.applyStreamingEvents(events, isFinal: isFinal)
+            syncSidebarTitleIfNeeded(for: session, previousTitle: previousTitle)
         case .turnEnd:
             session.markTurnOutputComplete()
         case .agentEnd:
@@ -1848,7 +1850,9 @@ final class PiAppState: ObservableObject {
            firstLine <= after {
             return
         }
+        let previousTitle = session.title
         session.appendPersistedPage(page)
+        syncSidebarTitleIfNeeded(for: session, previousTitle: previousTitle)
     }
 
     private func startSelectedSessionEventPolling() {
@@ -1941,7 +1945,9 @@ final class PiAppState: ObservableObject {
                 session.loadFromDisk(force: true)
                 return
             }
+            let previousTitle = session.title
             session.appendPersistedPage(delta)
+            syncSidebarTitleIfNeeded(for: session, previousTitle: previousTitle)
             let sessionKey = runtimeSessionKey(for: session)
             session.updateRuntimeState(runtimeApplyingPendingThinkingLevel(runtime, sessionKey: sessionKey))
             applyCachedAvailableModels(to: session)
@@ -2263,6 +2269,17 @@ final class PiAppState: ObservableObject {
             guard shouldPreserve else { continue }
             upsertSidebarSession(for: session)
         }
+    }
+
+    private func syncSidebarTitleIfNeeded(for session: ChatSession, previousTitle: String) {
+        guard session.title != previousTitle else { return }
+        let aliases = Set(sessionAliases(for: session))
+        if let existing = sessions.first(where: { !aliases.isDisjoint(with: Set(sessionAliases(for: $0))) }) {
+            applyRenamedSession(existing, title: session.title)
+        } else {
+            upsertSidebarSession(for: session)
+        }
+        schedulePersistedChatTabsSave()
     }
 
     private func upsertSidebarSession(

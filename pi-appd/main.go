@@ -2470,7 +2470,11 @@ func boundedFileModTime(modTime time.Time) time.Time {
 }
 
 func parseSessionFile(path string) (parsedSession, error) {
-	lines, err := readCatalogPreviewLines(path, 80)
+	// Autonaming usually writes `session_info` after several turns. Tool-heavy
+	// early turns can easily exceed 80 JSONL records before that happens, so
+	// keep a wider head/tail preview to avoid falling back to the first user
+	// message even though the session already has a generated name.
+	lines, err := readCatalogPreviewLines(path, 512)
 	if err != nil {
 		return parsedSession{}, err
 	}
