@@ -53,6 +53,8 @@ final class ChatSession: ObservableObject, Identifiable {
     private var loadTask: Task<Void, Never>?
     private var sendGeneration: Int = 0
     private var pendingSendCompletionGeneration: Int?
+    private var needsReloadAfterCurrentLoad = false
+    private var forceReloadAfterCurrentLoad = false
     private var pendingHistoryAnchorEventID: String?
     /// The in-flight send task, if any. `PiAppState.sendMessage`
     /// assigns the task it spawns so the store can cancel it when
@@ -100,7 +102,7 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     var canSend: Bool {
-        !isSending
+        !isSending && !isLoading
     }
 
     var currentSendGeneration: Int {
@@ -418,7 +420,11 @@ final class ChatSession: ObservableObject, Identifiable {
     /// Reload the session from disk or remote API. Safe to call multiple
     /// times; replaces the current persisted event list.
     func loadFromDisk(force: Bool = false) {
-        guard !isLoading else { return }
+        guard !isLoading else {
+            needsReloadAfterCurrentLoad = true
+            forceReloadAfterCurrentLoad = forceReloadAfterCurrentLoad || force
+            return
+        }
 
         let sessionPath = self.sessionPath
         let eventLoader = self.eventLoader
@@ -445,14 +451,10 @@ final class ChatSession: ObservableObject, Identifiable {
             guard let self else { return }
             switch outcome {
             case .skipped:
-                isLoading = false
-                completeSendReloadIfNeeded(for: completionGeneration)
-                loadTask = nil
+                finishLoad(completionGeneration: completionGeneration)
             case .notBackedByFile:
                 statusMessage = "Session is not backed by a file yet."
-                isLoading = false
-                completeSendReloadIfNeeded(for: completionGeneration)
-                loadTask = nil
+                finishLoad(completionGeneration: completionGeneration)
             case .loaded(let page, let modificationDate):
                 persistedEvents = page.events
                 hasEarlierHistory = page.hasMoreBefore
@@ -461,17 +463,25 @@ final class ChatSession: ObservableObject, Identifiable {
                 statusMessage = page.events.isEmpty ? "Session is empty." : "\(page.events.count) events"
                 hasLoadedOnce = true
                 lastLoadedModificationDate = modificationDate
-                isLoading = false
-                completeSendReloadIfNeeded(for: completionGeneration)
-                loadTask = nil
+                finishLoad(completionGeneration: completionGeneration)
             case .failed(let message):
                 loadError = message
                 statusMessage = "Failed to read session: \(message)"
-                isLoading = false
-                completeSendReloadIfNeeded(for: completionGeneration)
-                loadTask = nil
+                finishLoad(completionGeneration: completionGeneration)
             }
         }
+    }
+
+    private func finishLoad(completionGeneration: Int?) {
+        isLoading = false
+        completeSendReloadIfNeeded(for: completionGeneration)
+        loadTask = nil
+
+        guard needsReloadAfterCurrentLoad else { return }
+        let force = forceReloadAfterCurrentLoad
+        needsReloadAfterCurrentLoad = false
+        forceReloadAfterCurrentLoad = false
+        loadFromDisk(force: force)
     }
 
     /// Replace the title (e.g. when the user renames the tab).

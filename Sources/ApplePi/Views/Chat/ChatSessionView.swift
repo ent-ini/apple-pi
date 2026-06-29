@@ -24,7 +24,7 @@ struct ChatSessionView: View {
     }
 
     private var canSend: Bool {
-        !session.isSending && !audioRecorder.isRecording && !isTranscribingAudio && hasDraftContent
+        !session.isSending && !session.isLoading && !audioRecorder.isRecording && !isTranscribingAudio && hasDraftContent
     }
 
     private var canSteer: Bool {

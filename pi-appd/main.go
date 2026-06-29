@@ -1574,11 +1574,13 @@ func (s *server) streamPiRPCCommand(
 	if binding != nil && !registerBinding(binding) {
 		return errors.New("session already has an active run")
 	}
-	defer func() {
+	releaseActiveRun := func() {
 		if activeSessionID != "" {
 			s.unregisterActiveRun(activeSessionID, run)
+			activeSessionID = ""
 		}
-	}()
+	}
+	defer releaseActiveRun()
 
 	cmd := exec.Command(s.piExecutable, args...)
 	cmd.Dir = expandHome(cwd)
@@ -1688,7 +1690,7 @@ func (s *server) streamPiRPCCommand(
 							flusher.Flush()
 						}
 						closeStdin()
-						continue
+						break
 					}
 					writeNDJSON(w, binding)
 					if flusher != nil {
@@ -1751,10 +1753,12 @@ func (s *server) streamPiRPCCommand(
 		if flusher != nil {
 			flusher.Flush()
 		}
+		releaseActiveRun()
 		s.handleCatalogChange()
 		return nil
 	}
 
+	releaseActiveRun()
 	s.handleCatalogChange()
 
 	writeNDJSON(w, map[string]any{"type": "output_complete"})

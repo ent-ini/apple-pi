@@ -82,6 +82,7 @@ final class PiAppState: ObservableObject {
     private var catalogRefreshTask: Task<Void, Never>?
     private var selectedSessionPollingTask: Task<Void, Never>?
     private var selectedSessionStreamTask: Task<Void, Never>?
+    private var selectedSessionCatchUpTask: Task<Void, Never>?
     private var isSelectedSessionStreamConnected = false
     private var activityObservers: [NSObjectProtocol] = []
     private var isApplicationActive = true
@@ -195,6 +196,8 @@ final class PiAppState: ObservableObject {
         stopCatalogAdaptivePolling()
         selectedSessionPollingTask?.cancel()
         selectedSessionPollingTask = nil
+        selectedSessionCatchUpTask?.cancel()
+        selectedSessionCatchUpTask = nil
         stopSelectedSessionEventStream()
         savePersistedChatTabs()
         for tab in chatWorkspace.tabs {
@@ -1770,6 +1773,8 @@ final class PiAppState: ObservableObject {
     private func stopSelectedSessionEventStream() {
         selectedSessionStreamTask?.cancel()
         selectedSessionStreamTask = nil
+        selectedSessionCatchUpTask?.cancel()
+        selectedSessionCatchUpTask = nil
         isSelectedSessionStreamConnected = false
     }
 
@@ -1833,15 +1838,10 @@ final class PiAppState: ObservableObject {
     }
 
     private func applySessionStreamPage(_ page: SessionEventsPage, to session: ChatSession) {
-        if session.isLoading {
-            isSelectedSessionStreamConnected = false
+        if session.isLoading || session.isSending {
+            scheduleSelectedSessionCatchUp(after: .milliseconds(250))
             return
         }
-        // While the user is actively sending, the POST NDJSON stream owns the
-        // optimistic timeline. The final output_complete reload reconciles the
-        // persisted log; the session SSE stream is the production live path for
-        // non-local writes and reconnect catch-up.
-        guard !session.isSending else { return }
         let after = session.lastPersistedLineIndex
         if let firstLine = page.firstLine,
            !page.events.isEmpty,
@@ -1870,12 +1870,40 @@ final class PiAppState: ObservableObject {
         }
     }
 
-    private func syncSelectedRemoteSessionDelta() async {
+    private func scheduleSelectedSessionCatchUp(after delay: Duration) {
+        guard let selectedTabID = chatWorkspace.selectedTab?.id else { return }
+        selectedSessionCatchUpTask?.cancel()
+        let streamHost = host
+        selectedSessionCatchUpTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            for _ in 0..<8 {
+                guard !Task.isCancelled else { return }
+                let isReady = await MainActor.run { () -> Bool? in
+                    guard let self else { return nil }
+                    guard self.host == streamHost,
+                          let selected = self.chatWorkspace.selectedTab,
+                          selected.id == selectedTabID else {
+                        return nil
+                    }
+                    return !selected.isLoading && !selected.isSending
+                }
+                guard let isReady else { return }
+                if isReady {
+                    await self?.syncSelectedRemoteSessionDelta(force: true)
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(150))
+            }
+        }
+    }
+
+    private func syncSelectedRemoteSessionDelta(force: Bool = false) async {
         guard host.usesRemoteDaemonTransport else { return }
         // The per-session SSE stream is the primary live path. Polling is
         // only useful when the stream is down, so skip the round-trip
-        // entirely while it is healthy.
-        guard !isSelectedSessionStreamConnected else { return }
+        // entirely while it is healthy. Forced catch-up is used after
+        // send/reload windows where SSE pages were intentionally not applied.
+        guard force || !isSelectedSessionStreamConnected else { return }
         guard let session = chatWorkspace.selectedTab,
               let sessionID = session.sessionID?.nilIfBlank,
               !session.isLoading,

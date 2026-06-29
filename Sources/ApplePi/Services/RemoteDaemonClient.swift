@@ -376,13 +376,25 @@ struct RemoteDaemonClient {
         onEvent: @escaping @Sendable (PiTurnStreamEvent) async -> Void
     ) async throws {
         let body = SendSessionRequestBody(prompt: prompt, attachments: attachments)
-        try await stream(
-            host: host,
-            path: "/sessions/\(encodedPathComponent(sessionID))/send",
-            method: "POST",
-            body: body,
-            onEvent: onEvent
-        )
+        var attempt = 0
+        while true {
+            do {
+                try await stream(
+                    host: host,
+                    path: "/sessions/\(encodedPathComponent(sessionID))/send",
+                    method: "POST",
+                    body: body,
+                    onEvent: onEvent
+                )
+                return
+            } catch RemoteDaemonError.requestFailed(let status, _) where status == 409 && attempt < 3 {
+                let backoffMilliseconds = 200 * (1 << attempt)
+                attempt += 1
+                try await Task.sleep(for: .milliseconds(backoffMilliseconds))
+            } catch {
+                throw error
+            }
+        }
     }
 
     func abortSession(host: PiHostConfiguration, sessionID: String, tokenOverride: String? = nil) async throws {

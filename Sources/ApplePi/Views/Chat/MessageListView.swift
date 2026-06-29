@@ -175,7 +175,7 @@ struct MessageListView: View {
     private static let historyAutoLoadDistance: CGFloat = 240
     private static let stickyBreakawayDistance: CGFloat = 180
     private static let bottomReachedEpsilon: CGFloat = 3
-    private static let stickyAutoScrollDuration: TimeInterval = 0.7
+    private static let stickyAutoScrollDuration: TimeInterval = 30
     private static let scrollSettleDelays: [TimeInterval] = [0, 0.08, 0.22]
     private static let ensureVisibleSettleDelays: [TimeInterval] = [0.04, 0.16, 0.34, 0.65]
 
@@ -267,6 +267,9 @@ struct MessageListView: View {
 
     private func scrollToBottomSettled(using scrollProxy: ScrollViewProxy, animated: Bool, completesInitialPlacement: Bool) {
         cancelEnsureVisibleWorkItems()
+        if !completesInitialPlacement, !bottomScrollWorkItems.isEmpty {
+            return
+        }
         cancelBottomScrollWorkItems()
         bottomScrollGeneration &+= 1
         let generation = bottomScrollGeneration
