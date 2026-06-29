@@ -301,7 +301,11 @@ final class PiAppState: ObservableObject {
     }
 
     func isSessionSending(_ session: PiSessionSummary) -> Bool {
-        !sendingSessionKeys.isDisjoint(with: Set(sessionAliases(for: session)))
+        // Sending is now an internal transport detail. The sidebar should not
+        // advertise a chat as "busy" because the composer accepts messages at
+        // all times: active generation turns the next message into steer, and
+        // post-generation finalizing/reload starts a normal new message.
+        false
     }
 
     func isSelectedSession(_ session: PiSessionSummary) -> Bool {
@@ -773,10 +777,8 @@ final class PiAppState: ObservableObject {
         onAccepted: (@MainActor () -> Void)? = nil
     ) -> Bool {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard session.isSending else { return sendMessage(prompt, attachments: attachments, in: session) }
-        guard session.canAcceptSteering else {
-            statusMessage = "Pi is finishing this turn. Try again in a moment."
-            return false
+        guard session.hasActiveSend, session.canAcceptSteering else {
+            return sendMessage(prompt, attachments: attachments, in: session)
         }
         guard !trimmed.isEmpty || !attachments.isEmpty else { return false }
         guard host.usesRemoteDaemonTransport, let sessionID = session.sessionID?.nilIfBlank else {
@@ -785,7 +787,7 @@ final class PiAppState: ObservableObject {
         }
         let effectivePrompt = trimmed.isEmpty ? "Please inspect the attached item(s)." : trimmed
         let taggedPrompt = sourceTaggedAppPrompt(effectivePrompt)
-        statusMessage = "Steering Pi..."
+        statusMessage = "Sending to Pi..."
         let remoteAPIHost = host
         let acceptedCallback = onAccepted.map(MainActorCallback.init)
         Task { [weak self, weak session, acceptedCallback] in
@@ -800,7 +802,7 @@ final class PiAppState: ObservableObject {
                 await MainActor.run {
                     guard let self, let session else { return }
                     session.appendSteeringPrompt(taggedPrompt, attachments: attachments)
-                    self.statusMessage = "Steered Pi"
+                    self.statusMessage = "Sent to Pi"
                     acceptedCallback?()
                 }
             } catch {
@@ -820,18 +822,17 @@ final class PiAppState: ObservableObject {
         guard !trimmed.isEmpty || !attachments.isEmpty else { return false }
         let effectivePrompt = trimmed.isEmpty ? "Please inspect the attached item(s)." : trimmed
         let taggedPrompt = sourceTaggedAppPrompt(effectivePrompt)
-        let canInterruptFinalRefresh = session.isAwaitingTurnCommit && !session.hasActiveSend
-        if session.isSending || canInterruptFinalRefresh {
-            guard !session.hasActiveSend else {
-                statusMessage = "Pi is already working on this session."
-                return false
-            }
+        if session.hasActiveSend && session.canAcceptSteering {
+            return steerMessage(prompt, attachments: attachments, in: session)
+        }
+        if session.isSending || session.isAwaitingTurnCommit || session.hasActiveSend {
+            // Generation has already ended (canAcceptSteering=false) or the
+            // previous stream is only doing final catch-up. Do not block the
+            // composer: clear the finalizing flags and start a normal new send.
+            // If pi-appd has not released its active-run guard yet, the remote
+            // client retries the POST /send briefly instead of surfacing a UI lock.
             session.finishFinalizingForFollowUp()
             setSessionSending(false, aliases: sessionAliases(for: session))
-        }
-        guard !session.isLoading || canInterruptFinalRefresh else {
-            statusMessage = "Session is still refreshing."
-            return false
         }
 
         if let request = session.launchRequest, request.isEphemeral {

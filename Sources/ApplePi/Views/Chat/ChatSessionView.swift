@@ -28,7 +28,6 @@ struct ChatSessionView: View {
     }
 
     private var canSend: Bool {
-        (!session.isLoading || session.isAwaitingTurnCommit) &&
         !audioRecorder.isRecording &&
         !isTranscribingAudio &&
         hasDraftContent
@@ -40,8 +39,7 @@ struct ChatSessionView: View {
 
     private var canAdjustSessionOptions: Bool {
         appState.host.usesRemoteDaemonTransport &&
-        (session.sessionID != nil || session.launchRequest != nil) &&
-        !session.isSending
+        (session.sessionID != nil || session.launchRequest != nil)
     }
 
     private var slashCommandMatches: [SlashCommand] {
@@ -150,7 +148,7 @@ struct ChatSessionView: View {
                     enabled: canSend,
                     action: handleComposerSubmit
                 )
-                .help(session.hasActiveSend ? "Send steering message (/abort to stop)" : "Send")
+                .help(session.hasActiveSend && session.canAcceptSteering ? "Send steering message (/abort to stop)" : "Send")
             }
 
             sessionStatusStrip

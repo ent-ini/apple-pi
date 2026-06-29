@@ -387,7 +387,7 @@ struct RemoteDaemonClient {
                     onEvent: onEvent
                 )
                 return
-            } catch RemoteDaemonError.requestFailed(let status, _) where status == 409 && attempt < 3 {
+            } catch RemoteDaemonError.requestFailed(let status, _) where status == 409 && attempt < 6 {
                 let backoffMilliseconds = 200 * (1 << attempt)
                 attempt += 1
                 try await Task.sleep(for: .milliseconds(backoffMilliseconds))

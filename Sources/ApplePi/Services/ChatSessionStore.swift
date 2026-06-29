@@ -301,7 +301,7 @@ final class ChatSession: ObservableObject, Identifiable {
     /// waiting for a final reload/catch-up. Let the composer start the next
     /// user message without being blocked by that bookkeeping state.
     func finishFinalizingForFollowUp() {
-        guard sendTask == nil, !canAcceptSteering, (isSending || isAwaitingTurnCommit) else { return }
+        guard !canAcceptSteering, (isSending || isAwaitingTurnCommit || sendTask != nil) else { return }
         pendingSendCompletionGeneration = nil
         isSending = false
         isAwaitingTurnCommit = false
