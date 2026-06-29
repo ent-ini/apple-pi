@@ -96,6 +96,13 @@ struct ContentView: View {
                 }
                 .help("New session")
 
+                if appState.isLoadingCatalog {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(appState.appearance.accentColor)
+                        .help("Loading sessions")
+                }
+
                 Menu {
                     Button("Refresh Sessions") {
                         appState.refreshCatalog()
@@ -581,40 +588,30 @@ struct SessionListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 8) {
-                    Text("Sessions")
-                        .font(.headline.weight(.semibold))
-                    Spacer()
-                    if appState.isLoadingCatalog {
-                        ProgressView()
-                            .controlSize(.small)
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search sessions", text: $appState.sessionSearchText)
+                    .textFieldStyle(.plain)
+                    .focused($isSearchFieldFocused)
+                if appState.hasActiveSessionSearch {
+                    Button {
+                        appState.sessionSearchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.tertiary)
                     }
+                    .buttonStyle(.plain)
+                    .help("Clear search")
                 }
-
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
-                    TextField("Search sessions", text: $appState.sessionSearchText)
-                        .textFieldStyle(.plain)
-                        .focused($isSearchFieldFocused)
-                    if appState.hasActiveSessionSearch {
-                        Button {
-                            appState.sessionSearchText = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(.tertiary)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Clear search")
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(controlTint(for: colorScheme, opacity: 0.06))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
-            .padding(12)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(controlTint(for: colorScheme, opacity: 0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 8)
 
             Divider().opacity(0.24)
 
