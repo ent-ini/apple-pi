@@ -5,15 +5,20 @@ struct ContentView: View {
     @EnvironmentObject private var appState: PiAppState
     @AppStorage("ApplePi.showsSessionList") private var wantsSessionList = true
     @AppStorage("ApplePi.sessionListWidth") private var storedSessionListWidth = PaneLayout.sessionListDefault
+    @AppStorage("ApplePi.showsUtilitySidebar") private var wantsUtilitySidebar = false
+    @AppStorage("ApplePi.utilitySidebarWidth") private var storedUtilitySidebarWidth = PaneLayout.utilitySidebarDefault
     @State private var liveSessionListWidth: Double?
+    @State private var liveUtilitySidebarWidth: Double?
     @State private var activeResize: ActivePaneResize?
 
     var body: some View {
         GeometryReader { proxy in
             let sessionListWidth = liveSessionListWidth ?? storedSessionListWidth
+            let utilitySidebarWidth = liveUtilitySidebarWidth ?? storedUtilitySidebarWidth
             let paneVisibility = AdaptivePaneVisibility(
                 windowWidth: proxy.size.width,
-                wantsSessionList: wantsSessionList
+                wantsSessionList: wantsSessionList,
+                wantsUtilitySidebar: wantsUtilitySidebar
             )
 
             HStack(spacing: 0) {
@@ -24,10 +29,10 @@ struct ContentView: View {
                     PaneResizeHandle(
                         topInset: proxy.safeAreaInsets.top,
                         onDragStart: {
-                            activeResize = ActivePaneResize(startingSessionWidth: sessionListWidth)
+                            activeResize = ActivePaneResize(kind: .sessionList, startingWidth: sessionListWidth)
                         },
                         onDrag: { translation in
-                            let startWidth = activeResize?.startingSessionWidth ?? sessionListWidth
+                            let startWidth = activeResize?.startingWidth ?? sessionListWidth
                             let nextWidth = PaneLayout.clampedSessionListWidth(startWidth + translation)
                             withTransaction(Transaction(animation: nil)) {
                                 liveSessionListWidth = Double(nextWidth)
@@ -48,16 +53,50 @@ struct ContentView: View {
 
                 DetailView()
                     .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+
+                if paneVisibility.showsUtilitySidebar {
+                    PaneResizeHandle(
+                        topInset: proxy.safeAreaInsets.top,
+                        onDragStart: {
+                            activeResize = ActivePaneResize(kind: .utilitySidebar, startingWidth: utilitySidebarWidth)
+                        },
+                        onDrag: { translation in
+                            let startWidth = activeResize?.startingWidth ?? utilitySidebarWidth
+                            let nextWidth = PaneLayout.clampedUtilitySidebarWidth(startWidth - translation)
+                            withTransaction(Transaction(animation: nil)) {
+                                liveUtilitySidebarWidth = Double(nextWidth)
+                            }
+                        },
+                        onDragEnd: {
+                            let finalWidth = liveUtilitySidebarWidth ?? utilitySidebarWidth
+                            storedUtilitySidebarWidth = finalWidth
+                            activeResize = nil
+                            if finalWidth <= PaneLayout.utilitySidebarCollapseThreshold {
+                                withAnimation(.snappy(duration: 0.18)) {
+                                    wantsUtilitySidebar = false
+                                }
+                            }
+                        }
+                    )
+                    UtilitySidebarView()
+                        .frame(width: PaneLayout.clampedUtilitySidebarWidth(utilitySidebarWidth))
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
             }
             .animation(.snappy(duration: 0.18), value: paneVisibility)
         }
         .background(AppBackdrop(appearance: appState.appearance))
         .onAppear {
             liveSessionListWidth = storedSessionListWidth
+            liveUtilitySidebarWidth = storedUtilitySidebarWidth
         }
         .onChange(of: storedSessionListWidth) { _, newValue in
-            guard activeResize == nil else { return }
+            guard activeResize?.kind != .sessionList else { return }
             liveSessionListWidth = newValue
+        }
+        .onChange(of: storedUtilitySidebarWidth) { _, newValue in
+            guard activeResize?.kind != .utilitySidebar else { return }
+            liveUtilitySidebarWidth = newValue
         }
         .onChange(of: appState.sessionSearchFocusRequestID) { _, _ in
             revealSessionListForSearch()
@@ -85,6 +124,13 @@ struct ContentView: View {
                     Label("Sessions", systemImage: "sidebar.right")
                 }
                 .help(wantsSessionList ? "Hide sessions" : "Show sessions")
+
+                Button {
+                    toggleUtilitySidebar()
+                } label: {
+                    Label("Utility Panel", systemImage: "sidebar.trailing")
+                }
+                .help(wantsUtilitySidebar ? "Hide utility panel" : "Show utility panel")
             }
 
             ToolbarItemGroup(placement: .primaryAction) {
@@ -143,6 +189,16 @@ struct ContentView: View {
         }
     }
 
+    private func toggleUtilitySidebar() {
+        if !wantsUtilitySidebar && storedUtilitySidebarWidth <= PaneLayout.utilitySidebarCollapseThreshold {
+            storedUtilitySidebarWidth = PaneLayout.utilitySidebarReopenWidth
+            liveUtilitySidebarWidth = PaneLayout.utilitySidebarReopenWidth
+        }
+        withAnimation(.snappy(duration: 0.18)) {
+            wantsUtilitySidebar.toggle()
+        }
+    }
+
     private func revealSessionListForSearch() {
         if storedSessionListWidth <= PaneLayout.sessionListCollapseThreshold {
             storedSessionListWidth = PaneLayout.sessionListReopenWidth
@@ -163,14 +219,29 @@ private enum PaneLayout {
     static let sessionListMaximum: Double = 480
     static let sessionListCollapseThreshold: Double = 104
     static let sessionListReopenWidth: Double = 176
+    static let utilitySidebarMinimum: Double = 220
+    static let utilitySidebarDefault: Double = 320
+    static let utilitySidebarMaximum: Double = 520
+    static let utilitySidebarCollapseThreshold: Double = 232
+    static let utilitySidebarReopenWidth: Double = 300
 
     static func clampedSessionListWidth(_ width: Double) -> CGFloat {
         CGFloat(min(max(width, sessionListMinimum), sessionListMaximum))
     }
+
+    static func clampedUtilitySidebarWidth(_ width: Double) -> CGFloat {
+        CGFloat(min(max(width, utilitySidebarMinimum), utilitySidebarMaximum))
+    }
 }
 
 private struct ActivePaneResize {
-    let startingSessionWidth: Double
+    enum Kind {
+        case sessionList
+        case utilitySidebar
+    }
+
+    let kind: Kind
+    let startingWidth: Double
 }
 
 private struct PaneResizeHandle: View {
@@ -233,12 +304,16 @@ private struct PaneResizeHandle: View {
 
 private struct AdaptivePaneVisibility: Equatable {
     let showsSessionList: Bool
+    let showsUtilitySidebar: Bool
 
-    init(windowWidth: CGFloat, wantsSessionList: Bool) {
+    init(windowWidth: CGFloat, wantsSessionList: Bool, wantsUtilitySidebar: Bool) {
         let minimumDetailWidth: CGFloat = 320
         let minimumSessionWidth: CGFloat = CGFloat(PaneLayout.sessionListMinimum)
+        let minimumUtilityWidth: CGFloat = CGFloat(PaneLayout.utilitySidebarMinimum)
         let resizeHandleWidth = PaneLayout.resizeHandleWidth
         showsSessionList = wantsSessionList && windowWidth >= minimumDetailWidth + minimumSessionWidth + resizeHandleWidth
+        let occupiedBySession = showsSessionList ? minimumSessionWidth + resizeHandleWidth : 0
+        showsUtilitySidebar = wantsUtilitySidebar && windowWidth >= minimumDetailWidth + occupiedBySession + minimumUtilityWidth + resizeHandleWidth
     }
 }
 
@@ -668,6 +743,101 @@ struct SessionListView: View {
             isSearchFieldFocused = true
             appState.consumeSessionSearchFocusRequest()
         }
+    }
+}
+
+struct UtilitySidebarView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var appState: PiAppState
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "square.split.2x1")
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Workspace")
+                        .font(.callout.weight(.semibold))
+                    Text("Subagents · Preview · Inspector")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(controlTint(for: colorScheme, opacity: 0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 8)
+
+            Divider().opacity(0.24)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    UtilitySidebarPlaceholderCard(
+                        icon: "person.2.wave.2",
+                        title: "Subagents",
+                        message: "Future panel for spawned agents, progress, and handoffs."
+                    )
+                    UtilitySidebarPlaceholderCard(
+                        icon: "doc.text.magnifyingglass",
+                        title: "Preview",
+                        message: "File previews and selected tool output will land here."
+                    )
+                    UtilitySidebarPlaceholderCard(
+                        icon: "slider.horizontal.3",
+                        title: "Inspector",
+                        message: "Contextual controls for the active chat item."
+                    )
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 12)
+            }
+            .scrollContentBackground(.hidden)
+
+            Spacer(minLength: 0)
+        }
+        .background(
+            surfaceTint(for: colorScheme, opacity: appState.appearance.effectiveListOpacity)
+                .background(.thinMaterial)
+        )
+    }
+}
+
+private struct UtilitySidebarPlaceholderCard: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var appState: PiAppState
+    let icon: String
+    let title: String
+    let message: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(appState.appearance.accentColor)
+                    .frame(width: 22)
+                Text(title)
+                    .font(.callout.weight(.semibold))
+                Spacer(minLength: 0)
+            }
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(controlTint(for: colorScheme, opacity: 0.05))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(controlTint(for: colorScheme, opacity: 0.06), lineWidth: 1)
+        )
     }
 }
 
