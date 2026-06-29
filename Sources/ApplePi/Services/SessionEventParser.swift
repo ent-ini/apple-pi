@@ -113,7 +113,13 @@ enum SessionEventParser {
             ?? (payload["responseId"] as? String)
             ?? (object["responseId"] as? String)
             ?? UUID().uuidString
-        let content = parseContent(payload["content"])
+        var content = parseContent(payload["content"])
+        if content.isEmpty,
+           role == .assistant,
+           (payload["stopReason"] as? String) == "error",
+           let errorMessage = (payload["errorMessage"] as? String)?.nilIfBlank {
+            content = [.text("❌ \(errorMessage)")]
+        }
         let model = (payload["model"] as? String) ?? (payload["modelId"] as? String)
         let parentId = (object["parentId"] as? String) ?? (payload["parentId"] as? String)
         let timestamp = parseTimestamp(object["timestamp"])
