@@ -67,6 +67,7 @@ final class ChatSession: ObservableObject, Identifiable {
     var sendTask: Task<Void, Never>?
 
     private var persistedEvents: [SessionEvent] = []
+    private var retainedTransientEvents: [SessionEvent] = []
     private var transientUserEvent: SessionEvent?
     private var transientAssistantEvent: SessionEvent?
     private var transientStreamEvents: [SessionEvent] = []
@@ -203,6 +204,7 @@ final class ChatSession: ObservableObject, Identifiable {
         isAwaitingTurnCommit = false
         canAcceptSteering = true
         statusMessage = "Thinking..."
+        retainCurrentTransientTranscript()
 
         var content: [ContentBlock] = attachments.map { attachment in
             switch attachment.kind {
@@ -373,9 +375,9 @@ final class ChatSession: ObservableObject, Identifiable {
     /// Mark the current send as cancelled without showing an error to
     /// the user. Called from `PiAppState.sendMessage` when the task
     /// body observes `CancellationError` (e.g. the tab was closed
-    /// mid-send). Clears transient UI state so the composer is usable
-    /// again unless this was an explicit user abort, in which case the
-    /// partial transcript is preserved.
+    /// mid-send). Freezes already-visible transient transcript rows before
+    /// clearing the current send slot, so text that appeared in chat never
+    /// disappears just because the transport was cancelled or superseded.
     func finishSendingCancelled() {
         if didAbortCurrentSend {
             finishSendingAborted()
@@ -386,6 +388,7 @@ final class ChatSession: ObservableObject, Identifiable {
         isAwaitingTurnCommit = false
         canAcceptSteering = false
         statusMessage = ""
+        retainCurrentTransientTranscript()
         transientUserEvent = nil
         transientAssistantEvent = nil
         transientStreamEvents = []
@@ -425,6 +428,7 @@ final class ChatSession: ObservableObject, Identifiable {
         canAcceptSteering = false
         loadError = message
         statusMessage = message
+        retainCurrentTransientTranscript()
         transientUserEvent = nil
         transientAssistantEvent = nil
         transientStreamEvents = []
@@ -586,8 +590,17 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     private var visibleTransientEvents: [SessionEvent] {
-        ([transientUserEvent].compactMap { $0 } + transientStreamEvents)
+        (retainedTransientEvents + [transientUserEvent].compactMap { $0 } + transientStreamEvents)
             .filter { shouldDisplayTransientEvent($0) }
+    }
+
+    private func retainCurrentTransientTranscript() {
+        let current = ([transientUserEvent].compactMap { $0 } + transientStreamEvents)
+            .filter { shouldDisplayTransientEvent($0) }
+        guard !current.isEmpty else { return }
+        for event in current where !retainedTransientEvents.contains(where: { $0.id == event.id }) {
+            retainedTransientEvents.append(event)
+        }
     }
 
     private func shouldDisplayTransientEvent(_ transientEvent: SessionEvent) -> Bool {
@@ -636,24 +649,11 @@ final class ChatSession: ObservableObject, Identifiable {
            latestPersistedMessage(matches: transientAssistantEvent, in: persisted) {
             self.transientAssistantEvent = nil
         }
+        retainedTransientEvents.removeAll { event in
+            transientEventIsPersisted(event, in: persisted)
+        }
         transientStreamEvents.removeAll { event in
-            switch event {
-            case .message:
-                return latestPersistedMessage(matches: event, in: persisted)
-            case .toolCall(let call, _):
-                return persisted.contains { persistedEvent in
-                    guard case .toolCall(let persistedCall, _) = persistedEvent else { return false }
-                    return persistedCall.id == call.id
-                }
-            case .toolResult(let result, _):
-                return persisted.contains { persistedEvent in
-                    guard case .toolResult(let persistedResult, _) = persistedEvent else { return false }
-                    return persistedResult.id == result.id
-                        || (!result.callId.isEmpty && persistedResult.callId == result.callId)
-                }
-            case .meta, .other:
-                return false
-            }
+            transientEventIsPersisted(event, in: persisted)
         }
     }
 
@@ -676,6 +676,26 @@ final class ChatSession: ObservableObject, Identifiable {
         isAwaitingTurnCommit = false
         canAcceptSteering = false
         rebuildEvents()
+    }
+
+    private func transientEventIsPersisted(_ event: SessionEvent, in persisted: [SessionEvent]) -> Bool {
+        switch event {
+        case .message:
+            return latestPersistedMessage(matches: event, in: persisted)
+        case .toolCall(let call, _):
+            return persisted.contains { persistedEvent in
+                guard case .toolCall(let persistedCall, _) = persistedEvent else { return false }
+                return persistedCall.id == call.id
+            }
+        case .toolResult(let result, _):
+            return persisted.contains { persistedEvent in
+                guard case .toolResult(let persistedResult, _) = persistedEvent else { return false }
+                return persistedResult.id == result.id
+                    || (!result.callId.isEmpty && persistedResult.callId == result.callId)
+            }
+        case .meta, .other:
+            return false
+        }
     }
 
     private func upsertTransientStreamEvent(_ event: SessionEvent, into events: inout [SessionEvent]) {
