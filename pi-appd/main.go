@@ -260,13 +260,14 @@ type rpcResponseEnvelope struct {
 }
 
 type rpcSimpleCommand struct {
-	ID       string `json:"id,omitempty"`
-	Type     string `json:"type"`
-	Provider string `json:"provider,omitempty"`
-	ModelID  string `json:"modelId,omitempty"`
-	Level    string `json:"level,omitempty"`
-	Message  string `json:"message,omitempty"`
-	Name     string `json:"name,omitempty"`
+	ID                 string `json:"id,omitempty"`
+	Type               string `json:"type"`
+	Provider           string `json:"provider,omitempty"`
+	ModelID            string `json:"modelId,omitempty"`
+	Level              string `json:"level,omitempty"`
+	Message            string `json:"message,omitempty"`
+	Name               string `json:"name,omitempty"`
+	CustomInstructions string `json:"customInstructions,omitempty"`
 }
 
 type rpcModelRecord struct {
@@ -531,6 +532,14 @@ func (s *server) handleSessionSubroutes(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		s.handleSessionEvents(w, r, record)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "compact" {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.handleSessionCompact(w, r, record)
 		return
 	}
 	if len(parts) == 2 && parts[1] == "stream" {
@@ -1224,6 +1233,25 @@ func (s *server) handleSessionSteer(w http.ResponseWriter, r *http.Request, sess
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *server) handleSessionCompact(w http.ResponseWriter, r *http.Request, record sessionRecord) {
+	var request sendSessionRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&request)
+	}
+	command := rpcSimpleCommand{Type: "compact", CustomInstructions: strings.TrimSpace(request.Prompt)}
+	responses, err := s.runPiRPCCommands(record, []any{command})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if response, ok := responses["compact"]; ok && !response.Success {
+		writeError(w, http.StatusInternalServerError, firstNonBlank(strings.TrimSpace(response.Error), "compact failed"))
+		return
+	}
+	s.handleCatalogChange()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

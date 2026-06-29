@@ -285,9 +285,15 @@ final class ChatSession: ObservableObject, Identifiable {
 
     func finishSendingAndReload() {
         pendingSendCompletionGeneration = sendGeneration
+        // The active RPC/HTTP turn is over once this method is called. Keep
+        // only the lightweight "awaiting commit" flag while the persisted
+        // JSONL catch-up reloads, so the app no longer looks like Pi is still
+        // generating and the composer can accept the next prompt immediately.
+        isSending = false
         isAwaitingTurnCommit = true
         canAcceptSteering = false
         statusMessage = "Refreshing session..."
+        rebuildEvents()
         loadFromDisk(force: true)
     }
 
@@ -295,7 +301,7 @@ final class ChatSession: ObservableObject, Identifiable {
     /// waiting for a final reload/catch-up. Let the composer start the next
     /// user message without being blocked by that bookkeeping state.
     func finishFinalizingForFollowUp() {
-        guard isSending, sendTask == nil, !canAcceptSteering else { return }
+        guard sendTask == nil, !canAcceptSteering, (isSending || isAwaitingTurnCommit) else { return }
         pendingSendCompletionGeneration = nil
         isSending = false
         isAwaitingTurnCommit = false

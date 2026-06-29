@@ -425,6 +425,22 @@ struct RemoteDaemonClient {
         )
     }
 
+    func compactSession(
+        host: PiHostConfiguration,
+        sessionID: String,
+        instructions: String = "",
+        tokenOverride: String? = nil
+    ) async throws {
+        let _: EmptyOKResponse = try await send(
+            host: host,
+            path: "/sessions/\(encodedPathComponent(sessionID))/compact",
+            method: "POST",
+            tokenOverride: tokenOverride,
+            body: SendSessionRequestBody(prompt: instructions, attachments: []),
+            accept: "application/json"
+        )
+    }
+
     func uploadAttachment(host: PiHostConfiguration, attachment: ChatAttachment) async throws -> UploadedAttachmentReference {
         let boundary = "ApplePiBoundary-\(UUID().uuidString)"
         var request = try makeRequest(

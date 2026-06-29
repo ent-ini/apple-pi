@@ -731,6 +731,40 @@ final class PiAppState: ObservableObject {
         setSessionSending(false, aliases: aliases)
     }
 
+    func compactSession(_ session: ChatSession, instructions: String = "") {
+        guard host.usesRemoteDaemonTransport, let sessionID = session.sessionID?.nilIfBlank else {
+            statusMessage = "Compact is available after the remote session is created."
+            return
+        }
+        guard !session.hasActiveSend else {
+            statusMessage = "Wait for the current run to finish before compacting."
+            return
+        }
+        statusMessage = "Compacting session..."
+        let remoteAPIHost = host
+        Task { [weak self, weak session] in
+            do {
+                try await RemoteDaemonClient().compactSession(
+                    host: remoteAPIHost,
+                    sessionID: sessionID,
+                    instructions: instructions
+                )
+                await MainActor.run {
+                    guard let self, let session, self.host == remoteAPIHost else { return }
+                    self.statusMessage = "Compacted session"
+                    session.loadFromDisk(force: true)
+                    self.refreshSessionRuntime(for: session, updatesStatus: false)
+                    self.scheduleCatalogRefresh(after: .milliseconds(100))
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self else { return }
+                    self.statusMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
     @discardableResult
     func steerMessage(
         _ prompt: String,
@@ -786,7 +820,8 @@ final class PiAppState: ObservableObject {
         guard !trimmed.isEmpty || !attachments.isEmpty else { return false }
         let effectivePrompt = trimmed.isEmpty ? "Please inspect the attached item(s)." : trimmed
         let taggedPrompt = sourceTaggedAppPrompt(effectivePrompt)
-        if session.isSending {
+        let canInterruptFinalRefresh = session.isAwaitingTurnCommit && !session.hasActiveSend
+        if session.isSending || canInterruptFinalRefresh {
             guard !session.hasActiveSend else {
                 statusMessage = "Pi is already working on this session."
                 return false
@@ -794,7 +829,7 @@ final class PiAppState: ObservableObject {
             session.finishFinalizingForFollowUp()
             setSessionSending(false, aliases: sessionAliases(for: session))
         }
-        guard !session.isLoading else {
+        guard !session.isLoading || canInterruptFinalRefresh else {
             statusMessage = "Session is still refreshing."
             return false
         }
@@ -1125,6 +1160,7 @@ final class PiAppState: ObservableObject {
         case .outputComplete:
             if !session.hasAbortedCurrentSend {
                 session.finishSendingAndReload()
+                setSessionSending(false, aliases: sessionAliases(for: session))
             }
             restartSelectedSessionEventStream()
             scheduleCatalogRefresh(after: .milliseconds(50))

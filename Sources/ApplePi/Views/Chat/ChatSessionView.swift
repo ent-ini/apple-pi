@@ -18,13 +18,20 @@ struct ChatSessionView: View {
     @StateObject private var audioRecorder = AudioRecordingController()
 
     private let attachmentStagingService = AttachmentStagingService()
+    private static let slashCommands: [SlashCommand] = [
+        SlashCommand(name: "/abort", description: "Stop the active run"),
+        SlashCommand(name: "/compact", description: "Compact this session")
+    ]
 
     private var hasDraftContent: Bool {
         !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftAttachments.isEmpty
     }
 
     private var canSend: Bool {
-        !session.isLoading && !audioRecorder.isRecording && !isTranscribingAudio && hasDraftContent
+        (!session.isLoading || session.isAwaitingTurnCommit) &&
+        !audioRecorder.isRecording &&
+        !isTranscribingAudio &&
+        hasDraftContent
     }
 
     private var canSteer: Bool {
@@ -35,6 +42,18 @@ struct ChatSessionView: View {
         appState.host.usesRemoteDaemonTransport &&
         (session.sessionID != nil || session.launchRequest != nil) &&
         !session.isSending
+    }
+
+    private var slashCommandMatches: [SlashCommand] {
+        let text = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.hasPrefix("/") else { return [] }
+        return Self.slashCommands.filter { command in
+            command.name.hasPrefix(text) || text == "/"
+        }
+    }
+
+    private var showsSlashCommandSuggestions: Bool {
+        !slashCommandMatches.isEmpty && draftAttachments.isEmpty && !audioRecorder.isRecording && !isTranscribingAudio
     }
 
     var body: some View {
@@ -102,6 +121,10 @@ struct ChatSessionView: View {
                     }
                     .padding(.horizontal, 1)
                 }
+            }
+
+            if showsSlashCommandSuggestions {
+                slashCommandSuggestions
             }
 
             HStack(alignment: .bottom, spacing: 10) {
@@ -297,6 +320,40 @@ struct ChatSessionView: View {
     }
 
     @ViewBuilder
+    private var slashCommandSuggestions: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(slashCommandMatches) { command in
+                Button {
+                    selectSlashCommand(command)
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(command.name)
+                            .font(.system(.caption, design: .monospaced).weight(.semibold))
+                            .foregroundStyle(appState.appearance.accentColor)
+                        Text(command.description)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(.regularMaterial)
+                .shadow(color: .black.opacity(0.18), radius: 12, x: 0, y: 4)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.primary.opacity(0.10), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
     private func composerInputSurface(controlHeight: CGFloat) -> some View {
         if audioRecorder.isRecording || isTranscribingAudio {
             HStack(spacing: 10) {
@@ -370,12 +427,19 @@ struct ChatSessionView: View {
 
     private func handleComposerSubmit() {
         let prompt = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if prompt == "/abort" {
+        switch prompt {
+        case "/abort":
             handleAbortCommand()
-        } else if canSteer {
-            handleSteerTapped()
-        } else {
-            handleSendTapped()
+        case "/compact":
+            handleCompactCommand(instructions: "")
+        default:
+            if prompt.hasPrefix("/compact ") {
+                handleCompactCommand(instructions: String(prompt.dropFirst("/compact ".count)))
+            } else if canSteer {
+                handleSteerTapped()
+            } else {
+                handleSendTapped()
+            }
         }
     }
 
@@ -409,9 +473,23 @@ struct ChatSessionView: View {
             return
         }
         appState.cancelSend(in: session)
+        clearComposer()
+    }
+
+    private func handleCompactCommand(instructions: String) {
+        appState.compactSession(session, instructions: instructions)
+        clearComposer()
+    }
+
+    private func clearComposer() {
         draftText = ""
         draftHeight = 30
         draftAttachments = []
+    }
+
+    private func selectSlashCommand(_ command: SlashCommand) {
+        draftText = command.name
+        draftHeight = 30
     }
 
     private func handleMicrophoneTapped() {
@@ -603,6 +681,13 @@ private struct ModelGroup: Identifiable {
     let models: [PiModelOption]
 
     var id: String { provider }
+}
+
+private struct SlashCommand: Identifiable, Hashable {
+    let name: String
+    let description: String
+
+    var id: String { name }
 }
 
 private struct ModelPickerButtonFramePreferenceKey: PreferenceKey {
