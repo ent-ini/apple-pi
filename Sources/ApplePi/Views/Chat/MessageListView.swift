@@ -7,6 +7,7 @@ import SwiftUI
 /// bottom, but only if the user is already near the bottom (so reading
 /// older messages does not get hijacked by streaming).
 struct MessageListView: View {
+    @EnvironmentObject private var appState: PiAppState
     @ObservedObject var session: ChatSession
 
     @State private var isAnchoredToBottom = true
@@ -35,7 +36,8 @@ struct MessageListView: View {
                         if let pendingAssistantMessage = session.pendingAssistantMessageForDisplay {
                             MessageBubble(
                                 message: pendingAssistantMessage,
-                                showsStreamingPlaceholder: session.shouldShowPendingAssistantPlaceholder
+                                showsStreamingPlaceholder: session.shouldShowPendingAssistantPlaceholder,
+                                fileReferenceBaseDirectory: fileReferenceBaseDirectory
                             )
                             .id(Self.pendingAssistantBubbleID)
                         }
@@ -128,7 +130,7 @@ struct MessageListView: View {
         case .event(let event):
             switch event {
             case .message(let message, _):
-                MessageBubble(message: message)
+                MessageBubble(message: message, fileReferenceBaseDirectory: fileReferenceBaseDirectory)
             case .toolCall(let call, _):
                 ToolInteractionRow(
                     name: call.name,
@@ -184,6 +186,21 @@ struct MessageListView: View {
 
     private func refreshDisplayedRowsCache() {
         displayedRowsCache = DisplayedSessionRow.groupingToolResults(in: session.events.filter(\.isVisibleInTranscript))
+    }
+
+    private var fileReferenceBaseDirectory: String? {
+        if let workingDirectory = session.launchRequest?.workingDirectory?.nilIfBlank {
+            return workingDirectory
+        }
+        if let sessionID = session.sessionID,
+           let summary = appState.sessions.first(where: { $0.id == sessionID || $0.filePath == sessionID }),
+           let workingDirectory = summary.workingDirectory?.nilIfBlank {
+            return workingDirectory
+        }
+        if let path = session.sessionPath?.nilIfBlank {
+            return URL(fileURLWithPath: path).deletingLastPathComponent().path
+        }
+        return appState.host.defaultWorkingDirectory.nilIfBlank
     }
 
     @ViewBuilder
@@ -483,7 +500,15 @@ struct ToolInteractionRow: View {
     let result: ToolResult?
     let visibilityID: String
 
-    @State private var isExpanded = false
+    @State private var isExpanded: Bool
+
+    init(name: String, arguments: String, result: ToolResult?, visibilityID: String) {
+        self.name = name
+        self.arguments = arguments
+        self.result = result
+        self.visibilityID = visibilityID
+        _isExpanded = State(initialValue: name == "edit" && Self.splitDiff(from: result?.output).diff != nil)
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -498,10 +523,10 @@ struct ToolInteractionRow: View {
                     }
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: result?.isError == true ? "exclamationmark.triangle" : "wrench.and.screwdriver")
+                        Image(systemName: toolIconName)
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(result?.isError == true ? .red : .secondary)
-                        Text(result?.isError == true ? "tool · \(name) · error" : "tool · \(name)")
+                        Text(toolLabel)
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -517,17 +542,27 @@ struct ToolInteractionRow: View {
                 .help(isExpanded ? "Collapse long tool details" : "Expand full tool call and response")
 
                 if isExpanded {
-                    toolSection(title: "Call", text: arguments, fallback: "(no arguments)")
-                    if let result {
-                        toolSection(title: "Response", text: result.output, fallback: "(empty)")
+                    if name == "edit", let diff = editDiff {
+                        if let summary = editSummary?.nilIfBlank {
+                            Text(summary)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                        GitDiffView(diffText: diff, filePath: editPath)
                     } else {
-                        toolSection(title: "Response", text: "", fallback: "(waiting for tool result)")
+                        toolSection(title: "Call", text: arguments, fallback: "(no arguments)")
+                        if let result {
+                            toolSection(title: "Response", text: result.output, fallback: "(empty)")
+                        } else {
+                            toolSection(title: "Response", text: "", fallback: "(waiting for tool result)")
+                        }
                     }
                 }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
-            .frame(maxWidth: 560, alignment: .leading)
+            .frame(maxWidth: 620, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(Color.primary.opacity(0.04))
@@ -558,9 +593,124 @@ struct ToolInteractionRow: View {
         }
     }
 
+    private var toolIconName: String {
+        if result?.isError == true { return "exclamationmark.triangle" }
+        if name == "edit" { return "doc.text.magnifyingglass" }
+        return "wrench.and.screwdriver"
+    }
+
+    private var toolLabel: String {
+        var parts = ["tool", name]
+        if name == "edit", let editPath {
+            parts.append(URL(fileURLWithPath: editPath).lastPathComponent.nilIfBlank ?? editPath)
+        }
+        if result?.isError == true {
+            parts.append("error")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private var editPath: String? {
+        guard let data = arguments.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let path = object["path"] as? String else {
+            return nil
+        }
+        return path
+    }
+
+    private var editSummary: String? {
+        Self.splitDiff(from: result?.output).summary
+    }
+
+    private var editDiff: String? {
+        Self.splitDiff(from: result?.output).diff
+    }
+
+    private static func splitDiff(from output: String?) -> (summary: String?, diff: String?) {
+        guard let output else { return (nil, nil) }
+        guard let range = output.range(of: toolResultDiffSeparator) else {
+            return (output, nil)
+        }
+        let summary = String(output[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let diff = String(output[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        return (summary.isEmpty ? nil : summary, diff.isEmpty ? nil : diff)
+    }
+
     private func displayText(_ text: String, fallback: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? fallback : trimmed
+    }
+}
+
+private struct GitDiffView: View {
+    let diffText: String
+    let filePath: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let filePath = filePath?.nilIfBlank {
+                diffLine("diff -- \(filePath)", kind: .header)
+                diffLine("--- a/\(filePath)", kind: .header)
+                diffLine("+++ b/\(filePath)", kind: .header)
+            }
+            ForEach(Array(diffText.split(separator: "\n", omittingEmptySubsequences: false).enumerated()), id: \.offset) { _, line in
+                let text = String(line)
+                diffLine(text, kind: DiffLineKind(text))
+            }
+        }
+        .textSelection(.enabled)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.black.opacity(0.06))
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    @ViewBuilder
+    private func diffLine(_ text: String, kind: DiffLineKind) -> some View {
+        Text(text.isEmpty ? " " : text)
+            .font(.caption.monospaced())
+            .foregroundStyle(kind.foreground)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 1.5)
+            .background(kind.background)
+    }
+}
+
+private enum DiffLineKind {
+    case insertion
+    case deletion
+    case header
+    case hunk
+    case context
+
+    init(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        if text.hasPrefix("+++") || text.hasPrefix("---") || text.hasPrefix("diff ") { self = .header }
+        else if text.hasPrefix("+") || trimmed.range(of: #"^\d+\s+\+"#, options: .regularExpression) != nil { self = .insertion }
+        else if text.hasPrefix("-") || trimmed.range(of: #"^\d+\s+-"#, options: .regularExpression) != nil { self = .deletion }
+        else if text.hasPrefix("@@") || trimmed.hasPrefix("...") { self = .hunk }
+        else { self = .context }
+    }
+
+    var foreground: Color {
+        switch self {
+        case .insertion: return .green
+        case .deletion: return .red
+        case .header, .hunk: return .secondary
+        case .context: return .primary.opacity(0.78)
+        }
+    }
+
+    var background: Color {
+        switch self {
+        case .insertion: return Color.green.opacity(0.12)
+        case .deletion: return Color.red.opacity(0.12)
+        case .header, .hunk: return Color.primary.opacity(0.04)
+        case .context: return .clear
+        }
     }
 }
 

@@ -1,5 +1,7 @@
 import Foundation
 
+let toolResultDiffSeparator = "\n\n__PI_APP_TOOL_DIFF__\n"
+
 /// Metadata extracted from a `type: "session"` line in a Pi `.jsonl` file.
 struct SessionMeta: Hashable, Sendable {
     let id: String

@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"os/exec"
@@ -31,6 +32,7 @@ const (
 	maxAttachmentCount              = 16
 	maxAttachmentBytes        int64 = 32 << 20
 	maxImageAttachmentBytes   int64 = 10 << 20
+	maxDownloadFileBytes      int64 = 64 << 20
 	serverReadHeaderTimeout         = 5 * time.Second
 	serverIdleTimeout               = 60 * time.Second
 	rpcCommandTimeout               = 2 * time.Minute
@@ -373,6 +375,7 @@ func main() {
 	mux.HandleFunc("/sessions", srv.handleSessions)
 	mux.HandleFunc("/sessions/", srv.handleSessionSubroutes)
 	mux.HandleFunc("/files", srv.handleFiles)
+	mux.HandleFunc("/file", srv.handleFile)
 	mux.HandleFunc("/uploads", srv.handleUploads)
 
 	go srv.watchCatalog()
@@ -1306,8 +1309,67 @@ func (s *server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, fileListResponse{Path: path, Parent: parent, Items: items})
 }
 
+func (s *server) handleFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	requested := strings.TrimSpace(r.URL.Query().Get("path"))
+	if requested == "" {
+		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	base := strings.TrimSpace(r.URL.Query().Get("base"))
+	path, err := s.resolveFileReferencePath(requested, base)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "file does not exist")
+		return
+	}
+	if info.IsDir() {
+		writeError(w, http.StatusBadRequest, "path is a directory")
+		return
+	}
+	if info.Size() > maxDownloadFileBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, "file is too large")
+		return
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	defer file.Close()
+
+	contentType := contentTypeForPath(path)
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	w.Header().Set("Content-Disposition", "inline; filename=\""+sanitizeDownloadFilename(filepath.Base(path))+"\"")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, file)
+}
+
 func (s *server) resolveBrowsablePath(requested string) (string, error) {
-	abs, err := filepath.Abs(expandHome(strings.TrimSpace(requested)))
+	return s.resolveFileReferencePath(requested, "")
+}
+
+func (s *server) resolveFileReferencePath(requested string, base string) (string, error) {
+	requested = strings.TrimSpace(requested)
+	if requested == "" {
+		return "", errors.New("invalid path")
+	}
+	candidate := expandHome(requested)
+	if !filepath.IsAbs(candidate) {
+		base = strings.TrimSpace(base)
+		if base != "" {
+			candidate = filepath.Join(expandHome(base), candidate)
+		}
+	}
+	abs, err := filepath.Abs(candidate)
 	if err != nil {
 		return "", errors.New("invalid path")
 	}
@@ -2904,6 +2966,18 @@ func sanitizeUploadName(name string) string {
 	}
 	base = strings.ReplaceAll(base, string(filepath.Separator), "-")
 	return base
+}
+
+func sanitizeDownloadFilename(name string) string {
+	name = sanitizeUploadName(name)
+	return strings.NewReplacer("\\", "-", "\"", "'", "\r", " ", "\n", " ").Replace(name)
+}
+
+func contentTypeForPath(path string) string {
+	if contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(path))); strings.TrimSpace(contentType) != "" {
+		return contentType
+	}
+	return "application/octet-stream"
 }
 
 func uniqueUploadName(name string) string {

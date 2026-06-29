@@ -305,7 +305,10 @@ enum SessionEventParser {
         let id = (object["id"] as? String) ?? stableToolResultID(for: callId)
         let toolName = (object["toolName"] as? String)
         let isError = (object["isError"] as? Bool) ?? false
-        let output = stringifyToolResultContent(object["content"])
+        let output = outputWithDetails(
+            text: stringifyToolResultContent(object["content"]),
+            details: object["details"]
+        )
         return .result(id: id, callId: callId, toolName: toolName, output: output, isError: isError)
     }
 
@@ -319,12 +322,24 @@ enum SessionEventParser {
         let id = parentID ?? (payload["id"] as? String) ?? stableToolResultID(for: callId)
         let toolName = (payload["toolName"] as? String)
         let isError = (payload["isError"] as? Bool) ?? false
-        let output = stringifyToolResultContent(payload["content"])
+        let output = outputWithDetails(
+            text: stringifyToolResultContent(payload["content"]),
+            details: payload["details"]
+        )
         return .result(id: id, callId: callId, toolName: toolName, output: output, isError: isError)
     }
 
     private static func stableToolResultID(for callId: String) -> String {
         callId.isEmpty ? UUID().uuidString : "toolResult:\(callId)"
+    }
+
+    private static func outputWithDetails(text: String, details: Any?) -> String {
+        guard let details = details as? [String: Any],
+              let diff = details["diff"] as? String,
+              !diff.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return text
+        }
+        return text + toolResultDiffSeparator + diff
     }
 
     private static func stringifyToolResultContent(_ value: Any?) -> String {

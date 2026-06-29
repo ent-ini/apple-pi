@@ -441,6 +441,34 @@ struct RemoteDaemonClient {
         )
     }
 
+    func downloadFile(host: PiHostConfiguration, path: String, baseDirectory: String? = nil, tokenOverride: String? = nil) async throws -> RemoteFileDownload {
+        var queryItems = [URLQueryItem(name: "path", value: path)]
+        if let baseDirectory = baseDirectory?.nilIfBlank {
+            queryItems.append(URLQueryItem(name: "base", value: baseDirectory))
+        }
+        let request = try makeRequest(
+            host: host,
+            path: "/file",
+            queryItems: queryItems,
+            tokenOverride: tokenOverride,
+            accept: "*/*"
+        )
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw RemoteDaemonError.invalidResponse
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            let message = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw RemoteDaemonError.requestFailed(status: httpResponse.statusCode, body: message)
+        }
+        return RemoteFileDownload(
+            data: data,
+            fileName: Self.fileNameFromContentDisposition(httpResponse.value(forHTTPHeaderField: "Content-Disposition"))
+                ?? URL(fileURLWithPath: path).lastPathComponent,
+            mimeType: httpResponse.value(forHTTPHeaderField: "Content-Type")
+        )
+    }
+
     func uploadAttachment(host: PiHostConfiguration, attachment: ChatAttachment) async throws -> UploadedAttachmentReference {
         let boundary = "ApplePiBoundary-\(UUID().uuidString)"
         var request = try makeRequest(
@@ -693,6 +721,17 @@ struct RemoteDaemonClient {
         request.httpBody = try JSONEncoder().encode(body)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         return request
+    }
+
+    private static func fileNameFromContentDisposition(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let pattern = #"filename=\"([^\"]+)\""#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)),
+              let range = Range(match.range(at: 1), in: value) else {
+            return nil
+        }
+        return String(value[range]).nilIfBlank
     }
 
     private static func makeCatalogDecoder() -> JSONDecoder {
@@ -974,6 +1013,12 @@ private struct SessionDefaultsResponse: Decodable {
 
 private struct AvailableModelsResponse: Decodable {
     let models: [RuntimeModelRecord]
+}
+
+struct RemoteFileDownload: Sendable {
+    let data: Data
+    let fileName: String
+    let mimeType: String?
 }
 
 struct UploadedAttachmentReference: Codable, Hashable, Sendable {

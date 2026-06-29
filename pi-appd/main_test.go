@@ -503,3 +503,39 @@ func writeTempSessionFile(t *testing.T, content string) string {
 	}
 	return path
 }
+func TestResolveFileReferencePathUsesBaseForRelativeChatRefs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := filepath.Join(home, "ai-agent", "workspace")
+	if err := os.MkdirAll(filepath.Join(workspace, "wiki-memory"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(workspace, "wiki-memory", "note.md")
+	if err := os.WriteFile(target, []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := &server{agentDir: filepath.Join(home, ".pi", "agent")}
+
+	resolved, err := srv.resolveFileReferencePath("wiki-memory/note.md", workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != target {
+		t.Fatalf("resolved = %q, want %q", resolved, target)
+	}
+}
+
+func TestResolveFileReferencePathRejectsOutsideBrowsableRoots(t *testing.T) {
+	home := t.TempDir()
+	outside := t.TempDir()
+	t.Setenv("HOME", home)
+	outsideFile := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(outsideFile, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := &server{agentDir: filepath.Join(home, ".pi", "agent")}
+
+	if _, err := srv.resolveFileReferencePath(outsideFile, ""); err == nil {
+		t.Fatal("expected outside path to be rejected")
+	}
+}

@@ -262,6 +262,7 @@ struct MessageBubble: View {
     @EnvironmentObject private var appState: PiAppState
     let message: Message
     var showsStreamingPlaceholder = false
+    var fileReferenceBaseDirectory: String?
 
     @ViewBuilder
     var body: some View {
@@ -358,14 +359,24 @@ struct MessageBubble: View {
     private func blockView(_ block: ContentBlock, isLastVisibleBlock: Bool) -> some View {
         switch block {
         case .text(let rawText):
-            let text = displayText(for: rawText)
-            if !text.isEmpty {
+            let extraction = displayTextAndFileReferences(for: rawText)
+            if !extraction.text.isEmpty || !extraction.references.isEmpty {
                 bubbleSurface(
                     isLastVisibleBlock: isLastVisibleBlock,
-                    prefersCompactWidth: prefersCompactWidth(for: text)
+                    prefersCompactWidth: prefersCompactWidth(for: extraction.text, referenceCount: extraction.references.count)
                 ) {
-                    MarkdownText(text)
-                        .font(.body)
+                    VStack(alignment: .leading, spacing: 10) {
+                        if !extraction.text.isEmpty {
+                            MarkdownText(extraction.text)
+                                .font(.body)
+                        }
+                        ForEach(extraction.references) { reference in
+                            ChatFileReferenceCard(
+                                reference: reference,
+                                baseDirectory: fileReferenceBaseDirectory
+                            )
+                        }
+                    }
                 }
             }
         case .thinking:
@@ -458,9 +469,14 @@ struct MessageBubble: View {
         .joined(separator: "\n\n---\n\n")
     }
 
-    private func displayText(for rawText: String) -> String {
-        guard message.role == .user else { return rawText }
-        return UserMessagePresentation.sanitizeTextOnly(rawText)
+    private func displayTextAndFileReferences(for rawText: String) -> FileReferenceExtraction {
+        guard message.role != .user else {
+            return FileReferenceExtraction(
+                text: UserMessagePresentation.sanitizeTextOnly(rawText),
+                references: []
+            )
+        }
+        return ChatFileReferenceExtractor.extract(from: rawText)
     }
 
     private var bubbleBackground: Color {
@@ -501,7 +517,8 @@ struct MessageBubble: View {
         message.role == .user ? .trailing : .leading
     }
 
-    private func prefersCompactWidth(for text: String) -> Bool {
+    private func prefersCompactWidth(for text: String, referenceCount: Int = 0) -> Bool {
+        guard referenceCount == 0 else { return false }
         let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return normalized.count <= 42 && !normalized.contains("\n")
     }
