@@ -133,6 +133,20 @@ struct ContentView: View {
                 .help(wantsUtilitySidebar ? "Hide utility panel" : "Show utility panel")
             }
 
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 6) {
+                    if appState.isLoadingCatalog {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(appState.appearance.accentColor)
+                    }
+                    Text("pi-app")
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                }
+                .help(appState.isLoadingCatalog ? "Loading sessions…" : "pi-app")
+            }
+
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
                     appState.openNewSessionInCurrentFolder()
@@ -141,13 +155,6 @@ struct ContentView: View {
                         .foregroundStyle(appState.appearance.accentColor)
                 }
                 .help("New session")
-
-                if appState.isLoadingCatalog {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(appState.appearance.accentColor)
-                        .help("Loading sessions")
-                }
 
                 Menu {
                     Button("Refresh Sessions") {
