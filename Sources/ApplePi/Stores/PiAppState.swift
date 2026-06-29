@@ -479,7 +479,7 @@ final class PiAppState: ObservableObject {
         var requestWithDefaults = request
         requestWithDefaults.applyDefaults(from: snapshot.runtimeState)
         session.updateLaunchRequest(requestWithDefaults)
-        session.updateRuntimeState(snapshot.runtimeState)
+        session.updateRuntimeState(runtime(snapshot.runtimeState, applying: requestWithDefaults))
         if session.availableModels.isEmpty {
             session.updateAvailableModels(snapshot.availableModels)
         }
@@ -1019,6 +1019,25 @@ final class PiAppState: ObservableObject {
         }
     }
 
+    private func runtime(_ runtime: SessionRuntimeState, applying request: PiLaunchRequest) -> SessionRuntimeState {
+        let provider = request.initialModelProvider?.nilIfBlank ?? runtime.provider
+        let modelID = request.initialModelID?.nilIfBlank ?? runtime.modelID
+        let thinkingLevel = request.initialThinkingLevel?.nilIfBlank ?? runtime.thinkingLevel
+        guard provider != runtime.provider || modelID != runtime.modelID || thinkingLevel != runtime.thinkingLevel else {
+            return runtime
+        }
+        return SessionRuntimeState(
+            sessionID: runtime.sessionID,
+            sessionPath: runtime.sessionPath,
+            provider: provider,
+            modelID: modelID,
+            modelName: runtime.modelName,
+            thinkingLevel: thinkingLevel,
+            tokens: runtime.tokens,
+            contextUsage: runtime.contextUsage
+        )
+    }
+
     private func remoteLaunchRequestApplyingFreshDefaults(_ launchRequest: PiLaunchRequest) async -> PiLaunchRequest {
         var request = launchRequest
         guard host.usesRemoteDaemonTransport,
@@ -1135,7 +1154,7 @@ final class PiAppState: ObservableObject {
                     var request = session.launchRequest ?? launchRequest
                     request.applyDefaults(from: snapshot.runtimeState)
                     session.updateLaunchRequest(request)
-                    session.updateRuntimeState(snapshot.runtimeState)
+                    session.updateRuntimeState(self.runtime(snapshot.runtimeState, applying: request))
                     session.updateAvailableModels(snapshot.availableModels)
                 }
             } catch {
