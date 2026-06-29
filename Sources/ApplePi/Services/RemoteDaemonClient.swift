@@ -192,7 +192,7 @@ struct RemoteDaemonClient {
     func loadSessionEventPage(
         host: PiHostConfiguration,
         sessionID: String,
-        limit: Int? = 120,
+        limit: Int? = 60,
         after: Int? = nil,
         before: Int? = nil,
         tokenOverride: String? = nil
@@ -226,7 +226,7 @@ struct RemoteDaemonClient {
     func loadSessionEvents(
         host: PiHostConfiguration,
         sessionID: String,
-        limit: Int? = 120,
+        limit: Int? = 60,
         after: Int? = nil,
         before: Int? = nil,
         tokenOverride: String? = nil

@@ -711,7 +711,7 @@ func (s *server) handleSessionEvents(w http.ResponseWriter, r *http.Request, rec
 	}
 	limit := 0
 	if !hasBefore && !hasAfter {
-		limit = 120
+		limit = 60
 	}
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 		limit, err = strconv.Atoi(raw)

@@ -375,7 +375,7 @@ final class ChatSession: ObservableObject, Identifiable {
         }
     }
 
-    func loadEarlierHistory(limit: Int = 120) {
+    func loadEarlierHistory(limit: Int = 60) {
         guard let historyPageLoader,
               !isLoadingEarlierHistory,
               !isLoading else { return }

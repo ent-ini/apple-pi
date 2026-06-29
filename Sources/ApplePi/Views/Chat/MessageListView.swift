@@ -17,6 +17,7 @@ struct MessageListView: View {
     @State private var ensureVisibleWorkItems: [DispatchWorkItem] = []
     @State private var bottomScrollGeneration = 0
     @State private var ensureVisibleGeneration = 0
+    @State private var historyLoadRowMinY: CGFloat = .greatestFiniteMagnitude
     @State private var displayedRowsCache: [DisplayedSessionRow] = []
 
     var body: some View {
@@ -71,6 +72,10 @@ struct MessageListView: View {
                         visibilityFrames = frames
                     }
                 }
+                .onPreferenceChange(HistoryLoadRowMinYPreferenceKey.self) { minY in
+                    historyLoadRowMinY = minY
+                    autoLoadEarlierHistoryIfNeeded()
+                }
                 .onChange(of: session.streamRevision) { _, _ in
                     refreshDisplayedRowsCache()
                     scrollToBottomIfNeeded(using: scrollProxy)
@@ -79,6 +84,9 @@ struct MessageListView: View {
                     refreshDisplayedRowsCache()
                     if let anchorID = session.consumePendingHistoryAnchorID() {
                         scrollProxy.scrollTo(anchorID, anchor: .top)
+                    }
+                    DispatchQueue.main.async {
+                        autoLoadEarlierHistoryIfNeeded()
                     }
                 }
                 .onChange(of: session.isSending) { _, isSending in
@@ -164,6 +172,7 @@ struct MessageListView: View {
     private static let pendingAssistantBubbleID = "chat.list.pending.assistant"
     static let scrollCoordinateSpaceName = "chat.list.scroll"
     private static let bottomStickinessBuffer: CGFloat = 180
+    private static let historyAutoLoadDistance: CGFloat = 240
     private static let stickyBreakawayDistance: CGFloat = 180
     private static let bottomReachedEpsilon: CGFloat = 3
     private static let stickyAutoScrollDuration: TimeInterval = 0.7
@@ -181,20 +190,32 @@ struct MessageListView: View {
             if session.isLoadingEarlierHistory {
                 ProgressView()
                     .controlSize(.small)
-                Text("Loading earlier messages…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Button("Load earlier messages") {
-                    session.loadEarlierHistory()
-                }
-                .buttonStyle(.plain)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
+                    .accessibilityLabel("Loading earlier messages")
             }
             Spacer()
         }
-        .padding(.vertical, 4)
+        .frame(height: session.isLoadingEarlierHistory ? nil : 1)
+        .padding(.vertical, session.isLoadingEarlierHistory ? 4 : 0)
+        .background {
+            GeometryReader { historyProxy in
+                Color.clear.preference(
+                    key: HistoryLoadRowMinYPreferenceKey.self,
+                    value: historyProxy.frame(in: .named(Self.scrollCoordinateSpaceName)).minY
+                )
+            }
+        }
+        .onAppear {
+            autoLoadEarlierHistoryIfNeeded()
+        }
+    }
+
+    private func autoLoadEarlierHistoryIfNeeded() {
+        guard session.hasEarlierHistory,
+              !session.isLoadingEarlierHistory,
+              historyLoadRowMinY <= Self.historyAutoLoadDistance else {
+            return
+        }
+        session.loadEarlierHistory()
     }
 
     private var isStickyAutoScrollActive: Bool {
@@ -323,6 +344,14 @@ struct MessageListView: View {
 // MARK: - Display rows
 
 private struct BottomAnchorMaxYPreferenceKey: PreferenceKey {
+    static let defaultValue: CGFloat = .greatestFiniteMagnitude
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct HistoryLoadRowMinYPreferenceKey: PreferenceKey {
     static let defaultValue: CGFloat = .greatestFiniteMagnitude
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
