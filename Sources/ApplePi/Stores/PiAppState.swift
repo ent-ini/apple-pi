@@ -4,6 +4,19 @@ import SwiftUI
 
 typealias PiCatalogLoader = @Sendable (PiHostConfiguration, String?) async throws -> PiCatalogSnapshot
 
+private final class MainActorCallback: @unchecked Sendable {
+    private let action: @MainActor () -> Void
+
+    init(_ action: @escaping @MainActor () -> Void) {
+        self.action = action
+    }
+
+    @MainActor
+    func callAsFunction() {
+        action()
+    }
+}
+
 @MainActor
 final class PiAppState: ObservableObject {
     @Published var host = PiHostConfiguration() {
@@ -695,7 +708,12 @@ final class PiAppState: ObservableObject {
     }
 
     @discardableResult
-    func steerMessage(_ prompt: String, attachments: [ChatAttachment] = [], in session: ChatSession) -> Bool {
+    func steerMessage(
+        _ prompt: String,
+        attachments: [ChatAttachment] = [],
+        in session: ChatSession,
+        onAccepted: (@MainActor () -> Void)? = nil
+    ) -> Bool {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard session.isSending else { return sendMessage(prompt, attachments: attachments, in: session) }
         guard session.canAcceptSteering else {
@@ -709,10 +727,10 @@ final class PiAppState: ObservableObject {
         }
         let effectivePrompt = trimmed.isEmpty ? "Please inspect the attached item(s)." : trimmed
         let taggedPrompt = sourceTaggedAppPrompt(effectivePrompt)
-        session.appendSteeringPrompt(taggedPrompt, attachments: attachments)
         statusMessage = "Steering Pi..."
         let remoteAPIHost = host
-        Task { [weak self, weak session] in
+        let acceptedCallback = onAccepted.map(MainActorCallback.init)
+        Task { [weak self, weak session, acceptedCallback] in
             do {
                 let daemonAttachments = try await self?.uploadAttachmentsIfNeeded(attachments) ?? []
                 try await RemoteDaemonClient().steerSession(
@@ -721,6 +739,12 @@ final class PiAppState: ObservableObject {
                     prompt: taggedPrompt,
                     attachments: daemonAttachments
                 )
+                await MainActor.run {
+                    guard let self, let session else { return }
+                    session.appendSteeringPrompt(taggedPrompt, attachments: attachments)
+                    self.statusMessage = "Steered Pi"
+                    acceptedCallback?()
+                }
             } catch {
                 await MainActor.run {
                     guard let self, let session else { return }

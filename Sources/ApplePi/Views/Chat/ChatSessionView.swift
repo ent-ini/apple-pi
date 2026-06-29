@@ -407,7 +407,11 @@ struct ChatSessionView: View {
     private func handleSteerTapped() {
         let prompt = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSteer else { return }
-        if appState.steerMessage(prompt, attachments: draftAttachments, in: session) {
+        let promptToSend = prompt
+        let attachmentsToSend = draftAttachments
+        _ = appState.steerMessage(promptToSend, attachments: attachmentsToSend, in: session) {
+            guard draftText.trimmingCharacters(in: .whitespacesAndNewlines) == promptToSend,
+                  draftAttachments == attachmentsToSend else { return }
             draftText = ""
             draftHeight = 30
             draftAttachments = []
