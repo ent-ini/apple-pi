@@ -40,6 +40,7 @@ final class ChatSession: ObservableObject, Identifiable {
     @Published private(set) var hasEarlierHistory: Bool = false
     @Published private(set) var isLoadingEarlierHistory: Bool = false
     @Published private(set) var isAwaitingTurnCommit: Bool = false
+    @Published private(set) var canAcceptSteering: Bool = false
 
     /// Path to the on-disk jsonl, if this session is backed by a file. For
     /// brand-new sessions the path is assigned once the first turn creates it.
@@ -173,6 +174,7 @@ final class ChatSession: ObservableObject, Identifiable {
         self.hasEarlierHistory = false
         self.isLoadingEarlierHistory = false
         self.isAwaitingTurnCommit = false
+        self.canAcceptSteering = false
         self.pendingHistoryAnchorEventID = nil
     }
 
@@ -195,6 +197,7 @@ final class ChatSession: ObservableObject, Identifiable {
         pendingSendCompletionGeneration = nil
         isSending = true
         isAwaitingTurnCommit = false
+        canAcceptSteering = true
         statusMessage = "Thinking..."
 
         var content: [ContentBlock] = attachments.map { attachment in
@@ -282,6 +285,8 @@ final class ChatSession: ObservableObject, Identifiable {
 
     func finishSendingAndReload() {
         pendingSendCompletionGeneration = sendGeneration
+        isAwaitingTurnCommit = true
+        canAcceptSteering = false
         statusMessage = "Refreshing session..."
         loadFromDisk(force: true)
     }
@@ -330,6 +335,7 @@ final class ChatSession: ObservableObject, Identifiable {
         pendingSendCompletionGeneration = nil
         isSending = false
         isAwaitingTurnCommit = false
+        canAcceptSteering = false
         statusMessage = ""
         transientUserEvent = nil
         transientAssistantEvent = nil
@@ -341,6 +347,7 @@ final class ChatSession: ObservableObject, Identifiable {
         pendingSendCompletionGeneration = nil
         isSending = false
         isAwaitingTurnCommit = false
+        canAcceptSteering = false
         statusMessage = "Aborted"
         if !transientStreamEvents.contains(where: { event in
             if case .other(let type, _) = event { return type == "abort" }
@@ -355,6 +362,7 @@ final class ChatSession: ObservableObject, Identifiable {
         pendingSendCompletionGeneration = nil
         isSending = false
         isAwaitingTurnCommit = false
+        canAcceptSteering = false
         loadError = message
         statusMessage = message
         transientUserEvent = nil
@@ -592,6 +600,7 @@ final class ChatSession: ObservableObject, Identifiable {
     func markTurnOutputComplete() {
         guard isSending else { return }
         isAwaitingTurnCommit = true
+        canAcceptSteering = false
         statusMessage = "Finalizing..."
         rebuildEvents()
     }
@@ -605,6 +614,7 @@ final class ChatSession: ObservableObject, Identifiable {
         pendingSendCompletionGeneration = nil
         isSending = false
         isAwaitingTurnCommit = false
+        canAcceptSteering = false
         rebuildEvents()
     }
 

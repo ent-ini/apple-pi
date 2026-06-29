@@ -28,7 +28,7 @@ struct ChatSessionView: View {
     }
 
     private var canSteer: Bool {
-        session.isSending && !session.isAwaitingTurnCommit && !audioRecorder.isRecording && !isTranscribingAudio && hasDraftContent
+        session.isSending && session.canAcceptSteering && !audioRecorder.isRecording && !isTranscribingAudio && hasDraftContent
     }
 
     private var canAdjustSessionOptions: Bool {

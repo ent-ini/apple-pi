@@ -698,7 +698,7 @@ final class PiAppState: ObservableObject {
     func steerMessage(_ prompt: String, attachments: [ChatAttachment] = [], in session: ChatSession) -> Bool {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard session.isSending else { return sendMessage(prompt, attachments: attachments, in: session) }
-        guard !session.isAwaitingTurnCommit else {
+        guard session.canAcceptSteering else {
             statusMessage = "Pi is finishing this turn. Try again in a moment."
             return false
         }
