@@ -8,7 +8,7 @@ struct ApplePiApp: App {
     @StateObject private var appState = PiAppState()
 
     var body: some Scene {
-        WindowGroup(id: "main") {
+        WindowGroup("pi-app", id: "main") {
             ContentView()
                 .environmentObject(appState)
                 .frame(minWidth: 260, minHeight: 180)

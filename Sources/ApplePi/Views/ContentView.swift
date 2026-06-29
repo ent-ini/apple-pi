@@ -131,20 +131,13 @@ struct ContentView: View {
                     Label("Utility Panel", systemImage: "sidebar.trailing")
                 }
                 .help(wantsUtilitySidebar ? "Hide utility panel" : "Show utility panel")
-            }
 
-            ToolbarItem(placement: .principal) {
-                HStack(spacing: 6) {
-                    if appState.isLoadingCatalog {
-                        ProgressView()
-                            .controlSize(.small)
-                            .tint(appState.appearance.accentColor)
-                    }
-                    Text("pi-app")
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
+                if appState.isLoadingCatalog {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(appState.appearance.accentColor)
+                        .help("Loading sessions")
                 }
-                .help(appState.isLoadingCatalog ? "Loading sessions…" : "pi-app")
             }
 
             ToolbarItemGroup(placement: .primaryAction) {
