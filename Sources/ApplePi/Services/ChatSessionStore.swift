@@ -285,11 +285,9 @@ final class ChatSession: ObservableObject, Identifiable {
 
     func finishSendingAndReload() {
         pendingSendCompletionGeneration = sendGeneration
-        isSending = false
-        isAwaitingTurnCommit = false
+        isAwaitingTurnCommit = true
         canAcceptSteering = false
         statusMessage = "Refreshing session..."
-        rebuildEvents()
         loadFromDisk(force: true)
     }
 

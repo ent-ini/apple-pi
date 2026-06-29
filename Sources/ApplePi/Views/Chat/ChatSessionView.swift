@@ -122,7 +122,7 @@ struct ChatSessionView: View {
                 )
                 .help(audioRecorder.isRecording ? "Stop recording" : "Record voice note")
 
-                if session.isSending {
+                if session.isSending && session.canAcceptSteering {
                     if canSteer {
                         composerIconButton(
                             systemName: "arrow.up",
@@ -137,14 +137,14 @@ struct ChatSessionView: View {
                         foreground: .red,
                         action: handleStopTapped
                     )
-                    .help(session.isAwaitingTurnCommit ? "Stop finalizing" : "Stop")
+                    .help("Stop")
                 } else {
                     composerIconButton(
                         systemName: "arrow.up",
                         enabled: canSend,
                         action: handleSendTapped
                     )
-                    .help("Send")
+                    .help(session.isSending ? "Finalizing…" : "Send")
                 }
             }
 
