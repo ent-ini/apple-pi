@@ -796,11 +796,20 @@ private struct UtilitySidebarSessionContent: View {
 }
 
 private struct UtilitySubagentsPanel: View {
+    @EnvironmentObject private var appState: PiAppState
     @ObservedObject var session: ChatSession
     @State private var selectedSubagentID: SubagentSession.ID?
+    @State private var fullSessionEvents: [SessionEvent] = []
+    @State private var loadedFullSessionID: String?
 
     private var subagents: [SubagentSession] {
-        SubagentSession.extract(from: session.events)
+        SubagentSession.extract(from: mergedSessionEvents)
+    }
+
+    private var mergedSessionEvents: [SessionEvent] {
+        guard !fullSessionEvents.isEmpty else { return session.events }
+        var seenIDs = Set(fullSessionEvents.map(\.id))
+        return fullSessionEvents + session.events.filter { seenIDs.insert($0.id).inserted }
     }
 
     private var selectedSubagent: SubagentSession? {
@@ -826,12 +835,41 @@ private struct UtilitySubagentsPanel: View {
                 SubagentListView(subagents: subagents, selectedSubagentID: $selectedSubagentID)
             }
         }
+        .task(id: session.sessionID ?? session.sessionPath ?? session.id.uuidString) {
+            await loadFullSessionEventsIfAvailable()
+        }
         .onChange(of: session.id) { _, _ in
             selectedSubagentID = nil
+            fullSessionEvents = []
+            loadedFullSessionID = nil
         }
         .onChange(of: subagents.map(\.id)) { _, ids in
             guard let selectedSubagentID, !ids.contains(selectedSubagentID) else { return }
             self.selectedSubagentID = nil
+        }
+    }
+
+    private func loadFullSessionEventsIfAvailable() async {
+        guard appState.host.usesRemoteDaemonTransport,
+              let sessionID = session.sessionID?.nilIfBlank else {
+            fullSessionEvents = []
+            loadedFullSessionID = nil
+            return
+        }
+        guard loadedFullSessionID != sessionID else { return }
+        do {
+            let page = try await RemoteDaemonClient().loadSessionEventPage(
+                host: appState.host,
+                sessionID: sessionID,
+                limit: 0
+            )
+            guard session.sessionID == sessionID else { return }
+            fullSessionEvents = page.events
+            loadedFullSessionID = sessionID
+        } catch {
+            guard session.sessionID == sessionID else { return }
+            fullSessionEvents = []
+            loadedFullSessionID = sessionID
         }
     }
 }
