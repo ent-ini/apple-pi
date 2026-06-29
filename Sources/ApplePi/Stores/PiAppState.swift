@@ -41,6 +41,13 @@ final class PiAppState: ObservableObject {
     }
     @Published private(set) var projects: [PiProject] = []
     @Published private(set) var sessions: [PiSessionSummary] = []
+    /// Session IDs whose rename we have optimistically applied locally but the
+    /// daemon has not yet acknowledged with a 200 to `POST /sessions/:id/name`.
+    /// Catalog snapshots received in the meantime must keep the local title
+    /// (instead of reverting to the pre-rename server title), or the user sees
+    /// the sidebar flicker back to the old name until the rename RPC finally
+    /// completes (which can take minutes for `set_session_name`).
+    private var pendingRenames: Set<String> = []
     @Published var selection: PiSelection?
     @Published var sessionSearchText = ""
     @Published private(set) var pendingSessionSearchFocusRequest = false
@@ -1554,6 +1561,7 @@ final class PiAppState: ObservableObject {
 
         if host.usesRemoteDaemonTransport {
             let remoteAPIHost = host
+            pendingRenames.insert(previous.id)
             Task { [weak self] in
                 do {
                     let updated = try await RemoteDaemonClient().renameSession(
@@ -1563,6 +1571,7 @@ final class PiAppState: ObservableObject {
                     )
                     await MainActor.run {
                         guard let self, self.host == remoteAPIHost else { return }
+                        self.pendingRenames.remove(updated.id)
                         self.upsertCatalogSession(updated)
                         self.syncOpenTabTitles(with: updated)
                         self.sortCatalogState()
@@ -1571,6 +1580,7 @@ final class PiAppState: ObservableObject {
                 } catch {
                     await MainActor.run {
                         guard let self, self.host == remoteAPIHost else { return }
+                        self.pendingRenames.remove(previous.id)
                         self.upsertCatalogSession(previous)
                         self.syncOpenTabTitles(with: previous)
                         self.sortCatalogState()
@@ -2149,7 +2159,7 @@ final class PiAppState: ObservableObject {
         switch event {
         case .snapshot(let snapshot):
             projects = snapshot.projects
-            sessions = snapshot.sessions
+            sessions = mergeSnapshotWithPendingRenames(snapshot.sessions)
             preserveOpenChatSessionSidebarEntries()
             sortCatalogState()
             if !snapshot.warnings.isEmpty {
@@ -2576,6 +2586,20 @@ final class PiAppState: ObservableObject {
             projects.append(updated)
         }
         sortCatalogState()
+    }
+
+    /// Returns `snapshot` with any session that has a pending optimistic rename
+    /// replaced by the locally retained summary. This keeps the sidebar title
+    /// stable across in-flight `set_session_name` RPCs, which can take minutes
+    /// to commit on the daemon side.
+    private func mergeSnapshotWithPendingRenames(_ snapshot: [PiSessionSummary]) -> [PiSessionSummary] {
+        guard !pendingRenames.isEmpty else { return snapshot }
+        var pinned: [String: PiSessionSummary] = [:]
+        for session in sessions where pendingRenames.contains(session.id) {
+            pinned[session.id] = session
+        }
+        guard !pinned.isEmpty else { return snapshot }
+        return snapshot.map { snap in pinned[snap.id] ?? snap }
     }
 
     private func upsertCatalogSession(_ summary: PiSessionSummary) {
