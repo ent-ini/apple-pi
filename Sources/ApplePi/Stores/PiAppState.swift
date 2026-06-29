@@ -1047,7 +1047,7 @@ final class PiAppState: ObservableObject {
         case .turnEnd:
             session.markTurnOutputComplete()
         case .agentEnd:
-            session.applyStreamingEvents([], isFinal: true)
+            session.markTurnOutputComplete()
         case .abort:
             session.finishSendingAborted()
             setSessionSending(false, aliases: sessionAliases(for: session))
