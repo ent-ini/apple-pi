@@ -1,6 +1,6 @@
 # Security
 
-pi-app is a native macOS chat-style session UI for Pi. Local mode starts the configured Pi executable on your Mac; remote mode talks to a separate [pi-appd](https://github.com/ent-ini/apple-pi) HTTP daemon that lives next to Pi on the remote host. There is no built-in SSH client in the current codebase.
+pi-app is a native macOS chat-style session UI for Pi. Local mode starts the configured Pi executable on your Mac; remote mode talks to a separate [pi-appd](https://github.com/ent-ini/apple-pi) HTTP daemon that lives next to Pi on the remote host.
 
 This page describes what the current codebase does, how to verify release artifacts, and what to report.
 
@@ -16,9 +16,7 @@ pi-app does not sandbox Pi. Pi sessions run with the same permissions they would
 
 Local mode starts the configured Pi executable on your Mac and exchanges RPC traffic with it over stdin/stdout. The remote transport is never involved on the local path.
 
-Remote mode (titled "Remote API" in the UI) talks to `pi-appd` over bearer-token-authenticated HTTP. The Mac client never spawns `ssh`, `python3`, or any other tool on the remote host. Authentication, TLS, and host-key handling are `pi-appd`'s responsibility; the Mac side only stores a per-endpoint bearer token.
-
-The current codebase ships a small `pi-app-askpass` helper binary, an `SSHConfigParser`, an `SSHKeyStore`, and SSH host fields (hostname, port, user, identity file, `~/.ssh/config` alias) on the host model. These were used by an earlier SSH-based remote runtime and are no longer reached from the production code paths. They are kept in the source so a future local-SSH passthrough can reuse them without re-deriving the password/identity plumbing. They are **not** exercised by the current release; in particular, no release of this code calls `ssh` for remote session browsing, turn streaming, or directory listing. Do not rely on them for security boundaries until they are wired up.
+Remote mode (titled "Remote API" in the UI) talks to `pi-appd` over bearer-token-authenticated HTTP. Authentication, TLS, and host identity are `pi-appd`'s responsibility; the Mac side only stores a per-endpoint bearer token.
 
 When notifications are enabled, local mode passes a bundled Pi extension to Pi with `--extension`. That helper listens for Pi notification-related events and writes OSC 777 terminal notification sequences. It is loaded per local session and does not modify the user's Pi agent configuration.
 
@@ -40,7 +38,7 @@ It can read:
 - instruction files named `AGENTS.md`, `CLAUDE.md`, `SYSTEM.md`, or `APPEND_SYSTEM.md`
 - resource directories named `packages`, `extensions`, `skills`, `prompts`, or `themes`
 
-For remote session browsing the app does not run anything on the remote host. It sends HTTPS (or HTTP, if you opt in to the bundled ATS exception for `localhost`/`100.100.11.4`/etc.) to `pi-appd`, which performs the scan on the host it runs on and returns JSON.
+For remote session browsing the app sends HTTPS (or HTTP, if you opt in to the bundled ATS exception for `localhost`/`100.100.11.4`/etc.) to `pi-appd`, which performs the scan on the host it runs on and returns JSON.
 
 ## What The App Stores
 
@@ -55,9 +53,9 @@ ApplePi.projectSidebarWidth
 ApplePi.sessionListWidth
 ```
 
-The host preference can include the local Pi executable path, the agent directory, the `pi-appd` URL, and the saved bearer-token key. The SSH-related fields (remote host, user, port, identity file, config alias) are also persisted when set, but the current release does not read them back into a runtime path.
+The host preference can include the local Pi executable path, the agent directory, the `pi-appd` URL, and the saved bearer-token key.
 
-The app does not intentionally store SSH passwords, `pi-appd` session contents, API keys, model credentials, or Pi session transcripts.
+The app does not intentionally store `pi-appd` session contents, API keys, model credentials, or Pi session transcripts.
 
 The bearer token and the Groq API key (used only for optional Whisper transcription) are each stored as a single `0600` file under Application Support — never in the Keychain. They are scoped per daemon endpoint / per app instance and are written with an atomic secure-file helper that fixes the mode from the first byte.
 
@@ -117,7 +115,7 @@ script/package_release.sh
 codesign --verify --deep --strict --verbose=2 "dist/pi-app.app"
 ```
 
-The test suite currently covers shell quoting, local Pi command construction, the `RemoteSSHSupport` environment-variable allowlist that is shared by local and remote turn runners, session-root resolution, invalid settings handling, trust behavior, remote delete safety, remote configuration summaries, configuration summary counting, the secure 0600 secret-file writer, the turn-lifecycle / SSE-stream cancellation plumbing, the multipart filename whitelist used by `RemoteDaemonClient` and `GroqTranscriptionClient`, the redaction of bearer tokens in the Remote API section of `SettingsView`, and the non-crashing URL initialisation of the `UpdateCheckService` and Groq endpoints.
+The test suite currently covers shell quoting, local Pi command construction, the `PiProcessEnvironment` environment-variable allowlist that is shared by local and remote turn runners, session-root resolution, invalid settings handling, trust behavior, remote delete safety, remote configuration summaries, configuration summary counting, the secure 0600 secret-file writer, the turn-lifecycle / SSE-stream cancellation plumbing, the multipart filename whitelist used by `RemoteDaemonClient` and `GroqTranscriptionClient`, the redaction of bearer tokens in the Remote API section of `SettingsView`, and the non-crashing URL initialisation of the `UpdateCheckService` and Groq endpoints.
 It also covers OSC 777 notification payload parsing and local notification-extension launch gating.
 
 ## Reporting Vulnerabilities
@@ -141,13 +139,10 @@ Do not include secrets, private API keys, `pi-appd` bearer tokens, or real sessi
 pi-app does not currently provide:
 
 - process sandboxing for Pi
-- a built-in SSH client (remote mode is `pi-appd` over HTTP, by design)
-- SSH key generation or storage
 - password storage
 - bearer-token rotation or expiry enforcement (the token is whatever you paste in)
 - malware scanning of session files or project files
 - automatic update security
-- remote host hardening
 - remote session file deletion
 - a SwiftTerm-backed terminal surface (SwiftTerm is vendored but not linked in this release)
 

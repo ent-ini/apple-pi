@@ -17,8 +17,8 @@ struct RemoteDirectoryEntry: Identifiable, Hashable, Sendable {
 ///
 /// The current release only reaches the daemon transport: every public
 /// method delegates to `RemoteDaemonClient`, which speaks bearer-token
-/// HTTP to `pi-appd`. The macOS client never shells out to `python3` or
-/// `ssh` for remote directory listing.
+/// HTTP to `pi-appd`. The macOS client never shells out to helper tools
+/// on the remote host for directory listing.
 struct RemoteDirectoryService: Sendable {
     func listDirectories(host: PiHostConfiguration, path: String?) async throws -> RemoteDirectoryListing {
         try await RemoteDaemonClient().listDirectories(host: host, path: path)

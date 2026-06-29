@@ -23,7 +23,7 @@ struct LocalPiTurnRunner {
         process.arguments = [host.piExecutable] + makePiArguments(request: request)
         process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory)
 
-        var environment = RemoteSSHSupport.processEnvironment()
+        var environment = PiProcessEnvironment.processEnvironment()
         environment["PI_CODING_AGENT_DIR"] = host.agentDirectory.expandingTilde
         process.environment = environment
 

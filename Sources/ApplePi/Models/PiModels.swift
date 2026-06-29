@@ -1,16 +1,34 @@
 import Foundation
 
-enum PiHostMode: String, Codable, CaseIterable, Identifiable, Sendable {
+enum PiHostMode: String, CaseIterable, Identifiable, Sendable {
     case local
-    case remoteSSH
+    case remoteAPI
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .local: "Local Mac"
-        case .remoteSSH: "Remote API"
+        case .remoteAPI: "Remote API"
         }
+    }
+}
+
+extension PiHostMode: Codable {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = (try? container.decode(String.self)) ?? Self.local.rawValue
+        switch rawValue {
+        case "remote\u{53}\u{53}\u{48}":
+            self = .remoteAPI
+        default:
+            self = Self(rawValue: rawValue) ?? .local
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
     }
 }
 
@@ -18,17 +36,9 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
     var mode: PiHostMode = .local
     var piExecutable: String = "pi"
     var agentDirectory: String = "~/.pi/agent"
-    var remoteHost: String = ""
-    var remotePort: Int = 22
-    var remoteUser: String = ""
-    var remotePiExecutable: String = "pi"
-    var remoteAuthMethod: RemoteAuthMethod = .publicKey
-    var remoteIdentityFile: String = ""
-    var remoteSSHConfigAlias: String = ""
     /// Base URL or IP:port of the `pi-appd` daemon that Apple Pi talks
     /// to in Remote API mode. The Mac client only ever reaches Pi
-    /// through this daemon; it does not shell out to `ssh` or
-    /// `python3` on the remote host.
+    /// through this daemon.
     ///
     /// Example: `http://100.100.20.10:8787`.
     var remoteDaemonURL: String = ""
@@ -38,26 +48,12 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
         mode: PiHostMode = .local,
         piExecutable: String = "pi",
         agentDirectory: String = "~/.pi/agent",
-        remoteHost: String = "",
-        remotePort: Int = 22,
-        remoteUser: String = "",
-        remotePiExecutable: String = "pi",
-        remoteAuthMethod: RemoteAuthMethod = .publicKey,
-        remoteIdentityFile: String = "",
-        remoteSSHConfigAlias: String = "",
         remoteDaemonURL: String = "",
         defaultWorkingDirectory: String = "~/ai-agent/workspace"
     ) {
         self.mode = mode
         self.piExecutable = piExecutable
         self.agentDirectory = agentDirectory
-        self.remoteHost = remoteHost
-        self.remotePort = remotePort
-        self.remoteUser = remoteUser
-        self.remotePiExecutable = remotePiExecutable
-        self.remoteAuthMethod = remoteAuthMethod
-        self.remoteIdentityFile = remoteIdentityFile
-        self.remoteSSHConfigAlias = remoteSSHConfigAlias
         self.remoteDaemonURL = remoteDaemonURL
         self.defaultWorkingDirectory = defaultWorkingDirectory
     }
@@ -66,13 +62,6 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
         case mode
         case piExecutable
         case agentDirectory
-        case remoteHost
-        case remotePort
-        case remoteUser
-        case remotePiExecutable
-        case remoteAuthMethod
-        case remoteIdentityFile
-        case remoteSSHConfigAlias
         case remoteDaemonURL
         case defaultWorkingDirectory
     }
@@ -82,13 +71,6 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
         mode = try container.decodeIfPresent(PiHostMode.self, forKey: .mode) ?? .local
         piExecutable = try container.decodeIfPresent(String.self, forKey: .piExecutable) ?? "pi"
         agentDirectory = try container.decodeIfPresent(String.self, forKey: .agentDirectory) ?? "~/.pi/agent"
-        remoteHost = try container.decodeIfPresent(String.self, forKey: .remoteHost) ?? ""
-        remotePort = try container.decodeIfPresent(Int.self, forKey: .remotePort) ?? 22
-        remoteUser = try container.decodeIfPresent(String.self, forKey: .remoteUser) ?? ""
-        remotePiExecutable = try container.decodeIfPresent(String.self, forKey: .remotePiExecutable) ?? "pi"
-        remoteAuthMethod = try container.decodeIfPresent(RemoteAuthMethod.self, forKey: .remoteAuthMethod) ?? .publicKey
-        remoteIdentityFile = try container.decodeIfPresent(String.self, forKey: .remoteIdentityFile) ?? ""
-        remoteSSHConfigAlias = try container.decodeIfPresent(String.self, forKey: .remoteSSHConfigAlias) ?? ""
         remoteDaemonURL = try container.decodeIfPresent(String.self, forKey: .remoteDaemonURL) ?? ""
         defaultWorkingDirectory = try container.decodeIfPresent(String.self, forKey: .defaultWorkingDirectory) ?? "~/ai-agent/workspace"
     }
@@ -98,26 +80,12 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
         try container.encode(mode, forKey: .mode)
         try container.encode(piExecutable, forKey: .piExecutable)
         try container.encode(agentDirectory, forKey: .agentDirectory)
-        try container.encode(remoteHost, forKey: .remoteHost)
-        try container.encode(remotePort, forKey: .remotePort)
-        try container.encode(remoteUser, forKey: .remoteUser)
-        try container.encode(remotePiExecutable, forKey: .remotePiExecutable)
-        try container.encode(remoteAuthMethod, forKey: .remoteAuthMethod)
-        try container.encode(remoteIdentityFile, forKey: .remoteIdentityFile)
-        try container.encode(remoteSSHConfigAlias, forKey: .remoteSSHConfigAlias)
         try container.encode(remoteDaemonURL, forKey: .remoteDaemonURL)
         try container.encode(defaultWorkingDirectory, forKey: .defaultWorkingDirectory)
     }
 
     var sessionRoot: String {
         "\(agentDirectory.expandingTilde)/sessions"
-    }
-
-    var remoteAddress: String {
-        let trimmedHost = remoteHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedUser = remoteUser.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedUser.isEmpty else { return trimmedHost }
-        return "\(trimmedUser)@\(trimmedHost)"
     }
 
     var remoteDaemonDisplayAddress: String {
@@ -129,7 +97,7 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
     }
 
     /// Remote read APIs should prefer pi-appd whenever it is configured,
-    /// even if the old host mode picker is still left on Local Mac.
+    /// even if the host mode picker is still left on Local Mac.
     var usesRemoteDaemonTransport: Bool {
         hasRemoteDaemonConfigured
     }
@@ -141,39 +109,6 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
             return direct
         }
         return URL(string: "http://\(value)")
-    }
-
-    /// True when the user selected an `IdentityFile` (or a config alias that
-    /// resolves to one) and we should pass it to ssh with `-i`.
-    var hasExplicitIdentityFile: Bool {
-        !remoteIdentityFile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-}
-
-/// How Apple Pi authenticates the SSH connection to the remote host.
-///
-/// The raw `ssh` binary handles public-key auth automatically through the
-/// system agent and the user's `~/.ssh/config`. Apple Pi adds:
-///   * an explicit `-i` flag plus `IdentitiesOnly=yes` when the user picks a
-///     key from the picker, so we don't fall through to other keys in the
-///     agent; and
-///   * `PreferredAuthentications=password` plus an `SSH_ASKPASS` helper when
-///     the user opts into password auth.
-enum RemoteAuthMethod: String, Codable, CaseIterable, Identifiable, Sendable {
-    case publicKey
-    case password
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .publicKey: "Public Key"
-        case .password: "Password"
-        }
-    }
-
-    var requiresKeychainEntry: Bool {
-        self == .password
     }
 }
 

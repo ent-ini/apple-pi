@@ -61,18 +61,11 @@ extension PiHostConfiguration {
     /// Kept as a plain string concatenation (no hashing) so the result
     /// is trivially inspectable in tests and `defaults` dumps.
     var persistenceFingerprint: String {
-        var components: [String] = [mode.rawValue, agentDirectory]
-        if mode == .remoteSSH {
-            components.append(remoteHost)
-            components.append(String(remotePort))
-            components.append(remoteUser)
-            components.append(remoteAuthMethod.rawValue)
-            components.append(remoteIdentityFile)
-            components.append(remoteSSHConfigAlias)
-            components.append(remotePiExecutable)
-        }
-        components.append(remoteDaemonURL)
-        components.append(defaultWorkingDirectory)
-        return components.joined(separator: "|")
+        [
+            mode.rawValue,
+            agentDirectory,
+            remoteDaemonURL,
+            defaultWorkingDirectory
+        ].joined(separator: "|")
     }
 }

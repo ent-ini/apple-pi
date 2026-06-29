@@ -410,7 +410,7 @@ final class PiAppState: ObservableObject {
         if let configured = host.defaultWorkingDirectory.nilIfBlank {
             return configured
         }
-        return host.usesRemoteDaemonTransport || host.mode == .remoteSSH ? "~/ai-agent/workspace" : NSHomeDirectory()
+        return host.usesRemoteDaemonTransport ? "~/ai-agent/workspace" : NSHomeDirectory()
     }
 
     private var preferredWorkingDirectory: String {
@@ -457,15 +457,15 @@ final class PiAppState: ObservableObject {
         let cacheKey = sessionDefaultsCacheKey(for: workingDirectory)
         if sessionDefaultsCache[cacheKey] != nil { return }
 
-        let remoteHost = host
+        let remoteAPIHost = host
         Task { [weak self] in
             do {
                 let snapshot = try await RemoteDaemonClient().loadSessionDefaults(
-                    host: remoteHost,
+                    host: remoteAPIHost,
                     workingDirectory: workingDirectory
                 )
                 await MainActor.run {
-                    guard let self, self.host == remoteHost else { return }
+                    guard let self, self.host == remoteAPIHost else { return }
                     self.cacheSessionDefaults(snapshot, for: workingDirectory)
                 }
             } catch {
@@ -532,7 +532,7 @@ final class PiAppState: ObservableObject {
     }
 
     func refreshRemoteDirectory() {
-        guard host.usesRemoteDaemonTransport || host.mode == .remoteSSH else { return }
+        guard host.usesRemoteDaemonTransport else { return }
         loadRemoteDirectory(newSessionWorkingDirectory.nilIfBlank ?? remoteDirectoryPath.nilIfBlank ?? "~")
     }
 
@@ -553,7 +553,7 @@ final class PiAppState: ObservableObject {
     }
 
     private func prepareRemoteDirectoryBrowserIfNeeded() {
-        guard host.usesRemoteDaemonTransport || host.mode == .remoteSSH else { return }
+        guard host.usesRemoteDaemonTransport else { return }
         let initialPath = newSessionWorkingDirectory.nilIfBlank ?? remoteDirectoryPath.nilIfBlank ?? "~"
         newSessionWorkingDirectory = initialPath
         loadRemoteDirectory(initialPath)
@@ -656,19 +656,19 @@ final class PiAppState: ObservableObject {
     }
 
     private func remoteEventLoader(sessionID: String) -> (@Sendable () async throws -> SessionEventsPage)? {
-        guard host.usesRemoteDaemonTransport || host.mode == .remoteSSH else { return nil }
-        let remoteHost = host
+        guard host.usesRemoteDaemonTransport else { return nil }
+        let remoteAPIHost = host
         return {
-            try await RemoteDaemonClient().loadSessionEventPage(host: remoteHost, sessionID: sessionID)
+            try await RemoteDaemonClient().loadSessionEventPage(host: remoteAPIHost, sessionID: sessionID)
         }
     }
 
     private func remoteHistoryPageLoader(sessionID: String) -> (@Sendable (_ before: Int, _ limit: Int) async throws -> SessionEventsPage)? {
-        guard host.usesRemoteDaemonTransport || host.mode == .remoteSSH else { return nil }
-        let remoteHost = host
+        guard host.usesRemoteDaemonTransport else { return nil }
+        let remoteAPIHost = host
         return { before, limit in
             try await RemoteDaemonClient().loadSessionEventPage(
-                host: remoteHost,
+                host: remoteAPIHost,
                 sessionID: sessionID,
                 limit: limit,
                 before: before
@@ -679,11 +679,11 @@ final class PiAppState: ObservableObject {
     func cancelSend(in session: ChatSession) {
         guard session.hasActiveSend else { return }
         statusMessage = "Stopping Pi..."
-        let remoteHost = host
+        let remoteAPIHost = host
         let sessionID = session.sessionID?.nilIfBlank
         if host.usesRemoteDaemonTransport, let sessionID {
             Task {
-                try? await RemoteDaemonClient().abortSession(host: remoteHost, sessionID: sessionID)
+                try? await RemoteDaemonClient().abortSession(host: remoteAPIHost, sessionID: sessionID)
             }
         }
         session.abortSend()
@@ -704,12 +704,12 @@ final class PiAppState: ObservableObject {
         let taggedPrompt = sourceTaggedAppPrompt(effectivePrompt)
         session.appendSteeringPrompt(taggedPrompt, attachments: attachments)
         statusMessage = "Steering Pi..."
-        let remoteHost = host
+        let remoteAPIHost = host
         Task { [weak self, weak session] in
             do {
                 let daemonAttachments = try await self?.uploadAttachmentsIfNeeded(attachments) ?? []
                 try await RemoteDaemonClient().steerSession(
-                    host: remoteHost,
+                    host: remoteAPIHost,
                     sessionID: sessionID,
                     prompt: taggedPrompt,
                     attachments: daemonAttachments
@@ -754,7 +754,7 @@ final class PiAppState: ObservableObject {
         promoteSidebarSession(for: session, fallbackAliases: initialAliases)
         statusMessage = "Sending to Pi..."
 
-        if host.usesRemoteDaemonTransport || host.mode == .remoteSSH {
+        if host.usesRemoteDaemonTransport {
             let task = Task { [weak self, weak session] in
                 let outcome: SendOutcome
                 if let self {
@@ -908,11 +908,8 @@ final class PiAppState: ObservableObject {
     /// captured weakly so closing the tab mid-send stops further
     /// mutations. Returns a `SendOutcome` for the caller to apply.
     ///
-    /// The current release only reaches the daemon transport; the old
-    /// SSH path is no longer wired up. This helper is therefore the
-    /// "remote turn" entry point in practice, but it is named
-    /// `runRemoteTurn` to leave room for an SSH-fallback runtime if
-    /// one is reintroduced.
+    /// The current release only reaches the daemon transport. This helper
+    /// is the Remote API send entry point.
     private func runRemoteTurn(
         session: ChatSession?,
         prompt: String,
@@ -1064,15 +1061,15 @@ final class PiAppState: ObservableObject {
 
         _ = applyBestKnownSessionDefaults(to: session)
 
-        let remoteHost = host
+        let remoteAPIHost = host
         Task { [weak self, weak session] in
             do {
                 let snapshot = try await RemoteDaemonClient().loadSessionDefaults(
-                    host: remoteHost,
+                    host: remoteAPIHost,
                     workingDirectory: launchRequest.workingDirectory
                 )
                 await MainActor.run {
-                    guard let self, let session, self.host == remoteHost, session.sessionID == nil else { return }
+                    guard let self, let session, self.host == remoteAPIHost, session.sessionID == nil else { return }
                     self.cacheSessionDefaults(snapshot, for: launchRequest.workingDirectory)
                     var request = session.launchRequest ?? launchRequest
                     request.applyDefaults(from: snapshot.runtimeState)
@@ -1100,17 +1097,17 @@ final class PiAppState: ObservableObject {
         }
         guard !sessionID.hasPrefix("new:"), !sessionID.hasPrefix("fork:") else { return }
 
-        let remoteHost = host
+        let remoteAPIHost = host
         let sessionKey = runtimeSessionKey(for: session)
         let observedThinkingMutationVersion = thinkingLevelMutationVersionBySessionKey[sessionKey] ?? 0
         Task { [weak self, weak session] in
             do {
                 let runtime = try await RemoteDaemonClient().loadSessionRuntime(
-                    host: remoteHost,
+                    host: remoteAPIHost,
                     sessionID: sessionID
                 )
                 await MainActor.run {
-                    guard let self, let session, self.host == remoteHost else { return }
+                    guard let self, let session, self.host == remoteAPIHost else { return }
                     guard (self.thinkingLevelMutationVersionBySessionKey[sessionKey] ?? 0) == observedThinkingMutationVersion else { return }
                     let effectiveRuntime = self.runtimeApplyingPendingThinkingLevel(runtime, sessionKey: sessionKey)
                     session.updateRuntimeState(effectiveRuntime)
@@ -1136,12 +1133,12 @@ final class PiAppState: ObservableObject {
         if isLoadingAvailableModels { return }
 
         isLoadingAvailableModels = true
-        let remoteHost = host
+        let remoteAPIHost = host
         Task { [weak self, weak session] in
             do {
-                let models = try await RemoteDaemonClient().loadAvailableModels(host: remoteHost)
+                let models = try await RemoteDaemonClient().loadAvailableModels(host: remoteAPIHost)
                 await MainActor.run {
-                    guard let self, self.host == remoteHost else { return }
+                    guard let self, self.host == remoteAPIHost else { return }
                     self.availableModelsCache = models
                     self.availableModelsCacheLoadedAt = Date()
                     self.isLoadingAvailableModels = false
@@ -1228,18 +1225,18 @@ final class PiAppState: ObservableObject {
 
         let sessionKey = runtimeSessionKey(for: session)
         let mutationVersion = nextModelMutationVersion(for: sessionKey)
-        let remoteHost = host
+        let remoteAPIHost = host
         statusMessage = "Switching model..."
         Task { [weak self, weak session] in
             do {
                 let runtime = try await RemoteDaemonClient().setSessionModel(
-                    host: remoteHost,
+                    host: remoteAPIHost,
                     sessionID: sessionID,
                     provider: model.provider,
                     modelID: model.modelID
                 )
                 await MainActor.run {
-                    guard let self, let session, self.host == remoteHost else { return }
+                    guard let self, let session, self.host == remoteAPIHost else { return }
                     guard (self.modelMutationVersionBySessionKey[sessionKey] ?? 0) == mutationVersion else { return }
                     session.updateRuntimeState(runtime)
                     self.statusMessage = "Model: \(runtime.modelDisplayName)"
@@ -1313,16 +1310,16 @@ final class PiAppState: ObservableObject {
         }
         statusMessage = "Thinking: \(nextLevel)"
 
-        let remoteHost = host
+        let remoteAPIHost = host
         Task { [weak self, weak session] in
             do {
                 let runtime = try await RemoteDaemonClient().setSessionThinkingLevel(
-                    host: remoteHost,
+                    host: remoteAPIHost,
                     sessionID: sessionID,
                     level: nextLevel
                 )
                 await MainActor.run {
-                    guard let self, let session, self.host == remoteHost else { return }
+                    guard let self, let session, self.host == remoteAPIHost else { return }
                     guard self.thinkingLevelMutationVersionBySessionKey[sessionKey] == mutationVersion else { return }
                     self.pendingThinkingLevelBySessionKey.removeValue(forKey: sessionKey)
                     session.updateRuntimeState(runtime)
@@ -1400,8 +1397,8 @@ final class PiAppState: ObservableObject {
         let title = proposedTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
 
-        guard host.usesRemoteDaemonTransport || host.mode == .local else {
-            statusMessage = "Remote SSH session rename is not supported from pi-app."
+        guard host.mode == .local else {
+            statusMessage = "Remote API session rename is not supported from pi-app."
             return
         }
 
@@ -1410,16 +1407,16 @@ final class PiAppState: ObservableObject {
         statusMessage = "Renamed \(previous.title)"
 
         if host.usesRemoteDaemonTransport {
-            let remoteHost = host
+            let remoteAPIHost = host
             Task { [weak self] in
                 do {
                     let updated = try await RemoteDaemonClient().renameSession(
-                        host: remoteHost,
+                        host: remoteAPIHost,
                         sessionID: previous.id,
                         name: title
                     )
                     await MainActor.run {
-                        guard let self, self.host == remoteHost else { return }
+                        guard let self, self.host == remoteAPIHost else { return }
                         self.upsertCatalogSession(updated)
                         self.syncOpenTabTitles(with: updated)
                         self.sortCatalogState()
@@ -1427,7 +1424,7 @@ final class PiAppState: ObservableObject {
                     }
                 } catch {
                     await MainActor.run {
-                        guard let self, self.host == remoteHost else { return }
+                        guard let self, self.host == remoteAPIHost else { return }
                         self.upsertCatalogSession(previous)
                         self.syncOpenTabTitles(with: previous)
                         self.sortCatalogState()
@@ -1471,78 +1468,6 @@ final class PiAppState: ObservableObject {
         } catch {
             statusMessage = "Could not delete \(session.title): \(error.localizedDescription)"
         }
-    }
-
-    // MARK: - SSH host helpers
-
-    /// Parses the user's `~/.ssh/config` and returns the selectable host
-    /// aliases. Cheap to call repeatedly — the file is small.
-    func loadSSHConfigEntries() -> [SSHConfigEntry] {
-        SSHConfigParser.parseUserConfig()
-    }
-
-    /// Lists the keys Apple Pi can offer in the identity-file picker.
-    func loadSSHKeys() -> [SSHKeyStore.Key] {
-        SSHKeyStore.discoverKeys()
-    }
-
-    /// Applies a parsed `~/.ssh/config` entry to the current host settings.
-    /// Fields the user has customised manually are not overwritten.
-    ///
-    /// We mutate a local copy and assign once at the end. Each per-field
-    /// write to `host` fires `host.didSet` which in turn schedules a
-    /// catalog refresh; assigning the whole struct keeps the refresh to a
-    /// single round trip.
-    func applySSHConfigEntry(_ entry: SSHConfigEntry) {
-        var next = host
-        next.remoteSSHConfigAlias = entry.hostPatterns.joined(separator: ",")
-        if let hostName = entry.hostName?.nilIfBlank {
-            next.remoteHost = hostName
-        } else if next.remoteHost.isEmpty, let first = entry.hostPatterns.first(where: { !$0.hasSuffix("*") && !$0.hasPrefix("*") }) {
-            next.remoteHost = first
-        }
-        if let user = entry.user?.nilIfBlank {
-            next.remoteUser = user
-        }
-        if let port = entry.port {
-            next.remotePort = port
-        }
-        if let identityFile = entry.identityFile?.nilIfBlank {
-            next.remoteIdentityFile = identityFile
-            next.remoteAuthMethod = .publicKey
-        }
-        host = next
-    }
-
-    /// Clears the alias selection so the host fields can be edited freely.
-    func clearSSHConfigAlias() {
-        host.remoteSSHConfigAlias = ""
-    }
-
-    /// Persists the supplied password for the current host. Returns an error
-    /// message on failure, nil on success.
-    @discardableResult
-    func saveRemotePassword(_ password: String, for targetHost: PiHostConfiguration? = nil) -> String? {
-        do {
-            try RemoteCredentialStore.savePassword(password, for: targetHost ?? host)
-            return nil
-        } catch {
-            return error.localizedDescription
-        }
-    }
-
-    @discardableResult
-    func clearRemotePassword(for targetHost: PiHostConfiguration? = nil) -> String? {
-        do {
-            try RemoteCredentialStore.deletePassword(for: targetHost ?? host)
-            return nil
-        } catch {
-            return error.localizedDescription
-        }
-    }
-
-    func hasRemotePasswordStored(for targetHost: PiHostConfiguration? = nil) -> Bool {
-        RemoteCredentialStore.hasPassword(for: targetHost ?? host)
     }
 
     @discardableResult
@@ -1614,7 +1539,7 @@ final class PiAppState: ObservableObject {
     }
 
     func refreshConfigurationSummary() {
-        if host.usesRemoteDaemonTransport || host.mode == .remoteSSH {
+        if host.usesRemoteDaemonTransport {
             configurationSummary = PiConfigurationSummary.remote(
                 host: host,
                 projectDirectory: activeProject?.workingDirectory
@@ -1734,7 +1659,7 @@ final class PiAppState: ObservableObject {
         // host, so close them. Without this the user sees stale
         // conversations after a host change.
         chatWorkspace.closeAll(notify: false)
-        // Also wipe the SSH directory browser state — it is per-host and
+        // Also wipe the remote directory browser state — it is per-host and
         // would otherwise flash stale entries when the user reopens the
         // "New Session in Folder" sheet.
         remoteDirectoryEntries = []
@@ -1964,21 +1889,21 @@ final class PiAppState: ObservableObject {
             return
         }
 
-        let remoteHost = host
+        let remoteAPIHost = host
         let selectedTabID = session.id
         do {
             async let deltaTask = RemoteDaemonClient().loadSessionEventPage(
-                host: remoteHost,
+                host: remoteAPIHost,
                 sessionID: sessionID,
                 limit: 200,
                 after: after
             )
             async let runtimeTask = RemoteDaemonClient().loadSessionRuntime(
-                host: remoteHost,
+                host: remoteAPIHost,
                 sessionID: sessionID
             )
             let (delta, runtime) = try await (deltaTask, runtimeTask)
-            guard self.host == remoteHost,
+            guard self.host == remoteAPIHost,
                   self.chatWorkspace.selectedTab?.id == selectedTabID else {
                 return
             }
@@ -2186,7 +2111,7 @@ final class PiAppState: ObservableObject {
         // overwritten on the next save) but do not reopen any tabs.
         guard snapshot.hostFingerprint == host.persistenceFingerprint else { return }
 
-        let isRemote = host.usesRemoteDaemonTransport || host.mode == .remoteSSH
+        let isRemote = host.usesRemoteDaemonTransport
         let fileManager = Foundation.FileManager()
         let selectedKey = snapshot.selectedTabKey
 

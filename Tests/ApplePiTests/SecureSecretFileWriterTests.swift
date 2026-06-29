@@ -4,7 +4,7 @@ import Testing
 @testable import ApplePi
 
 /// Covers `SecureSecretFileWriter`, the single chokepoint used by
-/// `RemoteCredentialStore`, `RemoteDaemonTokenStore`, and
+/// `RemoteDaemonTokenStore`, `GroqAPIKeyStore`, and
 /// `GroqAPIKeyStore` to drop secrets on disk.
 ///
 /// The pre-hardening implementation wrote to a predictable `<path>.tmp`

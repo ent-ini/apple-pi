@@ -157,15 +157,13 @@ if [[ ! -f "${INFO_PLIST_TEMPLATE}" ]]; then
 fi
 
 swift build -c "${CONFIGURATION}" --product "${PRODUCT_NAME}"
-swift build -c "${CONFIGURATION}" --product "ApplePiAskpass"
 
 rm -rf "${BUNDLE_DIR}"
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
 cp ".build/${CONFIGURATION}/${PRODUCT_NAME}" "${EXECUTABLE_PATH}"
-cp ".build/${CONFIGURATION}/ApplePiAskpass" "${RESOURCES_DIR}/pi-app-askpass"
 cp "${ICON_SOURCE}" "${RESOURCES_DIR}/AppIcon.icns"
 cp "${NOTIFY_EXTENSION_SOURCE}" "${RESOURCES_DIR}/pi-app-notify-extension.mjs"
-chmod +x "${EXECUTABLE_PATH}" "${RESOURCES_DIR}/pi-app-askpass"
+chmod +x "${EXECUTABLE_PATH}"
 
 # Render the Info.plist from script/Info.plist.tpl. The placeholders
 # are `__APP_NAME__`, `__BUNDLE_IDENTIFIER__`, `__EXECUTABLE_NAME__`,
@@ -190,7 +188,6 @@ printf "APPL????" > "${CONTENTS_DIR}/PkgInfo"
 
 /usr/bin/plutil -lint "${INFO_PLIST}" >/dev/null
 /usr/bin/xattr -cr "${BUNDLE_DIR}" 2>/dev/null || true
-/usr/bin/codesign --force --sign "${SIGN_IDENTITY}" "${RESOURCES_DIR}/pi-app-askpass"
 /usr/bin/codesign --force --deep --options runtime --entitlements "${APP_ENTITLEMENTS_SOURCE}" --sign "${SIGN_IDENTITY}" "${BUNDLE_DIR}"
 /usr/bin/codesign --verify --deep --strict --verbose=2 "${BUNDLE_DIR}"
 

@@ -1,6 +1,6 @@
 # Privacy
 
-pi-app is a local native macOS app for organising Pi coding-agent sessions as a chat. The current release does not include a built-in SSH client; remote sessions go through a separate [pi-appd](https://github.com/ent-ini/apple-pi) HTTP daemon that you run next to Pi on the remote host.
+pi-app is a local native macOS app for organising Pi coding-agent sessions as a chat. Remote sessions go through a separate [pi-appd](https://github.com/ent-ini/apple-pi) HTTP daemon that you run next to Pi on the remote host.
 
 ## Data Collection
 
@@ -29,9 +29,7 @@ The app stores preferences in macOS `UserDefaults`, including:
 - appearance settings
 - pane visibility and pane widths
 
-The host model still carries SSH-shaped fields (remote host, user, port, identity file, `~/.ssh/config` alias) for backwards compatibility with saved configs from earlier previews. The current release does not read them back into a runtime path.
-
-The app does not intentionally store SSH passwords, API keys, model credentials, full chat transcripts, or copies of Pi session files.
+The app does not intentionally store API keys, model credentials, full chat transcripts, or copies of Pi session files.
 
 The `pi-appd` bearer token and the optional Groq API key (used only for Whisper transcription of voice notes) are stored as `0600` files under Application Support — never in the Keychain. They are scoped per daemon endpoint / per app instance.
 
@@ -47,7 +45,7 @@ Notification titles and messages are sent to macOS Notification Center for displ
 
 Remote mode is the "Remote API" host in the Settings window. The macOS client sends bearer-token-authenticated HTTP requests to the configured `pi-appd` URL. Authentication, host verification, and network routing are `pi-appd`'s responsibility; the macOS side only stores the bearer token you paste in.
 
-pi-app does not shell out to `ssh`, `python3`, or any other tool on the remote host. If you point it at a `pi-appd` you control, that is the only thing the app talks to remotely.
+If you point pi-app at a `pi-appd` you control, that is the only thing the app talks to remotely.
 
 ## Pi Behavior
 

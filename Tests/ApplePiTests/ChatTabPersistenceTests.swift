@@ -70,42 +70,8 @@ import Testing
 
 @Test func hostFingerprintChangesWithMode() {
     let a = PiHostConfiguration(mode: .local, agentDirectory: "/tmp/agent")
-    let b = PiHostConfiguration(mode: .remoteSSH, agentDirectory: "/tmp/agent")
+    let b = PiHostConfiguration(mode: .remoteAPI, agentDirectory: "/tmp/agent")
     #expect(a.persistenceFingerprint != b.persistenceFingerprint)
-}
-
-@Test func hostFingerprintChangesWithRemoteFields() {
-    let base = PiHostConfiguration(
-        mode: .remoteSSH,
-        agentDirectory: "/tmp/agent",
-        remoteHost: "pi.example.com",
-        remotePort: 22,
-        remoteUser: "ada"
-    )
-    let differentHost = PiHostConfiguration(
-        mode: .remoteSSH,
-        agentDirectory: "/tmp/agent",
-        remoteHost: "pi2.example.com",
-        remotePort: 22,
-        remoteUser: "ada"
-    )
-    let differentPort = PiHostConfiguration(
-        mode: .remoteSSH,
-        agentDirectory: "/tmp/agent",
-        remoteHost: "pi.example.com",
-        remotePort: 2222,
-        remoteUser: "ada"
-    )
-    let differentUser = PiHostConfiguration(
-        mode: .remoteSSH,
-        agentDirectory: "/tmp/agent",
-        remoteHost: "pi.example.com",
-        remotePort: 22,
-        remoteUser: "bob"
-    )
-    #expect(base.persistenceFingerprint != differentHost.persistenceFingerprint)
-    #expect(base.persistenceFingerprint != differentPort.persistenceFingerprint)
-    #expect(base.persistenceFingerprint != differentUser.persistenceFingerprint)
 }
 
 @Test func hostFingerprintChangesWithDaemonURL() {
@@ -256,19 +222,17 @@ import Testing
 @MainActor
 @Test func appStateRestoreReopensRemoteTabsWithoutCrashing() throws {
     let defaults = isolatedDefaults()
-    let remoteHost = PiHostConfiguration(
-        mode: .remoteSSH,
-        remoteHost: "pi.example.com",
-        remoteUser: "ada",
+    let remoteAPIHost = PiHostConfiguration(
+        mode: .remoteAPI,
         remoteDaemonURL: "http://127.0.0.1:1"
     )
     // Pre-seed the host so the in-app state loads it on init.
-    let hostData = try JSONEncoder().encode(remoteHost)
+    let hostData = try JSONEncoder().encode(remoteAPIHost)
     defaults.set(hostData, forKey: "ApplePi.host")
     defaults.set(Date(), forKey: "ApplePi.updateCheck.lastCheckedAt")
 
     let snapshot = PersistedChatTabsSnapshot(
-        hostFingerprint: remoteHost.persistenceFingerprint,
+        hostFingerprint: remoteAPIHost.persistenceFingerprint,
         tabs: [
             PersistedChatTab(key: "remote-1", title: "R1", sessionID: "remote-1"),
             PersistedChatTab(key: "remote-2", title: "R2", sessionID: "remote-2")

@@ -4,15 +4,10 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var appState: PiAppState
     @State private var notificationTestStatus: String?
-    @State private var sshConfigEntries: [SSHConfigEntry] = []
-    @State private var sshKeys: [SSHKeyStore.Key] = []
-    @State private var passwordInput: String = ""
-    @State private var passwordStatus: String?
     @State private var apiTokenInput: String = ""
     @State private var apiTokenStatus: String?
     @State private var groqAPIKeyInput: String = ""
     @State private var groqAPIKeyStatus: String?
-    @State private var isConfirmingClearPassword = false
     @State private var isConfirmingClearAPIToken = false
     @State private var isConfirmingClearGroqAPIKey = false
     @State private var isConfirmingHostCommit = false
@@ -367,15 +362,12 @@ struct SettingsView: View {
     private var hostCommitMessage: String {
         guard let pending = pendingHostCommit else { return "" }
         let modeChanged = pending.mode != appState.host.mode
-        let hostChanged = pending.remoteHost != appState.host.remoteHost
         if pending.usesRemoteDaemonTransport {
             return "Switching to the remote API will close all open chat tabs and reload the session catalog from \(pending.remoteDaemonDisplayAddress.isEmpty ? "the configured daemon" : pending.remoteDaemonDisplayAddress)."
-        } else if modeChanged && pending.mode == .remoteSSH {
+        } else if modeChanged && pending.mode == .remoteAPI {
             return "Switching to Remote API mode without a configured pi-appd URL will fail. Set the daemon URL and token first."
         } else if modeChanged {
             return "Switching to Local Mac will close all open chat tabs and reload the session catalog from your local Pi agent directory."
-        } else if hostChanged {
-            return "Updating the remote host to \(pending.remoteHost) will close all open chat tabs and reload the catalog."
         } else {
             return "Applying these host settings will close all open chat tabs and reload the session catalog."
         }
@@ -429,108 +421,6 @@ struct SettingsView: View {
         // open of the settings window after the user dismissed it by
         // closing the window itself.
         isConfirmingHostCommit = false
-    }
-
-    // MARK: - SSH pickers (operate on editingHost)
-
-    private var editingSshConfigAliasPicker: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Picker("SSH config alias", selection: editingSshConfigAliasBinding) {
-                Text("Custom").tag(Optional<String>.none)
-                ForEach(sshConfigEntries) { entry in
-                    Text(entry.subtitle.isEmpty ? entry.displayName : "\(entry.displayName) — \(entry.subtitle)")
-                        .tag(Optional(entry.id))
-                }
-            }
-            .onChange(of: editingSshConfigAliasBinding.wrappedValue) { _, newValue in
-                applyAliasToEditingBuffer(newValue)
-            }
-
-            if let alias = editingHost?.remoteSSHConfigAlias.nonEmpty ?? appState.host.remoteSSHConfigAlias.nonEmpty {
-                HStack(spacing: 6) {
-                    Text("Editing alias: \(alias)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Button("Detach") {
-                        detachAliasInEditingBuffer()
-                    }
-                    .buttonStyle(.link)
-                    .font(.caption)
-                }
-            } else if sshConfigEntries.isEmpty {
-                Text("No entries found in ~/.ssh/config.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var editingSshIdentityFilePicker: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Picker("Identity file", selection: editingSshIdentityBinding) {
-                Text("Default (ssh-agent)").tag(Optional<String>.none)
-                ForEach(sshKeys) { key in
-                    Text(key.label).tag(Optional(key.id))
-                }
-            }
-            if (editingHost?.remoteIdentityFile ?? appState.host.remoteIdentityFile).isEmpty {
-                Text("Uses the system default — the agent or ~/.ssh/id_*")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var editingSshConfigAliasBinding: Binding<String?> {
-        Binding(
-            get: { editingHost?.remoteSSHConfigAlias.nonEmpty ?? appState.host.remoteSSHConfigAlias.nonEmpty },
-            set: { newValue in
-                var current = editingHost ?? appState.host
-                current.remoteSSHConfigAlias = newValue ?? ""
-                editingHost = current
-            }
-        )
-    }
-
-    private var editingSshIdentityBinding: Binding<String?> {
-        Binding(
-            get: { editingHost?.remoteIdentityFile.nonEmpty ?? appState.host.remoteIdentityFile.nonEmpty },
-            set: { newValue in
-                var current = editingHost ?? appState.host
-                current.remoteIdentityFile = newValue ?? ""
-                // Picking a key does not change the auth method; if the user
-                // wants password auth they will pick the Password picker.
-                editingHost = current
-            }
-        )
-    }
-
-    private func applyAliasToEditingBuffer(_ aliasID: String?) {
-        var current = editingHost ?? appState.host
-        if let aliasID, let entry = sshConfigEntries.first(where: { $0.id == aliasID }) {
-            // Mirror PiAppState.applySSHConfigEntry into the local buffer.
-            current.remoteSSHConfigAlias = entry.hostPatterns.joined(separator: ",")
-            if let hostName = entry.hostName?.nilIfBlank {
-                current.remoteHost = hostName
-            } else if current.remoteHost.isEmpty, let first = entry.hostPatterns.first(where: { !$0.hasSuffix("*") && !$0.hasPrefix("*") }) {
-                current.remoteHost = first
-            }
-            if let user = entry.user?.nilIfBlank { current.remoteUser = user }
-            if let port = entry.port { current.remotePort = port }
-            if let identityFile = entry.identityFile?.nilIfBlank {
-                current.remoteIdentityFile = identityFile
-                current.remoteAuthMethod = .publicKey
-            }
-        } else {
-            current.remoteSSHConfigAlias = ""
-        }
-        editingHost = current
-    }
-
-    private func detachAliasInEditingBuffer() {
-        var current = editingHost ?? appState.host
-        current.remoteSSHConfigAlias = ""
-        editingHost = current
     }
 
     // MARK: - Other bindings (unchanged from before)
@@ -611,7 +501,7 @@ struct SettingsView: View {
     }
 
     private var notificationExtensionHelpText: String {
-        if appState.host.usesRemoteDaemonTransport || appState.host.mode == .remoteSSH {
+        if appState.host.usesRemoteDaemonTransport {
             return "Remote sessions need a Pi notification helper installed on the remote host. The bundled helper is only available to local sessions started from this app."
         }
 
@@ -634,38 +524,6 @@ struct SettingsView: View {
             "macOS notifications are disabled for this app. Enable them in System Settings > Notifications."
         case .failed:
             "macOS could not deliver the notification."
-        }
-    }
-
-    // MARK: - SSH password field
-
-    private var sshPasswordField: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            SecureField("Password", text: $passwordInput)
-                .textContentType(.password)
-                .onSubmit { savePassword() }
-            HStack {
-                Button(appState.hasRemotePasswordStored(for: currentEditingHost) ? "Update password" : "Save password", action: savePassword)
-                if appState.hasRemotePasswordStored(for: currentEditingHost) {
-                    Button("Clear", role: .destructive) {
-                        isConfirmingClearPassword = true
-                    }
-                }
-                Spacer()
-            }
-            if let passwordStatus {
-                Text(passwordStatus)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if appState.hasRemotePasswordStored(for: currentEditingHost) {
-                Text("Password is stored locally for this host only.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("Stored as a 0600 file in Application Support — never in the Keychain.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
         }
     }
 
@@ -697,21 +555,6 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
         }
-    }
-
-    private func reloadSSHCollections() {
-        sshConfigEntries = appState.loadSSHConfigEntries()
-        sshKeys = appState.loadSSHKeys()
-        if editingHost == nil { editingHost = appState.host }
-        refreshPasswordStatus()
-        refreshAPITokenStatus()
-        refreshGroqAPIKeyStatus()
-    }
-
-    private func refreshPasswordStatus() {
-        passwordStatus = appState.hasRemotePasswordStored(for: currentEditingHost)
-            ? "A password is stored for this host."
-            : nil
     }
 
     private func refreshAPITokenStatus() {
@@ -777,27 +620,6 @@ struct SettingsView: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(redactedCurlCommand, forType: .string)
         apiTokenStatus = "Redacted curl copied. Run with APPLEPI_TOKEN=<your-token>."
-    }
-
-    private func savePassword() {
-        guard !passwordInput.isEmpty else {
-            passwordStatus = "Password is empty."
-            return
-        }
-        if let error = appState.saveRemotePassword(passwordInput, for: currentEditingHost) {
-            passwordStatus = error
-        } else {
-            passwordInput = ""
-            passwordStatus = "Saved."
-        }
-    }
-
-    private func clearPassword() {
-        if let error = appState.clearRemotePassword(for: currentEditingHost) {
-            passwordStatus = error
-        } else {
-            passwordStatus = "Cleared."
-        }
     }
 
     private func saveAPIToken() {

@@ -1,7 +1,7 @@
 import Foundation
 import Darwin
 
-/// Securely writes small secret blobs (SSH passwords, daemon bearer tokens,
+/// Securely writes small secret blobs (daemon bearer tokens,
 /// third-party API keys, etc.) to disk with mode 0600 from the very first
 /// byte, and moves the result into place atomically.
 ///

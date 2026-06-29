@@ -71,9 +71,7 @@ enum RemoteDaemonTokenStore {
     }
 
     private static func sanitizedHostIdentifier(for host: PiHostConfiguration) -> String {
-        let raw = host.remoteDaemonDisplayAddress.nilIfBlank
-            ?? host.remoteAddress.nilIfBlank
-            ?? "default"
+        let raw = host.remoteDaemonDisplayAddress.nilIfBlank ?? "default"
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
         let scalars = raw.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" }
         let joined = String(scalars)

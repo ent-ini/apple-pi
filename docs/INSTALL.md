@@ -11,7 +11,7 @@ Verify the release hash and source before running it.
 - macOS 14 or newer.
 - Pi installed locally, **or** a remote host running [pi-appd](https://github.com/ent-ini/apple-pi) and Pi.
 
-pi-app does not need `python3` (or any other tool) on the remote host beyond whatever `pi-appd` itself requires. The macOS client talks to the daemon over bearer-token-authenticated HTTP.
+The macOS client talks to the daemon over bearer-token-authenticated HTTP.
 
 ## Install From A Release Zip
 
@@ -48,9 +48,7 @@ For Remote API mode:
 - `Bearer token`: paste the daemon's bearer token. It is stored locally as a `0600` file in Application Support — never in the Keychain.
 - Use `Test Remote API` before pressing Apply to confirm the URL and token work, and `Copy curl` if you want a one-shot way to check the daemon from a terminal.
 
-The bundled SSH password, identity-file, and `~/.ssh/config` alias fields from earlier previews are no longer required: Remote API mode uses HTTP only, and the SSH plumbing is reserved for a future local SSH passthrough. The fields are kept in the host model so the data shape does not break for anyone who already has a saved config.
-
-The app does not install Pi and does not configure SSH keys. Confirm those work in Terminal first.
+The app does not install Pi. Confirm your local `pi` command and remote `pi-appd` endpoint work first.
 
 ## Notifications
 

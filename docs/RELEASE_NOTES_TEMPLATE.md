@@ -20,7 +20,7 @@ Public release of pi-app, a native macOS app for organising Pi coding-agent sess
 - Render open Pi conversations as chat (message bubbles, tool call/result disclosure rows, attachments, voice notes).
 - Keep multiple conversations open and switch between them from the sidebar.
 - Talk to a remote host running `pi-appd` over bearer-token-authenticated HTTP.
-- Browse and start remote sessions without storing SSH passwords, keys, or Pi session transcripts.
+- Browse and start remote sessions without storing Pi session transcripts.
 - Tune the app appearance: window/sidebar/chat opacity, accent color, transparent titlebar, dark/light mode.
 - Receive macOS notifications from local sessions through the bundled OSC 777 helper.
 - Check for newer GitHub releases without automatic downloads or installs.
@@ -48,9 +48,8 @@ For ad-hoc builds, Gatekeeper assessment may reject the app. That is expected fo
 ## Notes
 
 - pi-app does not install Pi.
-- pi-app does not manage SSH keys or store SSH passwords.
 - pi-app does not store model API keys or Pi session transcripts.
-- The macOS client never shells out to `python3`, `ssh`, or any other tool on the remote host. Remote access is the `pi-appd` HTTP daemon, not a built-in SSH client.
+- Remote access is handled by the `pi-appd` HTTP daemon.
 - Remote API mode can browse, start, and resume remote sessions, but it does not delete remote session files.
 - Remote notifications require notification support configured on the remote host; the bundled helper is only loaded into local sessions started by pi-app.
 - SwiftTerm is vendored at `Vendor/SwiftTerm` for a future in-app terminal surface. The current release renders Pi conversations as chat, not as a SwiftTerm-backed terminal view.

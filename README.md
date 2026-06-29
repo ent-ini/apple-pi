@@ -68,7 +68,7 @@ Pi owns the sessions. pi-app makes them easier to find, read, start, and resume.
 
 ## What it is not
 
-pi-app is not a replacement for Pi, an IDE, an Electron dashboard, a cloud service, an account system, a model API key manager, an SSH key manager, or a generic terminal emulator host. (It is, by design, a chat-style session UI for Pi.)
+pi-app is not a replacement for Pi, an IDE, an Electron dashboard, a cloud service, an account system, a model API key manager, or a generic terminal emulator host. (It is, by design, a chat-style session UI for Pi.)
 
 ## Install
 
@@ -103,7 +103,7 @@ No analytics. No account. No background auto-updater.
 
 On launch, the app makes one anonymous GET to `api.github.com/repos/ent-ini/apple-pi/releases/latest` to check for newer releases, throttled to once every 24 hours, and shows a small in-app link if one exists. It never downloads or installs anything on its own.
 
-No bundled browser runtime. No SSH key manager. No password store. No model API key manager. No hidden Pi installs.
+No bundled browser runtime. No password store. No model API key manager. No hidden Pi installs.
 
 ```sh
 codesign --verify --deep --strict --verbose=2 "pi-app.app"
@@ -119,7 +119,7 @@ plutil -p "pi-app.app/Contents/Info.plist"
 - Pi installed locally, **or** a remote host running [pi-appd](https://github.com/ent-ini/apple-pi) and Pi
 - Swift 6.1 if building from source
 
-Remote sessions only require whatever `pi-appd` itself requires on the remote host — pi-app does not need `python3` or any other tool installed on the remote beyond what `pi-appd` documents.
+Remote sessions only require whatever `pi-appd` itself requires on the remote host.
 
 ## License
 

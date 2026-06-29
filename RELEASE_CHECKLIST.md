@@ -31,7 +31,7 @@ Expected coverage areas:
 - remote delete safety
 - remote configuration summaries
 - configuration summary counts
-- `RemoteSSHSupport` environment-variable allowlist (shared by local and remote)
+- `PiProcessEnvironment` environment-variable allowlist (shared by local and remote)
 
 ## Build
 
@@ -105,7 +105,7 @@ For ad-hoc builds, rejection is expected. Do not present Gatekeeper acceptance a
 
 Complete this section if remote support is included in the release notes.
 pi-app talks to the remote host through [pi-appd](https://github.com/ent-ini/apple-pi),
-a separate HTTP daemon, not through a built-in SSH client.
+a separate HTTP daemon.
 
 - Confirm `pi-appd` is installed on the remote host and reachable at the
   configured URL (for example `http://<host>:<port>/healthz`).
@@ -124,8 +124,6 @@ a separate HTTP daemon, not through a built-in SSH client.
   context menu.
 - Confirm the Pi context popover identifies the context as Remote API
   and does not expose local settings/trust counts for remote paths.
-- Confirm the app does not require storing a password, key, or `python3`
-  on the remote host.
 
 ## Release Artifact
 

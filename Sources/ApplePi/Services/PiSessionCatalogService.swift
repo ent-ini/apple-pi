@@ -30,7 +30,7 @@ final class PiSessionCatalogService {
         switch host.mode {
         case .local:
             return try loadLocalCatalog(host: host, activeProjectDirectory: activeProjectDirectory)
-        case .remoteSSH:
+        case .remoteAPI:
             return try await loadRemoteCatalog(host: host, activeProjectDirectory: activeProjectDirectory)
         }
     }
