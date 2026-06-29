@@ -72,6 +72,8 @@ final class PiAppState: ObservableObject {
     @Published private(set) var sendingSessionKeys: Set<String> = []
     @Published private(set) var unreadSessionKeys: Set<String> = []
     @Published private(set) var sessionActivityOverrides: [String: Date] = [:]
+    @Published private(set) var defaultModelPreference: DefaultModelPreference?
+    @Published private(set) var isLoadingAvailableModels = false
 
     let chatWorkspace = ChatSessionStore()
 
@@ -85,6 +87,8 @@ final class PiAppState: ObservableObject {
     private let shortcutDefaultsKey = "ApplePi.shortcuts"
     private let chatTabDefaultsKey = "ApplePi.chatTabs"
     private let lastUpdateCheckKey = "ApplePi.updateCheck.lastCheckedAt"
+    private let modelDefaultsKey = "ApplePi.modelDefaults"
+    private let availableModelsCacheDefaultsKey = "ApplePi.availableModelsCache"
     private let updateCheckInterval: TimeInterval = 24 * 60 * 60
     private let startsBackgroundWork: Bool
     private let chatTabPersistence: ChatTabPersistence
@@ -111,7 +115,6 @@ final class PiAppState: ObservableObject {
     private var sessionDefaultsCache: [String: SessionDefaultsSnapshot] = [:]
     private var availableModelsCache: [PiModelOption] = []
     private var availableModelsCacheLoadedAt: Date?
-    private var isLoadingAvailableModels = false
     private var pendingThinkingLevelBySessionKey: [String: String] = [:]
     private var thinkingLevelMutationVersionBySessionKey: [String: Int] = [:]
     private var modelMutationVersionBySessionKey: [String: Int] = [:]
@@ -145,6 +148,8 @@ final class PiAppState: ObservableObject {
         loadHost()
         loadAppearance()
         loadShortcutPreferences()
+        loadModelDefaults()
+        loadAvailableModelsCache()
         isLoadingPersistedState = false
 
         chatWorkspace.onSessionExit = { [weak self] in
@@ -187,7 +192,7 @@ final class PiAppState: ObservableObject {
             return
         }
 
-        for key in [hostDefaultsKey, appearanceDefaultsKey, shortcutDefaultsKey, chatTabDefaultsKey, lastUpdateCheckKey] {
+        for key in [hostDefaultsKey, appearanceDefaultsKey, shortcutDefaultsKey, chatTabDefaultsKey, lastUpdateCheckKey, modelDefaultsKey, availableModelsCacheDefaultsKey] {
             guard defaults.object(forKey: key) == nil,
                   let value = legacyDomain[key] else { continue }
             defaults.set(value, forKey: key)
@@ -438,12 +443,26 @@ final class PiAppState: ObservableObject {
         return (raw as NSString).expandingTildeInPath
     }
 
+    var cachedAvailableModels: [PiModelOption] {
+        availableModelsCache
+    }
+
+    private func cacheAvailableModels(_ models: [PiModelOption], loadedAt: Date = Date()) {
+        availableModelsCache = models
+        availableModelsCacheLoadedAt = loadedAt
+        saveAvailableModelsCache()
+    }
+
     private func cacheSessionDefaults(_ snapshot: SessionDefaultsSnapshot, for workingDirectory: String?) {
         sessionDefaultsCache[sessionDefaultsCacheKey(for: workingDirectory)] = snapshot
         if !snapshot.availableModels.isEmpty {
-            availableModelsCache = snapshot.availableModels
-            availableModelsCacheLoadedAt = Date()
+            cacheAvailableModels(snapshot.availableModels)
         }
+    }
+
+    func setDefaultModelPreference(_ preference: DefaultModelPreference?) {
+        defaultModelPreference = preference
+        saveModelDefaults()
     }
 
     @discardableResult
@@ -613,7 +632,10 @@ final class PiAppState: ObservableObject {
             forkPath: nil,
             sessionName: sessionName?.nilIfBlank,
             isEphemeral: isTemporary,
-            initialPrompt: nil
+            initialPrompt: nil,
+            initialModelProvider: defaultModelPreference?.provider,
+            initialModelID: defaultModelPreference?.modelID,
+            hasExplicitInitialModel: defaultModelPreference != nil
         )
         let key = "new:\(UUID().uuidString)"
         let tab = chatWorkspace.openTab(
@@ -1163,23 +1185,32 @@ final class PiAppState: ObservableObject {
         }
         if !force, !session.availableModels.isEmpty { return }
         if applyCachedAvailableModels(to: session) { return }
+        refreshAvailableModelsCache(force: force, targetSession: session)
+    }
+
+    func refreshAvailableModelsCache(force: Bool = false) {
+        refreshAvailableModelsCache(force: force, targetSession: nil)
+    }
+
+    private func refreshAvailableModelsCache(force: Bool, targetSession: ChatSession?) {
+        guard host.usesRemoteDaemonTransport else { return }
+        if !force, !availableModelsCache.isEmpty { return }
         if isLoadingAvailableModels { return }
 
         isLoadingAvailableModels = true
         let remoteAPIHost = host
-        Task { [weak self, weak session] in
+        Task { [weak self, weak targetSession] in
             do {
                 let models = try await RemoteDaemonClient().loadAvailableModels(host: remoteAPIHost)
                 await MainActor.run {
                     guard let self, self.host == remoteAPIHost else { return }
-                    self.availableModelsCache = models
-                    self.availableModelsCacheLoadedAt = Date()
+                    self.cacheAvailableModels(models)
                     self.isLoadingAvailableModels = false
                     for tab in self.chatWorkspace.tabs where tab.availableModels.isEmpty {
                         tab.updateAvailableModels(models)
                     }
-                    if let session {
-                        session.updateAvailableModels(models)
+                    if let targetSession {
+                        targetSession.updateAvailableModels(models)
                     }
                 }
             } catch {
@@ -2115,6 +2146,47 @@ final class PiAppState: ObservableObject {
     private func saveShortcutPreferences() {
         guard let data = try? JSONEncoder().encode(shortcutPreferences) else { return }
         defaults.set(data, forKey: shortcutDefaultsKey)
+    }
+
+    private func loadModelDefaults() {
+        guard let data = defaults.data(forKey: modelDefaultsKey),
+              let decoded = try? JSONDecoder().decode(DefaultModelPreference.self, from: data) else {
+            return
+        }
+        defaultModelPreference = decoded
+    }
+
+    private func saveModelDefaults() {
+        guard let defaultModelPreference else {
+            defaults.removeObject(forKey: modelDefaultsKey)
+            return
+        }
+        guard let data = try? JSONEncoder().encode(defaultModelPreference) else { return }
+        defaults.set(data, forKey: modelDefaultsKey)
+    }
+
+    private struct AvailableModelsCacheSnapshot: Codable {
+        let models: [PiModelOption]
+        let loadedAt: Date
+    }
+
+    private func loadAvailableModelsCache() {
+        guard let data = defaults.data(forKey: availableModelsCacheDefaultsKey),
+              let decoded = try? JSONDecoder().decode(AvailableModelsCacheSnapshot.self, from: data) else {
+            return
+        }
+        availableModelsCache = decoded.models
+        availableModelsCacheLoadedAt = decoded.loadedAt
+    }
+
+    private func saveAvailableModelsCache() {
+        guard !availableModelsCache.isEmpty,
+              let loadedAt = availableModelsCacheLoadedAt,
+              let data = try? JSONEncoder().encode(AvailableModelsCacheSnapshot(models: availableModelsCache, loadedAt: loadedAt)) else {
+            defaults.removeObject(forKey: availableModelsCacheDefaultsKey)
+            return
+        }
+        defaults.set(data, forKey: availableModelsCacheDefaultsKey)
     }
 
     // MARK: - Chat tab persistence

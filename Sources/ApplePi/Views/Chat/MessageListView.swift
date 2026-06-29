@@ -173,7 +173,10 @@ struct MessageListView: View {
     static let scrollCoordinateSpaceName = "chat.list.scroll"
     private static let bottomStickinessBuffer: CGFloat = 180
     private static let historyAutoLoadDistance: CGFloat = 240
-    private static let stickyBreakawayDistance: CGFloat = 180
+    // Keep this small so a normal two-finger trackpad scroll immediately
+    // breaks the streaming auto-scroll lock. A large value made touchpad
+    // scrolling feel ignored unless the user dragged the scrollbar thumb.
+    private static let stickyBreakawayDistance: CGFloat = 32
     private static let bottomReachedEpsilon: CGFloat = 3
     private static let stickyAutoScrollDuration: TimeInterval = 30
     private static let scrollSettleDelays: [TimeInterval] = [0.04, 0.16, 0.34]

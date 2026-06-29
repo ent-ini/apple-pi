@@ -1,6 +1,6 @@
 import Foundation
 
-struct PiModelOption: Identifiable, Hashable, Sendable {
+struct PiModelOption: Identifiable, Hashable, Codable, Sendable {
     let provider: String
     let modelID: String
     let name: String?
@@ -10,6 +10,13 @@ struct PiModelOption: Identifiable, Hashable, Sendable {
     var id: String { "\(provider)/\(modelID)" }
     var displayName: String { id }
     var shortLabel: String { modelID }
+}
+
+struct DefaultModelPreference: Hashable, Codable, Sendable {
+    let provider: String
+    let modelID: String
+
+    var id: String { "\(provider)/\(modelID)" }
 }
 
 struct SessionTokenTotals: Hashable, Sendable {

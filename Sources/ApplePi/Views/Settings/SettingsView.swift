@@ -20,6 +20,7 @@ struct SettingsView: View {
             appearanceSection
             shortcutsSection
             hostSections
+            piDefaultsSection
             voiceSection
             Section("Notifications") {
                 Toggle("Pi session notifications", isOn: notificationBinding(\.isEnabled))
@@ -123,6 +124,59 @@ struct SettingsView: View {
         } message: {
             Text("The curl command will include your stored bearer token in plain text. Anyone with access to your clipboard can read it. Prefer the redacted copy unless you need to run the command right now.")
         }
+    }
+
+    // MARK: - Pi defaults section
+
+    @ViewBuilder
+    private var piDefaultsSection: some View {
+        Section("Pi defaults") {
+            Picker("Default model", selection: defaultModelSelectionBinding) {
+                Text("Use daemon default").tag("")
+                ForEach(appState.cachedAvailableModels) { model in
+                    Text(model.displayName).tag(model.id)
+                }
+            }
+
+            HStack {
+                Button(appState.isLoadingAvailableModels ? "Loading models…" : "Refresh model list") {
+                    appState.refreshAvailableModelsCache(force: true)
+                }
+                .disabled(appState.isLoadingAvailableModels || !appState.host.usesRemoteDaemonTransport)
+
+                if !appState.host.usesRemoteDaemonTransport {
+                    Text("Available for remote daemon hosts only.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if appState.cachedAvailableModels.isEmpty {
+                    Text("No cached models yet. Refresh once to populate the picker.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("\(appState.cachedAvailableModels.count) cached")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Text("New sessions use this model explicitly. Existing sessions keep their current model.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var defaultModelSelectionBinding: Binding<String> {
+        Binding(
+            get: { appState.defaultModelPreference?.id ?? "" },
+            set: { newValue in
+                guard !newValue.isEmpty else {
+                    appState.setDefaultModelPreference(nil)
+                    return
+                }
+                guard let model = appState.cachedAvailableModels.first(where: { $0.id == newValue }) else { return }
+                appState.setDefaultModelPreference(DefaultModelPreference(provider: model.provider, modelID: model.modelID))
+            }
+        )
     }
 
     // MARK: - Appearance section
