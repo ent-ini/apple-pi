@@ -635,7 +635,9 @@ final class PiAppState: ObservableObject {
             initialPrompt: nil,
             initialModelProvider: defaultModelPreference?.provider,
             initialModelID: defaultModelPreference?.modelID,
-            hasExplicitInitialModel: defaultModelPreference != nil
+            initialThinkingLevel: defaultModelPreference?.thinkingLevel,
+            hasExplicitInitialModel: defaultModelPreference != nil,
+            hasExplicitInitialThinkingLevel: defaultModelPreference?.thinkingLevel?.nilIfBlank != nil
         )
         let key = "new:\(UUID().uuidString)"
         let tab = chatWorkspace.openTab(
@@ -1401,13 +1403,14 @@ final class PiAppState: ObservableObject {
         }
     }
 
+    static let thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh"]
+
     private func nextThinkingLevel(after currentLevel: String) -> String {
-        let levels = ["off", "minimal", "low", "medium", "high", "xhigh"]
         let normalized = currentLevel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard let index = levels.firstIndex(of: normalized) else {
+        guard let index = Self.thinkingLevels.firstIndex(of: normalized) else {
             return "off"
         }
-        return levels[(index + 1) % levels.count]
+        return Self.thinkingLevels[(index + 1) % Self.thinkingLevels.count]
     }
 
     private func effectiveThinkingLevel(for session: ChatSession) -> String {

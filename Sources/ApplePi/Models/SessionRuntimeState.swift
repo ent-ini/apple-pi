@@ -15,6 +15,13 @@ struct PiModelOption: Identifiable, Hashable, Codable, Sendable {
 struct DefaultModelPreference: Hashable, Codable, Sendable {
     let provider: String
     let modelID: String
+    var thinkingLevel: String?
+
+    init(provider: String, modelID: String, thinkingLevel: String? = nil) {
+        self.provider = provider
+        self.modelID = modelID
+        self.thinkingLevel = thinkingLevel
+    }
 
     var id: String { "\(provider)/\(modelID)" }
 }

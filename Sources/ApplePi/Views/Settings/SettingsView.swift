@@ -138,6 +138,14 @@ struct SettingsView: View {
                 }
             }
 
+            Picker("Default thinking", selection: defaultThinkingSelectionBinding) {
+                Text("Use daemon default").tag("")
+                ForEach(PiAppState.thinkingLevels, id: \.self) { level in
+                    Text(level).tag(level)
+                }
+            }
+            .disabled(appState.defaultModelPreference == nil)
+
             HStack {
                 Button(appState.isLoadingAvailableModels ? "Loading models…" : "Refresh model list") {
                     appState.refreshAvailableModelsCache(force: true)
@@ -174,7 +182,22 @@ struct SettingsView: View {
                     return
                 }
                 guard let model = appState.cachedAvailableModels.first(where: { $0.id == newValue }) else { return }
-                appState.setDefaultModelPreference(DefaultModelPreference(provider: model.provider, modelID: model.modelID))
+                appState.setDefaultModelPreference(DefaultModelPreference(
+                    provider: model.provider,
+                    modelID: model.modelID,
+                    thinkingLevel: appState.defaultModelPreference?.thinkingLevel
+                ))
+            }
+        )
+    }
+
+    private var defaultThinkingSelectionBinding: Binding<String> {
+        Binding(
+            get: { appState.defaultModelPreference?.thinkingLevel ?? "" },
+            set: { newValue in
+                guard var preference = appState.defaultModelPreference else { return }
+                preference.thinkingLevel = newValue.nilIfBlank
+                appState.setDefaultModelPreference(preference)
             }
         )
     }
