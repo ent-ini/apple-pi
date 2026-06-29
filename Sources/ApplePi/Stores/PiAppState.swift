@@ -722,17 +722,35 @@ final class PiAppState: ObservableObject {
 
     func cancelSend(in session: ChatSession) {
         guard session.hasActiveSend else { return }
-        statusMessage = "Stopping Pi..."
-        let remoteAPIHost = host
-        let sessionID = session.sessionID?.nilIfBlank
-        if host.usesRemoteDaemonTransport, let sessionID {
-            Task {
-                try? await RemoteDaemonClient().abortSession(host: remoteAPIHost, sessionID: sessionID)
-            }
-        }
-        session.abortSend()
+        statusMessage = "Aborting Pi..."
         let aliases = sessionAliases(for: session)
         setSessionSending(false, aliases: aliases)
+
+        let remoteAPIHost = host
+        if host.usesRemoteDaemonTransport, let sessionID = session.sessionID?.nilIfBlank {
+            // Important: do not cancel the send task / HTTP stream here. Abort
+            // is an RPC command inside the active run; keeping the stream open
+            // lets the app retain every message/tool event emitted before the
+            // abort acknowledgement, matching TUI behavior.
+            session.abortSend()
+            Task { [weak self, weak session] in
+                do {
+                    try await RemoteDaemonClient().abortSession(host: remoteAPIHost, sessionID: sessionID)
+                } catch {
+                    await MainActor.run {
+                        guard let self else { return }
+                        self.statusMessage = error.localizedDescription
+                        session?.applyStreamingEvents([.other(type: "abort_error", lineIndex: (session?.lastPersistedLineIndex ?? 0) + 1)], isFinal: false)
+                    }
+                }
+            }
+            return
+        }
+
+        // Local/fallback path has no out-of-band abort endpoint; preserve the
+        // visible transcript as far as possible, then cancel the process.
+        session.abortSend()
+        session.cancelSend()
     }
 
     func compactSession(_ session: ChatSession, instructions: String = "") {

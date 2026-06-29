@@ -145,11 +145,12 @@ final class ChatSession: ObservableObject, Identifiable {
 
     func abortSend() {
         didAbortCurrentSend = true
-        if let task = sendTask {
-            task.cancel()
-        }
-        sendTask = nil
-        finishSendingAborted()
+        isSending = false
+        isAwaitingTurnCommit = false
+        canAcceptSteering = false
+        statusMessage = "Aborting..."
+        appendAbortCommandIfNeeded()
+        rebuildEvents()
     }
 
     func bindToSession(
@@ -338,6 +339,32 @@ final class ChatSession: ObservableObject, Identifiable {
         upsertTransientStreamEvent(event, into: &transientStreamEvents)
         statusMessage = "Steering..."
         rebuildEvents()
+    }
+
+    private func appendAbortCommandIfNeeded() {
+        let alreadyVisible = transientStreamEvents.contains { event in
+            guard case .message(let message, _) = event,
+                  message.role == .user else { return false }
+            return message.content.contains { block in
+                if case .text(let text) = block {
+                    return text.trimmingCharacters(in: .whitespacesAndNewlines) == "/abort"
+                }
+                return false
+            }
+        }
+        guard !alreadyVisible else { return }
+        let event = SessionEvent.message(
+            Message(
+                id: UUID().uuidString,
+                role: .user,
+                content: [.text("/abort")],
+                model: nil,
+                timestamp: Date(),
+                parentId: nil
+            ),
+            lineIndex: nextTransientLineIndex(for: transientStreamEvents.count)
+        )
+        transientStreamEvents.append(event)
     }
 
     /// Mark the current send as cancelled without showing an error to
