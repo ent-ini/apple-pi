@@ -50,32 +50,55 @@ struct ThinkingSummaryView: View {
 }
 
 struct BouncingDotsView: View {
-    @State private var animate = false
+    private let dotSize: CGFloat = 6
+    private let dotSpacing: CGFloat = 5
+    private let period: Double = 1.2          // full cycle in seconds
+    private let phaseStep: Double = 0.18       // wave offset between dots
+    private let containerHeight: CGFloat = 18  // enough vertical room so dots never feel "pinned" to the bubble's top edge
 
     var body: some View {
-        HStack(spacing: 5) {
-            dot(delay: 0)
-            dot(delay: 0.14)
-            dot(delay: 0.28)
-        }
-        .frame(height: 14, alignment: .center)
-        .padding(.horizontal, 2)
-        .onAppear {
-            animate = true
-        }
-    }
-
-    private func dot(delay: Double) -> some View {
-        Circle()
-            .fill(Color.secondary)
-            .frame(width: 6, height: 6)
-            .scaleEffect(animate ? 1.0 : 0.45)
-            .opacity(animate ? 1.0 : 0.35)
-            .animation(
-                .easeInOut(duration: 0.45)
-                    .repeatForever(autoreverses: true)
-                    .delay(delay),
-                value: animate
+        // TimelineView drives all three dots from a single time source.
+        // This keeps them perfectly in sync and survives parent re-renders
+        // during streaming, which used to desync the previous per-dot
+        // .repeatForever animations and look "random".
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+            let elapsed = context.date.timeIntervalSinceReferenceDate
+            HStack(alignment: .center, spacing: dotSpacing) {
+                ForEach(0..<3, id: \.self) { index in
+                    Circle()
+                        .fill(Color.secondary)
+                        .frame(width: dotSize, height: dotSize)
+                        .modifier(BounceWaveModifier(
+                            elapsed: elapsed,
+                            period: period,
+                            phase: Double(index) * phaseStep
+                        ))
+                }
+            }
+            .frame(
+                width: dotSize * 3 + dotSpacing * 2,
+                height: containerHeight,
+                alignment: .center
             )
+        }
+        .accessibilityLabel("Assistant is typing")
+    }
+}
+
+private struct BounceWaveModifier: ViewModifier {
+    let elapsed: TimeInterval
+    let period: Double
+    let phase: Double
+
+    func body(content: Content) -> some View {
+        // Cosine wave in [0, 1] — smooth, predictable, no sticking at extremes.
+        let progress = (elapsed.truncatingRemainder(dividingBy: period) / period) - phase
+        let angle = 2.0 * .pi * progress.truncatingRemainder(dividingBy: 1.0)
+        let wave = (1.0 - cos(angle)) / 2.0
+        let scale = 0.55 + 0.45 * wave   // 0.55 ... 1.0
+        let opacity = 0.35 + 0.65 * wave // 0.35 ... 1.0
+        return content
+            .scaleEffect(scale)
+            .opacity(opacity)
     }
 }

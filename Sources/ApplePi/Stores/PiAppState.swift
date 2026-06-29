@@ -698,6 +698,10 @@ final class PiAppState: ObservableObject {
     func steerMessage(_ prompt: String, attachments: [ChatAttachment] = [], in session: ChatSession) -> Bool {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard session.isSending else { return sendMessage(prompt, attachments: attachments, in: session) }
+        guard !session.isAwaitingTurnCommit else {
+            statusMessage = "Pi is finishing this turn. Try again in a moment."
+            return false
+        }
         guard !trimmed.isEmpty || !attachments.isEmpty else { return false }
         guard host.usesRemoteDaemonTransport, let sessionID = session.sessionID?.nilIfBlank else {
             statusMessage = "Steering is available after the remote session is created."
