@@ -518,7 +518,7 @@ struct ToolInteractionRow: View {
         self.arguments = arguments
         self.result = result
         self.visibilityID = visibilityID
-        _isExpanded = State(initialValue: name == "edit" && Self.splitDiff(from: result?.output).diff != nil)
+        _isExpanded = State(initialValue: false)
     }
 
     var body: some View {
