@@ -308,6 +308,23 @@ struct RemoteDaemonClient {
         return response.runtimeState
     }
 
+    func renameSession(
+        host: PiHostConfiguration,
+        sessionID: String,
+        name: String,
+        tokenOverride: String? = nil
+    ) async throws -> PiSessionSummary {
+        let response: SessionRecord = try await send(
+            host: host,
+            path: "/sessions/\(encodedPathComponent(sessionID))/name",
+            method: "POST",
+            tokenOverride: tokenOverride,
+            body: RenameSessionRequestBody(name: name),
+            accept: "application/json"
+        )
+        return Self.sessionSummary(from: response)
+    }
+
     func listDirectories(host: PiHostConfiguration, path: String?, tokenOverride: String? = nil) async throws -> RemoteDirectoryListing {
         let response: FileListResponse = try await send(
             host: host,
@@ -962,6 +979,10 @@ private struct SetModelRequestBody: Encodable {
 
 private struct SetThinkingLevelRequestBody: Encodable {
     let level: String
+}
+
+private struct RenameSessionRequestBody: Encodable {
+    let name: String
 }
 
 private struct EmptyRequestBody: Encodable {}

@@ -195,6 +195,10 @@ type setThinkingLevelRequest struct {
 	Level string `json:"level"`
 }
 
+type renameSessionRequest struct {
+	Name string `json:"name"`
+}
+
 type sessionBoundRecord struct {
 	Type             string `json:"type"`
 	SessionID        string `json:"sessionId,omitempty"`
@@ -262,6 +266,7 @@ type rpcSimpleCommand struct {
 	ModelID  string `json:"modelId,omitempty"`
 	Level    string `json:"level,omitempty"`
 	Message  string `json:"message,omitempty"`
+	Name     string `json:"name,omitempty"`
 }
 
 type rpcModelRecord struct {
@@ -542,6 +547,14 @@ func (s *server) handleSessionSubroutes(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		s.handleSessionSend(w, r, record)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "name" {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.handleSessionRename(w, r, record)
 		return
 	}
 	if len(parts) == 2 && parts[1] == "runtime" {
@@ -1141,6 +1154,31 @@ func (s *server) handleSessionSend(w http.ResponseWriter, r *http.Request, recor
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+}
+
+func (s *server) handleSessionRename(w http.ResponseWriter, r *http.Request, record sessionRecord) {
+	var request renameSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	name := strings.TrimSpace(request.Name)
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if _, err := s.runPiRPCCommands(record, []any{rpcSimpleCommand{Type: "set_session_name", Name: name}}); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.handleCatalogChange()
+	updated, ok := findSessionRecordFast(s.agentDir, record.ID)
+	if !ok {
+		updated = record
+		updated.Title = name
+		updated.DisplayName = name
+	}
+	writeJSON(w, http.StatusOK, updated)
 }
 
 func (s *server) handleSessionAbort(w http.ResponseWriter, r *http.Request, sessionID string) {
@@ -2425,11 +2463,33 @@ func boundedFileModTime(modTime time.Time) time.Time {
 }
 
 func parseSessionFile(path string) (parsedSession, error) {
-	lines, err := readPreviewLines(path, 80)
+	lines, err := readCatalogPreviewLines(path, 80)
 	if err != nil {
 		return parsedSession{}, err
 	}
 	return parseSessionLines(lines), nil
+}
+
+func readCatalogPreviewLines(path string, limit int) ([]string, error) {
+	head, err := readPreviewLines(path, limit)
+	if err != nil {
+		return head, err
+	}
+	tail, total, err := readLastLines(path, limit)
+	if err != nil {
+		return head, err
+	}
+	if total <= len(head) {
+		return head, nil
+	}
+	overlap := len(head) + len(tail) - total
+	if overlap > 0 {
+		if overlap > len(tail) {
+			overlap = len(tail)
+		}
+		tail = tail[overlap:]
+	}
+	return append(head, tail...), nil
 }
 
 func parseSessionLines(lines []string) parsedSession {
@@ -2458,10 +2518,10 @@ func parseSessionLines(lines []string) parsedSession {
 				result.ID = stringValue(object, "sessionId", "sessionID", "id")
 			}
 		}
-		if result.DisplayName == "" {
-			if typeValue == "session_info" || typeValue == "session" {
-				result.DisplayName = stringValue(object, "name", "displayName", "title")
-			}
+		if typeValue == "session_info" {
+			result.DisplayName = stringValue(object, "name", "displayName", "title")
+		} else if typeValue == "session" && result.DisplayName == "" {
+			result.DisplayName = stringValue(object, "name", "displayName", "title")
 		}
 		if typeValue == "message" {
 			result.MessageCount++

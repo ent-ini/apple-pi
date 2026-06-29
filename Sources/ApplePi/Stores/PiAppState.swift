@@ -1392,6 +1392,59 @@ final class PiAppState: ObservableObject {
         )
     }
 
+    func rename(_ session: PiSessionSummary, to proposedTitle: String) {
+        let title = proposedTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+
+        guard host.usesRemoteDaemonTransport || host.mode == .local else {
+            statusMessage = "Remote SSH session rename is not supported from pi-app."
+            return
+        }
+
+        let previous = session
+        applyRenamedSession(previous, title: title)
+        statusMessage = "Renamed \(previous.title)"
+
+        if host.usesRemoteDaemonTransport {
+            let remoteHost = host
+            Task { [weak self] in
+                do {
+                    let updated = try await RemoteDaemonClient().renameSession(
+                        host: remoteHost,
+                        sessionID: previous.id,
+                        name: title
+                    )
+                    await MainActor.run {
+                        guard let self, self.host == remoteHost else { return }
+                        self.upsertCatalogSession(updated)
+                        self.syncOpenTabTitles(with: updated)
+                        self.sortCatalogState()
+                        self.repairSelectionIfNeeded()
+                    }
+                } catch {
+                    await MainActor.run {
+                        guard let self, self.host == remoteHost else { return }
+                        self.upsertCatalogSession(previous)
+                        self.syncOpenTabTitles(with: previous)
+                        self.sortCatalogState()
+                        self.statusMessage = "Could not rename \(previous.title): \(error.localizedDescription)"
+                    }
+                }
+            }
+            return
+        }
+
+        do {
+            try appendSessionInfo(name: title, to: previous.filePath)
+            refreshCatalog(quietly: true)
+        } catch {
+            upsertCatalogSession(previous)
+            syncOpenTabTitles(with: previous)
+            sortCatalogState()
+            statusMessage = "Could not rename \(previous.title): \(error.localizedDescription)"
+        }
+    }
+
     func delete(_ session: PiSessionSummary) {
         guard !host.usesRemoteDaemonTransport && host.mode == .local else {
             statusMessage = "Remote session deletion is not supported from pi-app."
@@ -2004,11 +2057,8 @@ final class PiAppState: ObservableObject {
             repairSelectionIfNeeded()
             refreshConfigurationSummary()
         case .sessionUpdated(let summary):
-            if let index = sessions.firstIndex(where: { $0.id == summary.id || $0.filePath == summary.filePath }) {
-                sessions[index] = summary
-            } else {
-                sessions.append(summary)
-            }
+            upsertCatalogSession(summary)
+            syncOpenTabTitles(with: summary)
             sortCatalogState()
             repairSelectionIfNeeded()
         case .sessionRemoved(let sessionId):
@@ -2246,6 +2296,7 @@ final class PiAppState: ObservableObject {
             let aliases = Set(sessionAliases(for: session))
             let isSelected = chatWorkspace.selectedTab?.id == session.id
             if let existing = sessions.first(where: { !aliases.isDisjoint(with: Set(sessionAliases(for: $0))) }) {
+                session.rename(to: existing.title)
                 if isSelected {
                     selection = .session(existing.id)
                 }
@@ -2369,6 +2420,61 @@ final class PiAppState: ObservableObject {
             projects.append(updated)
         }
         sortCatalogState()
+    }
+
+    private func upsertCatalogSession(_ summary: PiSessionSummary) {
+        if let index = sessions.firstIndex(where: { $0.id == summary.id || $0.filePath == summary.filePath }) {
+            sessions[index] = summary
+        } else {
+            sessions.append(summary)
+        }
+    }
+
+    private func applyRenamedSession(_ session: PiSessionSummary, title: String) {
+        let renamed = PiSessionSummary(
+            id: session.id,
+            filePath: session.filePath,
+            projectID: session.projectID,
+            title: title,
+            workingDirectory: session.workingDirectory,
+            messageCount: session.messageCount,
+            modifiedAt: session.modifiedAt,
+            displayName: title,
+            parentSession: session.parentSession,
+            branchCount: session.branchCount,
+            labelCount: session.labelCount,
+            branchSummaryCount: session.branchSummaryCount,
+            latestModel: session.latestModel
+        )
+        upsertCatalogSession(renamed)
+        syncOpenTabTitles(with: renamed)
+        sortCatalogState()
+    }
+
+    private func syncOpenTabTitles(with summary: PiSessionSummary) {
+        let aliases = Set(sessionAliases(for: summary))
+        for tab in chatWorkspace.tabs where !aliases.isDisjoint(with: Set(sessionAliases(for: tab))) {
+            tab.rename(to: summary.title)
+        }
+    }
+
+    private func appendSessionInfo(name: String, to filePath: String) throws {
+        let entry: [String: Any] = [
+            "type": "session_info",
+            "id": UUID().uuidString,
+            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "name": name
+        ]
+        let data = try JSONSerialization.data(withJSONObject: entry)
+        guard let line = String(data: data, encoding: .utf8) else { return }
+        let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: filePath))
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        if handle.offsetInFile > 0 {
+            try handle.write(contentsOf: Data("\n".utf8))
+        }
+        try handle.write(contentsOf: Data(line.utf8))
+        try handle.write(contentsOf: Data("\n".utf8))
     }
 
     private func sessionAliases(for session: PiSessionSummary) -> [String] {

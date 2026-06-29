@@ -134,7 +134,8 @@ enum SessionEvent: Identifiable, Hashable, Sendable {
 
     private static let hiddenTranscriptEventTypes: Set<String> = [
         "model_change",
-        "thinking_level_change"
+        "thinking_level_change",
+        "session_info"
     ]
 
     var id: String {

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,27 @@ func TestSessionRecordLessUsesStableTieBreakers(t *testing.T) {
 	}
 	if !sessionRecordLess(sessionRecord{ID: "a", Title: "Alpha", ModifiedAt: now}, sessionRecord{ID: "b", Title: "Beta", ModifiedAt: now}) {
 		t.Fatal("equal mtimes should sort by title/id instead of unstable walk order")
+	}
+}
+
+func TestParseSessionFileUsesLatestSessionInfoFromTail(t *testing.T) {
+	var builder strings.Builder
+	builder.WriteString("{\"type\":\"session\",\"sessionId\":\"s1\",\"cwd\":\"/tmp/project\"}\n")
+	builder.WriteString("{\"type\":\"session_info\",\"name\":\"Old title\"}\n")
+	for i := 0; i < 120; i++ {
+		builder.WriteString("{\"type\":\"message\",\"id\":\"m")
+		builder.WriteString(strconv.Itoa(i))
+		builder.WriteString("\",\"message\":{\"role\":\"assistant\",\"content\":[]}}\n")
+	}
+	builder.WriteString("{\"type\":\"session_info\",\"name\":\"Manual title\"}\n")
+	path := writeTempSessionFile(t, builder.String())
+
+	parsed, err := parseSessionFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.DisplayName != "Manual title" {
+		t.Fatalf("DisplayName = %q, want latest tail title", parsed.DisplayName)
 	}
 }
 

@@ -169,7 +169,8 @@ final class PiSessionCatalogService {
         // non-empty lines for parsing, and an integer counter for the
         // message total. `maxLineLimit` caps the work even if a session
         // file is accidentally huge.
-        var previewLines: [String] = []
+        var previewLines: [(lineNumber: Int, line: String)] = []
+        var tailPreviewLines: [(lineNumber: Int, line: String)] = []
         var messageCount = 0
         var totalLines = 0
         var buffer = Data()
@@ -201,12 +202,16 @@ final class PiSessionCatalogService {
                     messageCount += 1
                 }
 
-                if previewLines.count < previewLimit {
-                    if let line = String(data: lineData, encoding: .utf8) {
-                        previewLines.append(line)
-                    } else {
-                        encounteredInvalidUTF8 = true
+                if let line = String(data: lineData, encoding: .utf8) {
+                    if previewLines.count < previewLimit {
+                        previewLines.append((totalLines, line))
                     }
+                    tailPreviewLines.append((totalLines, line))
+                    if tailPreviewLines.count > previewLimit {
+                        tailPreviewLines.removeFirst()
+                    }
+                } else {
+                    encounteredInvalidUTF8 = true
                 }
 
                 if totalLines >= maxLineLimit && previewLines.count >= previewLimit {
@@ -222,21 +227,31 @@ final class PiSessionCatalogService {
                object["type"] as? String == "message" {
                 messageCount += 1
             }
-            if previewLines.count < previewLimit {
-                if let line = String(data: buffer, encoding: .utf8) {
-                    previewLines.append(line)
-                } else {
-                    encounteredInvalidUTF8 = true
+            if let line = String(data: buffer, encoding: .utf8) {
+                if previewLines.count < previewLimit {
+                    previewLines.append((totalLines, line))
                 }
+                tailPreviewLines.append((totalLines, line))
+                if tailPreviewLines.count > previewLimit {
+                    tailPreviewLines.removeFirst()
+                }
+            } else {
+                encounteredInvalidUTF8 = true
             }
         }
+
+        var seenPreviewLineNumbers = Set<Int>()
+        let catalogPreviewLines = (previewLines + tailPreviewLines)
+            .filter { seenPreviewLineNumbers.insert($0.lineNumber).inserted }
+            .sorted { $0.lineNumber < $1.lineNumber }
+            .map(\.line)
 
         let truncated = totalLines >= maxLineLimit
         let summary = parseSessionRecord(
             filePath: filePath,
             projectID: projectID,
             modifiedAt: modifiedAt,
-            lines: Array(previewLines.prefix(previewLimit)),
+            lines: catalogPreviewLines,
             fullMessageCount: messageCount
         )
         var warningParts: [String] = []
@@ -322,8 +337,10 @@ final class PiSessionCatalogService {
             if type == "session" {
                 id = id ?? stringValue(from: object, keys: ["sessionId", "sessionID", "id"])
             }
-            if type == "session_info" || displayName == nil {
-                displayName = displayName ?? stringValue(from: object, keys: ["name", "displayName", "title"])
+            if type == "session_info" {
+                displayName = stringValue(from: object, keys: ["name", "displayName", "title"])
+            } else if type == "session", displayName == nil {
+                displayName = stringValue(from: object, keys: ["name", "displayName", "title"])
             }
 
             if type == "message", let parentID = object["parentId"] as? String {

@@ -626,9 +626,6 @@ struct SessionListView: View {
                             isSelected: appState.isSelectedSession(session),
                             onSelect: {
                                 appState.select(.session(session.id))
-                            },
-                            onFork: {
-                                appState.fork(session)
                             }
                         )
                     }
@@ -711,8 +708,8 @@ private struct SessionListRow: View {
     let session: PiSessionSummary
     let isSelected: Bool
     let onSelect: () -> Void
-    let onFork: () -> Void
-    @State private var isConfirmingDelete = false
+    @State private var isRenaming = false
+    @State private var draftTitle = ""
 
     var body: some View {
         Button(action: onSelect) {
@@ -729,33 +726,17 @@ private struct SessionListRow: View {
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .contextMenu {
-            Button("Resume") {
-                appState.resume(session)
-            }
-            Button("Fork") {
-                onFork()
-            }
-            Button("New Session in Same Folder") {
-                appState.openNewSession(in: session.workingDirectory)
-            }
-            if !appState.host.usesRemoteDaemonTransport && appState.host.mode == .local {
-                Divider()
-                Button("Delete Session", role: .destructive) {
-                    isConfirmingDelete = true
-                }
+            Button("Rename") {
+                draftTitle = session.title
+                isRenaming = true
             }
         }
-        .confirmationDialog(
-            "Delete this session?",
-            isPresented: $isConfirmingDelete,
-            titleVisibility: .visible
-        ) {
-            Button("Delete Session", role: .destructive) {
-                appState.delete(session)
+        .alert("Rename Session", isPresented: $isRenaming) {
+            TextField("Name", text: $draftTitle)
+            Button("Rename") {
+                appState.rename(session, to: draftTitle)
             }
             Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This permanently deletes the session file. This cannot be undone.")
         }
         Divider()
             .padding(.leading, 12)
