@@ -1543,8 +1543,8 @@ final class PiAppState: ObservableObject {
         let title = proposedTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
 
-        guard host.mode == .local else {
-            statusMessage = "Remote API session rename is not supported from pi-app."
+        guard host.usesRemoteDaemonTransport || host.mode == .local else {
+            statusMessage = "Session rename is not supported in the current transport."
             return
         }
 
