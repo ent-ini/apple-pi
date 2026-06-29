@@ -1132,6 +1132,9 @@ func (s *server) handleSessionSend(w http.ResponseWriter, r *http.Request, recor
 		writeError(w, http.StatusBadRequest, "prompt is required")
 		return
 	}
+	if fresh, ok := findSessionRecordFast(s.agentDir, record.ID); ok {
+		record = fresh
+	}
 	binding := &sessionBoundRecord{
 		Type:             "session_bound",
 		SessionID:        record.ID,

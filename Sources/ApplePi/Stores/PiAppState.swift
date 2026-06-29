@@ -989,7 +989,11 @@ final class PiAppState: ObservableObject {
         switch event {
         case .sessionBound(let binding):
             let previousAliases = sessionAliases(for: session)
-            let title = binding.title == "Pi" ? session.title : binding.title
+            let incomingTitle = binding.title.nilIfBlank
+            let preservesExistingTitle = binding.sessionID != nil && binding.sessionID == session.sessionID
+            let title = incomingTitle == nil || incomingTitle == "Pi" || preservesExistingTitle
+                ? session.title
+                : incomingTitle!
             let eventLoader = binding.sessionID.flatMap { remoteEventLoader(sessionID: $0) }
             let historyPageLoader = binding.sessionID.flatMap { remoteHistoryPageLoader(sessionID: $0) }
             session.bindToSession(
