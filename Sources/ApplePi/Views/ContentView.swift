@@ -747,88 +747,169 @@ struct SessionListView: View {
 }
 
 struct UtilitySidebarView: View {
-    @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var appState: PiAppState
 
     var body: some View {
+        UtilitySidebarSessionContent(workspace: appState.chatWorkspace)
+    }
+}
+
+private struct UtilitySidebarSessionContent: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var appState: PiAppState
+    @ObservedObject var workspace: ChatSessionStore
+
+    var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "square.split.2x1")
-                    .foregroundStyle(.secondary)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Workspace")
-                        .font(.callout.weight(.semibold))
-                    Text("Subagents · Preview · Inspector")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(controlTint(for: colorScheme, opacity: 0.06))
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .padding(.horizontal, 12)
-            .padding(.top, 10)
-            .padding(.bottom, 8)
+            UtilitySidebarHeader(
+                title: "Subagents",
+                subtitle: headerSubtitle,
+                systemImage: "person.2.wave.2"
+            )
 
             Divider().opacity(0.24)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    UtilitySidebarPlaceholderCard(
-                        icon: "person.2.wave.2",
-                        title: "Subagents",
-                        message: "Future panel for spawned agents, progress, and handoffs."
-                    )
-                    UtilitySidebarPlaceholderCard(
-                        icon: "doc.text.magnifyingglass",
-                        title: "Preview",
-                        message: "File previews and selected tool output will land here."
-                    )
-                    UtilitySidebarPlaceholderCard(
-                        icon: "slider.horizontal.3",
-                        title: "Inspector",
-                        message: "Contextual controls for the active chat item."
-                    )
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 12)
+            if let session = workspace.selectedTab ?? workspace.tabs.first {
+                UtilitySubagentsPanel(session: session)
+            } else {
+                UtilityEmptyState(
+                    icon: "bubble.left.and.bubble.right",
+                    title: "No active session",
+                    message: "Open a chat to inspect its subagent runs."
+                )
             }
-            .scrollContentBackground(.hidden)
-
-            Spacer(minLength: 0)
         }
         .background(
             surfaceTint(for: colorScheme, opacity: appState.appearance.effectiveListOpacity)
                 .background(.thinMaterial)
         )
     }
+
+    private var headerSubtitle: String {
+        guard let session = workspace.selectedTab ?? workspace.tabs.first else {
+            return "Open a chat"
+        }
+        let count = SubagentSession.extract(from: session.events).count
+        if count == 0 { return "No subagents in this session" }
+        return "\(count) subagent\(count == 1 ? "" : "s")"
+    }
 }
 
-private struct UtilitySidebarPlaceholderCard: View {
+private struct UtilitySubagentsPanel: View {
+    @ObservedObject var session: ChatSession
+    @State private var selectedSubagentID: SubagentSession.ID?
+
+    private var subagents: [SubagentSession] {
+        SubagentSession.extract(from: session.events)
+    }
+
+    private var selectedSubagent: SubagentSession? {
+        guard let selectedSubagentID else { return nil }
+        return subagents.first { $0.id == selectedSubagentID }
+    }
+
+    var body: some View {
+        Group {
+            if subagents.isEmpty {
+                UtilityEmptyState(
+                    icon: "person.2.slash",
+                    title: "No subagents yet",
+                    message: "When this session uses the subagent tool, spawned agents will appear here."
+                )
+            } else if let selectedSubagent {
+                SubagentDetailView(subagent: selectedSubagent) {
+                    withAnimation(.snappy(duration: 0.16)) {
+                        selectedSubagentID = nil
+                    }
+                }
+            } else {
+                SubagentListView(subagents: subagents, selectedSubagentID: $selectedSubagentID)
+            }
+        }
+        .onChange(of: session.id) { _, _ in
+            selectedSubagentID = nil
+        }
+        .onChange(of: subagents.map(\.id)) { _, ids in
+            guard let selectedSubagentID, !ids.contains(selectedSubagentID) else { return }
+            self.selectedSubagentID = nil
+        }
+    }
+}
+
+private struct SubagentListView: View {
+    @Binding var selectedSubagentID: SubagentSession.ID?
+    let subagents: [SubagentSession]
+
+    init(subagents: [SubagentSession], selectedSubagentID: Binding<SubagentSession.ID?>) {
+        self.subagents = subagents
+        self._selectedSubagentID = selectedSubagentID
+    }
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 10) {
+                ForEach(subagents) { subagent in
+                    Button {
+                        withAnimation(.snappy(duration: 0.16)) {
+                            selectedSubagentID = subagent.id
+                        }
+                    } label: {
+                        SubagentListRow(subagent: subagent)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 12)
+        }
+        .scrollContentBackground(.hidden)
+    }
+}
+
+private struct SubagentListRow: View {
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var appState: PiAppState
-    let icon: String
-    let title: String
-    let message: String
+    let subagent: SubagentSession
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: icon)
+            HStack(alignment: .center, spacing: 8) {
+                Image(systemName: subagent.isError ? "exclamationmark.triangle.fill" : "person.crop.circle.badge.checkmark")
                     .font(.body.weight(.semibold))
-                    .foregroundStyle(appState.appearance.accentColor)
+                    .foregroundStyle(subagent.isError ? .red : appState.appearance.accentColor)
                     .frame(width: 22)
-                Text(title)
-                    .font(.callout.weight(.semibold))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(subagent.name)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text(subagent.displayModel)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 Spacer(minLength: 0)
+                Text(subagent.displayStatus)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(subagent.isError ? .red : .secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(controlTint(for: colorScheme, opacity: subagent.isError ? 0.10 : 0.06))
+                    .clipShape(Capsule())
             }
-            Text(message)
+
+            Text(subagent.taskPreview)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if let cwd = subagent.cwd?.nilIfBlank {
+                Label(cwd, systemImage: "folder")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -836,8 +917,141 @@ private struct UtilitySidebarPlaceholderCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(controlTint(for: colorScheme, opacity: 0.06), lineWidth: 1)
+                .stroke(controlTint(for: colorScheme, opacity: 0.07), lineWidth: 1)
         )
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
+private struct SubagentDetailView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var appState: PiAppState
+    let subagent: SubagentSession
+    let onBack: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left")
+                }
+                .buttonStyle(.borderless)
+                .help("Back to subagents")
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(subagent.name)
+                        .font(.callout.weight(.semibold))
+                        .lineLimit(1)
+                    Text(subagent.displayModel)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(controlTint(for: colorScheme, opacity: 0.04))
+
+            Divider().opacity(0.18)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if let cwd = subagent.cwd?.nilIfBlank {
+                        Label(cwd, systemImage: "folder")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+
+                    MessageBubble(message: userMessage)
+                    MessageBubble(
+                        message: assistantMessage,
+                        showsStreamingPlaceholder: subagent.output == nil
+                    )
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollContentBackground(.hidden)
+        }
+    }
+
+    private var userMessage: Message {
+        Message(
+            id: "\(subagent.id):task",
+            role: .user,
+            content: [.text(subagent.task.nilIfBlank ?? "Subagent task")],
+            model: nil,
+            timestamp: nil,
+            parentId: nil
+        )
+    }
+
+    private var assistantMessage: Message {
+        Message(
+            id: "\(subagent.id):output",
+            role: .assistant,
+            content: [.text(subagent.output?.nilIfBlank ?? "Waiting for subagent output…")],
+            model: subagent.model,
+            timestamp: nil,
+            parentId: nil
+        )
+    }
+}
+
+private struct UtilitySidebarHeader: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let title: String
+    let subtitle: String
+    let systemImage: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.callout.weight(.semibold))
+                Text(subtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(controlTint(for: colorScheme, opacity: 0.06))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, 12)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
+    }
+}
+
+private struct UtilityEmptyState: View {
+    let icon: String
+    let title: String
+    let message: String
+
+    var body: some View {
+        VStack(spacing: 9) {
+            Spacer(minLength: 0)
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundStyle(.secondary)
+            Text(title)
+                .font(.callout.weight(.semibold))
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(4)
+            Spacer(minLength: 0)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
