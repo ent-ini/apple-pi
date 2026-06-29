@@ -78,7 +78,7 @@ struct MessageListView: View {
                 }
                 .onChange(of: session.streamRevision) { _, _ in
                     refreshDisplayedRowsCache()
-                    scrollToBottomIfNeeded(using: scrollProxy)
+                    scheduleScrollToBottomIfNeeded(using: scrollProxy)
                 }
                 .onChange(of: session.historyRevision) { _, _ in
                     refreshDisplayedRowsCache()
@@ -93,13 +93,13 @@ struct MessageListView: View {
                     guard isSending else { return }
                     refreshDisplayedRowsCache()
                     startStickyAutoScroll()
-                    scrollToBottomSettled(using: scrollProxy, animated: false, completesInitialPlacement: false)
+                    scheduleScrollToBottomSettled(using: scrollProxy, animated: false, completesInitialPlacement: false)
                 }
                 .onChange(of: session.isLoading) { _, isLoading in
                     guard !isLoading else { return }
                     refreshDisplayedRowsCache()
                     if !hasCompletedInitialPlacement || isAnchoredToBottom {
-                        scrollToBottomSettled(
+                        scheduleScrollToBottomSettled(
                             using: scrollProxy,
                             animated: false,
                             completesInitialPlacement: !hasCompletedInitialPlacement
@@ -176,7 +176,7 @@ struct MessageListView: View {
     private static let stickyBreakawayDistance: CGFloat = 180
     private static let bottomReachedEpsilon: CGFloat = 3
     private static let stickyAutoScrollDuration: TimeInterval = 30
-    private static let scrollSettleDelays: [TimeInterval] = [0, 0.08, 0.22]
+    private static let scrollSettleDelays: [TimeInterval] = [0.04, 0.16, 0.34]
     private static let ensureVisibleSettleDelays: [TimeInterval] = [0.04, 0.16, 0.34, 0.65]
 
     private func refreshDisplayedRowsCache() {
@@ -228,6 +228,10 @@ struct MessageListView: View {
         viewportHeight: CGFloat,
         scrollProxy: ScrollViewProxy
     ) {
+        guard bottomMaxY.isFinite,
+              bottomMaxY < .greatestFiniteMagnitude / 2 else {
+            return
+        }
         let distanceToBottom = bottomMaxY - viewportHeight
         if isStickyAutoScrollActive {
             if distanceToBottom > Self.stickyBreakawayDistance {
@@ -243,6 +247,18 @@ struct MessageListView: View {
             return
         }
         isAnchoredToBottom = distanceToBottom <= Self.bottomStickinessBuffer
+    }
+
+    private func scheduleScrollToBottomIfNeeded(using scrollProxy: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            scrollToBottomIfNeeded(using: scrollProxy)
+        }
+    }
+
+    private func scheduleScrollToBottomSettled(using scrollProxy: ScrollViewProxy, animated: Bool, completesInitialPlacement: Bool) {
+        DispatchQueue.main.async {
+            scrollToBottomSettled(using: scrollProxy, animated: animated, completesInitialPlacement: completesInitialPlacement)
+        }
     }
 
     private func scrollToBottomIfNeeded(using scrollProxy: ScrollViewProxy) {
@@ -267,9 +283,6 @@ struct MessageListView: View {
 
     private func scrollToBottomSettled(using scrollProxy: ScrollViewProxy, animated: Bool, completesInitialPlacement: Bool) {
         cancelEnsureVisibleWorkItems()
-        if !completesInitialPlacement, !bottomScrollWorkItems.isEmpty {
-            return
-        }
         cancelBottomScrollWorkItems()
         bottomScrollGeneration &+= 1
         let generation = bottomScrollGeneration
