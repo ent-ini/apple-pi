@@ -291,6 +291,19 @@ final class ChatSession: ObservableObject, Identifiable {
         loadFromDisk(force: true)
     }
 
+    /// The active RPC/HTTP turn is already closed, but the UI may still be
+    /// waiting for a final reload/catch-up. Let the composer start the next
+    /// user message without being blocked by that bookkeeping state.
+    func finishFinalizingForFollowUp() {
+        guard isSending, sendTask == nil, !canAcceptSteering else { return }
+        pendingSendCompletionGeneration = nil
+        isSending = false
+        isAwaitingTurnCommit = false
+        canAcceptSteering = false
+        statusMessage = ""
+        rebuildEvents()
+    }
+
     func appendSteeringPrompt(_ prompt: String, attachments: [ChatAttachment] = []) {
         var content: [ContentBlock] = attachments.map { attachment in
             switch attachment.kind {

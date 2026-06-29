@@ -786,9 +786,13 @@ final class PiAppState: ObservableObject {
         guard !trimmed.isEmpty || !attachments.isEmpty else { return false }
         let effectivePrompt = trimmed.isEmpty ? "Please inspect the attached item(s)." : trimmed
         let taggedPrompt = sourceTaggedAppPrompt(effectivePrompt)
-        guard !session.isSending else {
-            statusMessage = "Pi is already working on this session."
-            return false
+        if session.isSending {
+            guard !session.hasActiveSend else {
+                statusMessage = "Pi is already working on this session."
+                return false
+            }
+            session.finishFinalizingForFollowUp()
+            setSessionSending(false, aliases: sessionAliases(for: session))
         }
         guard !session.isLoading else {
             statusMessage = "Session is still refreshing."

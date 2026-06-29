@@ -24,11 +24,11 @@ struct ChatSessionView: View {
     }
 
     private var canSend: Bool {
-        !session.isSending && !session.isLoading && !audioRecorder.isRecording && !isTranscribingAudio && hasDraftContent
+        !session.hasActiveSend && !session.isLoading && !audioRecorder.isRecording && !isTranscribingAudio && hasDraftContent
     }
 
     private var canSteer: Bool {
-        session.isSending && session.canAcceptSteering && !audioRecorder.isRecording && !isTranscribingAudio && hasDraftContent
+        session.hasActiveSend && session.canAcceptSteering && !audioRecorder.isRecording && !isTranscribingAudio && hasDraftContent
     }
 
     private var canAdjustSessionOptions: Bool {
@@ -122,7 +122,7 @@ struct ChatSessionView: View {
                 )
                 .help(audioRecorder.isRecording ? "Stop recording" : "Record voice note")
 
-                if session.isSending && session.canAcceptSteering {
+                if session.hasActiveSend {
                     if canSteer {
                         composerIconButton(
                             systemName: "arrow.up",
@@ -144,7 +144,7 @@ struct ChatSessionView: View {
                         enabled: canSend,
                         action: handleSendTapped
                     )
-                    .help(session.isSending ? "Finalizing…" : "Send")
+                    .help(session.isSending ? "Send next message" : "Send")
                 }
             }
 
