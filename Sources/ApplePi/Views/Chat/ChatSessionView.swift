@@ -24,7 +24,7 @@ struct ChatSessionView: View {
     }
 
     private var canSend: Bool {
-        !session.hasActiveSend && !session.isLoading && !audioRecorder.isRecording && !isTranscribingAudio && hasDraftContent
+        !session.isLoading && !audioRecorder.isRecording && !isTranscribingAudio && hasDraftContent
     }
 
     private var canSteer: Bool {
@@ -122,30 +122,12 @@ struct ChatSessionView: View {
                 )
                 .help(audioRecorder.isRecording ? "Stop recording" : "Record voice note")
 
-                if session.hasActiveSend {
-                    if canSteer {
-                        composerIconButton(
-                            systemName: "arrow.up",
-                            enabled: true,
-                            action: handleSteerTapped
-                        )
-                        .help("Send steering message")
-                    }
-                    composerIconButton(
-                        systemName: "stop.fill",
-                        enabled: true,
-                        foreground: .red,
-                        action: handleStopTapped
-                    )
-                    .help("Stop")
-                } else {
-                    composerIconButton(
-                        systemName: "arrow.up",
-                        enabled: canSend,
-                        action: handleSendTapped
-                    )
-                    .help(session.isSending ? "Send next message" : "Send")
-                }
+                composerIconButton(
+                    systemName: "arrow.up",
+                    enabled: canSend,
+                    action: handleComposerSubmit
+                )
+                .help(session.hasActiveSend ? "Send steering message (/abort to stop)" : "Send")
             }
 
             sessionStatusStrip
@@ -387,7 +369,10 @@ struct ChatSessionView: View {
     }
 
     private func handleComposerSubmit() {
-        if canSteer {
+        let prompt = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if prompt == "/abort" {
+            handleAbortCommand()
+        } else if canSteer {
             handleSteerTapped()
         } else {
             handleSendTapped()
@@ -418,8 +403,15 @@ struct ChatSessionView: View {
         }
     }
 
-    private func handleStopTapped() {
+    private func handleAbortCommand() {
+        guard session.hasActiveSend else {
+            appState.statusMessage = "No active Pi run to abort."
+            return
+        }
         appState.cancelSend(in: session)
+        draftText = ""
+        draftHeight = 30
+        draftAttachments = []
     }
 
     private func handleMicrophoneTapped() {
