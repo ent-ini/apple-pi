@@ -37,7 +37,7 @@ struct FileReferenceExtraction: Sendable {
 
 enum ChatFileReferenceExtractor {
     static func extract(from rawText: String) -> FileReferenceExtraction {
-        let pattern = #"@([^\s<>()\[\]{}\"']+)"#
+        let pattern = #"@([^\s<>()\[\]{}\"'`]+)"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else {
             return FileReferenceExtraction(text: rawText, references: [])
         }
@@ -71,7 +71,7 @@ enum ChatFileReferenceExtractor {
 
     private static func trimTrailingPunctuation(_ value: String) -> String {
         var trimmed = value
-        while let last = trimmed.last, ".,;:!?».".contains(last) {
+        while let last = trimmed.last, ".,;:!?»”’`*_~".contains(last) {
             trimmed.removeLast()
         }
         return trimmed

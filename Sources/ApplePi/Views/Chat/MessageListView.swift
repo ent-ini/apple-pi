@@ -192,15 +192,26 @@ struct MessageListView: View {
         if let workingDirectory = session.launchRequest?.workingDirectory?.nilIfBlank {
             return workingDirectory
         }
+        if let workingDirectory = session.events.compactMap({ event -> String? in
+            if case .meta(let meta, _) = event {
+                return meta.workingDirectory?.nilIfBlank
+            }
+            return nil
+        }).last {
+            return workingDirectory
+        }
         if let sessionID = session.sessionID,
            let summary = appState.sessions.first(where: { $0.id == sessionID || $0.filePath == sessionID }),
            let workingDirectory = summary.workingDirectory?.nilIfBlank {
             return workingDirectory
         }
+        if let configured = appState.host.defaultWorkingDirectory.nilIfBlank {
+            return configured
+        }
         if let path = session.sessionPath?.nilIfBlank {
             return URL(fileURLWithPath: path).deletingLastPathComponent().path
         }
-        return appState.host.defaultWorkingDirectory.nilIfBlank
+        return nil
     }
 
     @ViewBuilder
