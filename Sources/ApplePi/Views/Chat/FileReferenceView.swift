@@ -57,9 +57,10 @@ enum ChatFileReferenceExtractor {
             let trimmedPath = trimTrailingPunctuation(rawPath)
             guard isLikelyFileReference(trimmedPath) else { continue }
 
-            references.append(ChatFileReference(path: trimmedPath))
+            let reference = ChatFileReference(path: trimmedPath)
+            references.append(reference)
             let consumedEnd = cleaned.index(fullRange.lowerBound, offsetBy: 1 + trimmedPath.count)
-            cleaned.replaceSubrange(fullRange.lowerBound..<consumedEnd, with: "")
+            cleaned.replaceSubrange(fullRange.lowerBound..<consumedEnd, with: reference.displayName)
         }
 
         references.reverse()
