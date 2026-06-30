@@ -19,7 +19,7 @@ package enum PiHostMode: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-package extension PiHostMode: Codable {
+extension PiHostMode: Codable {
     package init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         let rawValue = (try? container.decode(String.self)) ?? Self.remoteAPI.rawValue
