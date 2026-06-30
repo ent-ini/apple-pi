@@ -7,3 +7,5 @@ xcuserdata/
 *.xcuserdatad/
 *.xcuserstate
 .notes/
+pi-appd/pi-appd
+pi-appd/pi-appd.new
