@@ -805,7 +805,7 @@ final class PiAppState: ObservableObject {
     ) -> Bool {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard session.hasActiveSend, session.canAcceptSteering else {
-            return sendMessage(prompt, attachments: attachments, in: session)
+            return sendMessage(prompt, attachments: attachments, in: session, onAccepted: onAccepted)
         }
         guard !trimmed.isEmpty || !attachments.isEmpty else { return false }
         guard host.usesRemoteDaemonTransport, let sessionID = session.sessionID?.nilIfBlank else {
@@ -821,7 +821,7 @@ final class PiAppState: ObservableObject {
         Task { [weak self, weak session, acceptedCallback] in
             do {
                 let daemonAttachments = try await self?.uploadAttachmentsIfNeeded(attachments) ?? []
-                try await RemoteDaemonClient().steerSession(
+                try await RemoteDaemonClient().submitSessionInput(
                     host: remoteAPIHost,
                     sessionID: sessionID,
                     prompt: taggedPrompt,
@@ -862,13 +862,18 @@ final class PiAppState: ObservableObject {
     }
 
     @discardableResult
-    func sendMessage(_ prompt: String, attachments: [ChatAttachment] = [], in session: ChatSession) -> Bool {
+    func sendMessage(
+        _ prompt: String,
+        attachments: [ChatAttachment] = [],
+        in session: ChatSession,
+        onAccepted: (@MainActor () -> Void)? = nil
+    ) -> Bool {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !attachments.isEmpty else { return false }
         let effectivePrompt = trimmed.isEmpty ? "Please inspect the attached item(s)." : trimmed
         let taggedPrompt = sourceTaggedAppPrompt(effectivePrompt)
         if session.hasActiveSend && session.canAcceptSteering {
-            return steerMessage(prompt, attachments: attachments, in: session)
+            return steerMessage(prompt, attachments: attachments, in: session, onAccepted: onAccepted)
         }
         if session.isSending || session.isAwaitingTurnCommit || session.hasActiveSend {
             // If the live run is no longer steerable, generation has ended and
@@ -891,6 +896,7 @@ final class PiAppState: ObservableObject {
         clearUnread(aliases: initialAliases)
         promoteSidebarSession(for: session, fallbackAliases: initialAliases)
         statusMessage = "Sending to Pi..."
+        onAccepted?()
 
         if host.usesRemoteDaemonTransport {
             let task = Task { [weak self, weak session] in

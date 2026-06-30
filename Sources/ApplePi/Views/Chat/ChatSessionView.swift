@@ -35,10 +35,6 @@ struct ChatSessionView: View {
         hasDraftContent
     }
 
-    private var canSteer: Bool {
-        session.hasActiveSend && session.canAcceptSteering && !audioRecorder.isRecording && !isTranscribingAudio && hasDraftContent
-    }
-
     private var canAdjustSessionOptions: Bool {
         appState.host.usesRemoteDaemonTransport &&
         (session.sessionID != nil || session.launchRequest != nil)
@@ -435,8 +431,6 @@ struct ChatSessionView: View {
         default:
             if prompt.hasPrefix("/compact ") {
                 handleCompactCommand(instructions: String(prompt.dropFirst("/compact ".count)))
-            } else if canSteer {
-                handleSteerTapped()
             } else {
                 handleSendTapped()
             }
@@ -446,19 +440,9 @@ struct ChatSessionView: View {
     private func handleSendTapped() {
         let prompt = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSend else { return }
-        if appState.sendMessage(prompt, attachments: draftAttachments, in: session) {
-            draftText = ""
-            draftHeight = 30
-            draftAttachments = []
-        }
-    }
-
-    private func handleSteerTapped() {
-        let prompt = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard canSteer else { return }
         let promptToSend = prompt
         let attachmentsToSend = draftAttachments
-        _ = appState.steerMessage(promptToSend, attachments: attachmentsToSend, in: session) {
+        _ = appState.sendMessage(promptToSend, attachments: attachmentsToSend, in: session) {
             guard draftText.trimmingCharacters(in: .whitespacesAndNewlines) == promptToSend,
                   draftAttachments == attachmentsToSend else { return }
             draftText = ""

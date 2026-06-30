@@ -425,20 +425,21 @@ public struct RemoteDaemonClient: Sendable {
         )
     }
 
-    public func steerSession(
+    public func submitSessionInput(
         host: PiHostConfiguration,
         sessionID: String,
         prompt: String,
         attachments: [UploadedAttachmentReference] = [],
         tokenOverride: String? = nil
     ) async throws {
-        let _: EmptyOKResponse = try await send(
+        let body = SendSessionRequestBody(prompt: prompt, attachments: attachments)
+        try await stream(
             host: host,
-            path: "/sessions/\(encodedPathComponent(sessionID))/steer",
+            path: "/sessions/\(encodedPathComponent(sessionID))/send",
             method: "POST",
+            body: body,
             tokenOverride: tokenOverride,
-            body: SendSessionRequestBody(prompt: prompt, attachments: attachments),
-            accept: "application/json"
+            onEvent: { _ in }
         )
     }
 
