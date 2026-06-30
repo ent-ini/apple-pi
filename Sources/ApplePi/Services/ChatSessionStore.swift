@@ -25,6 +25,8 @@ final class ChatSession: ObservableObject, Identifiable {
     @Published private(set) var isLoadingEarlierHistory: Bool = false
     @Published private(set) var isAwaitingTurnCommit: Bool = false
     @Published private(set) var canAcceptSteering: Bool = false
+    @Published var draftText: String = ""
+    @Published var draftHeight: CGFloat = 30
 
     /// Path to the on-disk jsonl, if this session is backed by a file. For
     /// brand-new sessions the path is assigned once the first turn creates it.

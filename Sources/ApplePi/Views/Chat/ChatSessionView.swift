@@ -9,8 +9,6 @@ struct ChatSessionView: View {
     @EnvironmentObject private var appState: PiAppState
     @ObservedObject var session: ChatSession
 
-    @State private var draftText = ""
-    @State private var draftHeight: CGFloat = 30
     @State private var draftAttachments: [ChatAttachment] = []
     @State private var isTranscribingAudio = false
     @State private var transcriptionTask: Task<Void, Never>?
@@ -25,8 +23,22 @@ struct ChatSessionView: View {
         SlashCommand(name: "/compact", description: "Compact this session")
     ]
 
+    private var draftTextBinding: Binding<String> {
+        Binding(
+            get: { session.draftText },
+            set: { session.draftText = $0 }
+        )
+    }
+
+    private var draftHeightBinding: Binding<CGFloat> {
+        Binding(
+            get: { session.draftHeight },
+            set: { session.draftHeight = $0 }
+        )
+    }
+
     private var hasDraftContent: Bool {
-        !draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftAttachments.isEmpty
+        !session.draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draftAttachments.isEmpty
     }
 
     private var canSend: Bool {
@@ -41,7 +53,7 @@ struct ChatSessionView: View {
     }
 
     private var slashCommandMatches: [SlashCommand] {
-        let text = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = session.draftText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.hasPrefix("/") else { return [] }
         return Self.slashCommands.filter { command in
             command.name.hasPrefix(text) || text == "/"
@@ -102,7 +114,7 @@ struct ChatSessionView: View {
     }
 
     private var composerArea: some View {
-        let controlHeight = max(draftHeight, 30)
+        let controlHeight = max(session.draftHeight, 30)
 
         return VStack(alignment: .leading, spacing: 10) {
             if !draftAttachments.isEmpty {
@@ -383,8 +395,8 @@ struct ChatSessionView: View {
             )
         } else {
             ComposerTextView(
-                text: $draftText,
-                dynamicHeight: $draftHeight,
+                text: draftTextBinding,
+                dynamicHeight: draftHeightBinding,
                 onSubmit: handleComposerSubmit,
                 onPasteAttachments: handlePasteAttachments
             )
@@ -422,7 +434,7 @@ struct ChatSessionView: View {
     }
 
     private func handleComposerSubmit() {
-        let prompt = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prompt = session.draftText.trimmingCharacters(in: .whitespacesAndNewlines)
         switch prompt {
         case "/abort":
             handleAbortCommand()
@@ -438,15 +450,15 @@ struct ChatSessionView: View {
     }
 
     private func handleSendTapped() {
-        let prompt = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prompt = session.draftText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSend else { return }
         let promptToSend = prompt
         let attachmentsToSend = draftAttachments
         _ = appState.sendMessage(promptToSend, attachments: attachmentsToSend, in: session) {
-            guard draftText.trimmingCharacters(in: .whitespacesAndNewlines) == promptToSend,
+            guard session.draftText.trimmingCharacters(in: .whitespacesAndNewlines) == promptToSend,
                   draftAttachments == attachmentsToSend else { return }
-            draftText = ""
-            draftHeight = 30
+            session.draftText = ""
+            session.draftHeight = 30
             draftAttachments = []
         }
     }
@@ -466,14 +478,14 @@ struct ChatSessionView: View {
     }
 
     private func clearComposer() {
-        draftText = ""
-        draftHeight = 30
+        session.draftText = ""
+        session.draftHeight = 30
         draftAttachments = []
     }
 
     private func selectSlashCommand(_ command: SlashCommand) {
-        draftText = command.name
-        draftHeight = 30
+        session.draftText = command.name
+        session.draftHeight = 30
     }
 
     private func handleMicrophoneTapped() {
@@ -578,12 +590,12 @@ struct ChatSessionView: View {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        if draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            draftText = trimmed
-        } else if draftText.hasSuffix("\n") {
-            draftText += trimmed
+        if session.draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            session.draftText = trimmed
+        } else if session.draftText.hasSuffix("\n") {
+            session.draftText += trimmed
         } else {
-            draftText += "\n\n\(trimmed)"
+            session.draftText += "\n\n\(trimmed)"
         }
     }
 
