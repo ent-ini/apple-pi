@@ -68,8 +68,11 @@ struct ChatSessionView: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .topLeading) {
-                VStack(spacing: 0) {
+                ZStack(alignment: .bottom) {
                     MessageListView(session: session)
+                        .safeAreaInset(edge: .bottom, spacing: 0) {
+                            Color.clear.frame(height: composerReservedHeight)
+                        }
                     composerArea
                 }
 
@@ -111,6 +114,10 @@ struct ChatSessionView: View {
         } message: {
             Text("Allow microphone access for pi-app in System Settings → Privacy & Security → Microphone.")
         }
+    }
+
+    private var composerReservedHeight: CGFloat {
+        max(session.draftHeight, 30) + 72
     }
 
     private var composerArea: some View {
