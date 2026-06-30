@@ -390,6 +390,11 @@ struct ChatSessionView: View {
             }
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: controlHeight, maxHeight: controlHeight)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.primary.opacity(0.035))
+                    .allowsHitTesting(false)
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .stroke(Color.primary.opacity(0.12), lineWidth: 1)
@@ -404,6 +409,11 @@ struct ChatSessionView: View {
                 onPasteAttachments: handlePasteAttachments
             )
             .frame(maxWidth: .infinity, minHeight: controlHeight, maxHeight: controlHeight)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.primary.opacity(0.035))
+                    .allowsHitTesting(false)
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .stroke(Color.primary.opacity(0.12), lineWidth: 1)

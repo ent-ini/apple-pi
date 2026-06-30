@@ -19,7 +19,6 @@ struct MessageListView: View {
     @State private var ensureVisibleWorkItems: [DispatchWorkItem] = []
     @State private var bottomScrollGeneration = 0
     @State private var ensureVisibleGeneration = 0
-    @State private var historyLoadRowMinY: CGFloat = .greatestFiniteMagnitude
     @State private var displayedRowsCache: [DisplayedSessionRow] = []
 
     var body: some View {
@@ -62,10 +61,6 @@ struct MessageListView: View {
                         scrollProxy: scrollProxy
                     )
                 }
-                .onPreferenceChange(HistoryLoadRowMinYPreferenceKey.self) { minY in
-                    historyLoadRowMinY = minY
-                    autoLoadEarlierHistoryIfNeeded()
-                }
                 .onChange(of: session.streamRevision) { _, _ in
                     refreshDisplayedRowsCache()
                     scheduleScrollToBottomIfNeeded(using: scrollProxy)
@@ -74,9 +69,6 @@ struct MessageListView: View {
                     refreshDisplayedRowsCache()
                     if let anchorID = session.consumePendingHistoryAnchorID() {
                         scrollProxy.scrollTo(anchorID, anchor: .top)
-                    }
-                    DispatchQueue.main.async {
-                        autoLoadEarlierHistoryIfNeeded()
                     }
                 }
                 .onChange(of: session.isSending) { _, isSending in
@@ -161,7 +153,6 @@ struct MessageListView: View {
     private static let bottomAnchorID = "chat.list.bottom"
     static let scrollCoordinateSpaceName = "chat.list.scroll"
     private static let bottomStickinessBuffer: CGFloat = 24
-    private static let historyAutoLoadDistance: CGFloat = 280
     // Keep this small so a normal two-finger trackpad scroll immediately
     // breaks the streaming auto-scroll lock. A large value made touchpad
     // scrolling feel ignored unless the user dragged the scrollbar thumb.
@@ -210,28 +201,27 @@ struct MessageListView: View {
                 ProgressView()
                     .controlSize(.small)
                     .accessibilityLabel("Loading earlier messages")
+            } else {
+                Button("Load earlier messages") {
+                    loadEarlierHistoryPage()
+                }
+                .font(.caption)
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
             }
             Spacer()
         }
-        .frame(height: session.isLoadingEarlierHistory ? nil : 1)
-        .padding(.vertical, session.isLoadingEarlierHistory ? 4 : 0)
-        .background {
-            GeometryReader { historyProxy in
-                Color.clear.preference(
-                    key: HistoryLoadRowMinYPreferenceKey.self,
-                    value: historyProxy.frame(in: .named(Self.scrollCoordinateSpaceName)).minY
-                )
-            }
-        }
+        .frame(minHeight: 36)
+        .contentShape(Rectangle())
+        .id("history-load-\(session.firstPersistedLineIndex)")
         .onAppear {
-            autoLoadEarlierHistoryIfNeeded()
+            loadEarlierHistoryPage()
         }
     }
 
-    private func autoLoadEarlierHistoryIfNeeded() {
+    private func loadEarlierHistoryPage() {
         guard session.hasEarlierHistory,
-              !session.isLoadingEarlierHistory,
-              historyLoadRowMinY <= Self.historyAutoLoadDistance else {
+              !session.isLoadingEarlierHistory else {
             return
         }
         session.loadEarlierHistory(limit: Self.historyPageSize)
@@ -369,14 +359,6 @@ struct MessageListView: View {
 // MARK: - Display rows
 
 private struct BottomAnchorMaxYPreferenceKey: PreferenceKey {
-    static let defaultValue: CGFloat = .greatestFiniteMagnitude
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-private struct HistoryLoadRowMinYPreferenceKey: PreferenceKey {
     static let defaultValue: CGFloat = .greatestFiniteMagnitude
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
