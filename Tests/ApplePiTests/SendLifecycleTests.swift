@@ -194,7 +194,7 @@ import Testing
     )
 
     session.loadFromDisk(force: true)
-    try await Task.sleep(for: .milliseconds(50))
+    try await waitUntil { session.firstPersistedLineIndex == 2 }
 
     #expect(session.hasEarlierHistory)
     #expect(session.firstPersistedLineIndex == 2)
@@ -246,9 +246,9 @@ import Testing
     )
 
     session.loadFromDisk(force: true)
-    try await Task.sleep(for: .milliseconds(50))
+    try await waitUntil { session.firstPersistedLineIndex == 2 }
     session.loadEarlierHistory(limit: 120)
-    try await Task.sleep(for: .milliseconds(200))
+    try await waitUntil { session.firstPersistedLineIndex == 0 }
 
     #expect(session.firstPersistedLineIndex == 0)
     #expect(session.hasEarlierHistory == false)
@@ -549,6 +549,22 @@ import Testing
 }
 
 // MARK: - Helpers
+
+@MainActor
+private func waitUntil(
+    timeout: Duration = .seconds(1),
+    _ predicate: @escaping @MainActor () -> Bool
+) async throws {
+    let start = ContinuousClock.now
+    while !predicate() {
+        if start.duration(to: ContinuousClock.now) > timeout {
+            throw TestTimeoutError()
+        }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+}
+
+private struct TestTimeoutError: Error {}
 
 private enum TestSendOutcome: Equatable, Sendable {
     case success
