@@ -164,9 +164,9 @@ struct RemoteDaemonUploadBodyTests {
             boundary: "X"
         )
         let raw = String(data: body, encoding: .utf8) ?? ""
-        #expect(!raw.contains(";"))
-        #expect(!raw.contains("\n"))
-        #expect(!raw.contains("ï"))
+        #expect(raw.contains("filename=\"na_ve_file_name.pdf\""))
+        #expect(!raw.contains("filename=\"naïve;file"))
+        #expect(!raw.contains("filename=\"na_ve;"))
     }
 }
 
@@ -229,8 +229,9 @@ struct GroqTranscriptionBodyTests {
             boundary: "B"
         )
         let raw = String(data: body, encoding: .utf8) ?? ""
-        #expect(!raw.contains(";"))
-        #expect(!raw.contains("\u{202E}"))
+        #expect(raw.contains("filename=\"voice_.m4a_injection_1\""))
+        #expect(!raw.contains("filename=\"voice\u{202E}"))
+        #expect(!raw.contains("filename=\"voice_.m4a;"))
     }
 }
 

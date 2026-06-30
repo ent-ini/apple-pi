@@ -33,8 +33,10 @@ package enum MultipartFilenameSanitizer {
     /// an underscore; the result is trimmed of leading and trailing
     /// whitespace; and an empty result is replaced with `placeholder`.
     package static func sanitize(_ name: String, placeholder: String = defaultPlaceholder) -> String {
-        let allowed = CharacterSet.alphanumerics
-            .union(CharacterSet(charactersIn: "._- "))
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return placeholder
+        }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._- ")
         let scalars = name.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" }
         let joined = String(scalars)
         let trimmed = joined.trimmingCharacters(in: .whitespacesAndNewlines)

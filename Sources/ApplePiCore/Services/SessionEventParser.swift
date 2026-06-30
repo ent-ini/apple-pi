@@ -242,23 +242,26 @@ package enum SessionEventParser {
             return .thinking(thinking, signature: signature)
         }
         if type == "image" {
+            let blockMime = (block["mimeType"] as? String) ?? (block["media_type"] as? String)
             if let source = block["source"] as? [String: Any],
                let path = source["path"] as? String {
-                return .image(path: path, mime: block["mimeType"] as? String)
+                let sourceMime = (source["mimeType"] as? String) ?? (source["media_type"] as? String)
+                return .image(path: path, mime: sourceMime ?? blockMime)
             }
             if let path = block["path"] as? String {
-                return .image(path: path, mime: block["mimeType"] as? String)
+                return .image(path: path, mime: blockMime)
             }
             if let fileName = block["fileName"] as? String {
-                return .image(path: fileName, mime: block["mimeType"] as? String)
+                return .image(path: fileName, mime: blockMime)
             }
             if let source = block["source"] as? [String: Any],
                let data = source["data"] as? String {
-                let mime = (block["mimeType"] as? String) ?? "image/png"
+                let sourceMime = (source["mimeType"] as? String) ?? (source["media_type"] as? String)
+                let mime = sourceMime ?? blockMime ?? "image/png"
                 return .image(path: "data:\(mime);base64,\(data)", mime: mime)
             }
             if let data = block["data"] as? String {
-                let mime = (block["mimeType"] as? String) ?? "image/png"
+                let mime = blockMime ?? "image/png"
                 return .image(path: "data:\(mime);base64,\(data)", mime: mime)
             }
         }
@@ -292,7 +295,7 @@ package enum SessionEventParser {
         if JSONSerialization.isValidJSONObject(value),
            let data = try? JSONSerialization.data(
                withJSONObject: value,
-               options: [.fragmentsAllowed, .sortedKeys]
+               options: [.fragmentsAllowed, .sortedKeys, .withoutEscapingSlashes]
            ),
            let str = String(data: data, encoding: .utf8) {
             return str

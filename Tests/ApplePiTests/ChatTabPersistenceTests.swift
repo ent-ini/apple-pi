@@ -200,7 +200,7 @@ import Testing
 }
 
 @MainActor
-@Test func appStateRestoreSkipsLocalTabWithMissingFile() throws {
+@Test(.disabled("Local file-backed tab restore is legacy-disabled in remote-only mode")) func appStateRestoreSkipsLocalTabWithMissingFile() throws {
     let defaults = isolatedDefaults()
     let missing = "/tmp/ApplePiMissingSession-\(UUID().uuidString).jsonl"
     let snapshot = PersistedChatTabsSnapshot(

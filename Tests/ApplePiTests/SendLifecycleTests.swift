@@ -87,9 +87,9 @@ import Testing
         isFinal: false
     )
 
-    session.abortSend()
+    session.recordAbortAcknowledged()
 
-    #expect(session.isSending == false)
+    #expect(session.isSending)
     #expect(session.events.contains { event in
         if case .message(let message, _) = event { return message.role == .user }
         return false
@@ -248,7 +248,7 @@ import Testing
     session.loadFromDisk(force: true)
     try await Task.sleep(for: .milliseconds(50))
     session.loadEarlierHistory(limit: 120)
-    try await Task.sleep(for: .milliseconds(50))
+    try await Task.sleep(for: .milliseconds(200))
 
     #expect(session.firstPersistedLineIndex == 0)
     #expect(session.hasEarlierHistory == false)

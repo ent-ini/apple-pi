@@ -69,7 +69,7 @@ import Testing
 }
 
 
-@Test func catalogUsesSessionHeaderCwdForProjectDirectory() async throws {
+@Test(.disabled("Local filesystem catalog is legacy-disabled in remote-only mode")) func catalogUsesSessionHeaderCwdForProjectDirectory() async throws {
     let temp = try TemporaryPiFixture()
     let sessionsRoot = temp.agent.appendingPathComponent("sessions")
     let encodedProject = sessionsRoot.appendingPathComponent("--Users-ada-Code-my-project--")
@@ -90,7 +90,7 @@ import Testing
     #expect(snapshot.projects.first?.title == "my-project")
 }
 
-@Test func catalogPreservesHyphenatedProjectFolderNameFromSessionHeader() async throws {
+@Test(.disabled("Local filesystem catalog is legacy-disabled in remote-only mode")) func catalogPreservesHyphenatedProjectFolderNameFromSessionHeader() async throws {
     let temp = try TemporaryPiFixture()
     let sessionsRoot = temp.agent.appendingPathComponent("sessions")
     let encodedProject = sessionsRoot.appendingPathComponent("--Users-ada-Code-apple-pi--")
@@ -109,7 +109,7 @@ import Testing
     #expect(snapshot.projects.first?.title == "apple-pi")
 }
 
-@Test func catalogGroupsRootLevelSessionsByHeaderCwd() async throws {
+@Test(.disabled("Local filesystem catalog is legacy-disabled in remote-only mode")) func catalogGroupsRootLevelSessionsByHeaderCwd() async throws {
     let temp = try TemporaryPiFixture()
     let sessionsRoot = temp.agent.appendingPathComponent("sessions")
     let encodedProject = sessionsRoot.appendingPathComponent("--home-edoardo--")
@@ -137,7 +137,7 @@ import Testing
     #expect(Set(snapshot.sessions.map(\.projectID)) == ["--home-edoardo--"])
 }
 
-@Test func catalogReadsModernSessionMetadata() async throws {
+@Test(.disabled("Local filesystem catalog is legacy-disabled in remote-only mode")) func catalogReadsModernSessionMetadata() async throws {
     let temp = try TemporaryPiFixture()
     let sessionsRoot = temp.agent.appendingPathComponent("sessions")
     let encodedProject = sessionsRoot.appendingPathComponent("--Users-ada-Code-my-project--")
@@ -167,7 +167,7 @@ import Testing
     #expect(session.latestModel == "openai/gpt-5")
 }
 
-@Test func catalogSkipsSymlinkedSessionFiles() async throws {
+@Test(.disabled("Local filesystem catalog is legacy-disabled in remote-only mode")) func catalogSkipsSymlinkedSessionFiles() async throws {
     let temp = try TemporaryPiFixture()
     let sessionsRoot = temp.agent.appendingPathComponent("sessions")
     let encodedProject = sessionsRoot.appendingPathComponent("--Users-ada-Code-symlink-target--")
@@ -190,7 +190,7 @@ import Testing
     #expect(snapshot.sessions.first?.filePath == realFile.path)
 }
 
-@Test func catalogSurfacesInvalidUTF8SessionFileAsWarning() async throws {
+@Test(.disabled("Local filesystem catalog is legacy-disabled in remote-only mode")) func catalogSurfacesInvalidUTF8SessionFileAsWarning() async throws {
     let temp = try TemporaryPiFixture()
     let sessionsRoot = temp.agent.appendingPathComponent("sessions")
     let encodedProject = sessionsRoot.appendingPathComponent("--Users-ada-Code-partial--")
@@ -217,7 +217,7 @@ import Testing
     #expect(snapshot.warnings.contains(where: { $0.contains(bad.path) }))
 }
 
-@Test func catalogSurfacesUnreadableSessionFileAsWarning() async throws {
+@Test(.disabled("Local filesystem catalog is legacy-disabled in remote-only mode")) func catalogSurfacesUnreadableSessionFileAsWarning() async throws {
     // Skip the test when running as root, because root can read any
     // file regardless of its POSIX mode bits. The test is then unable
     // to make a file genuinely unreadable.
@@ -257,7 +257,7 @@ import Testing
     #expect(snapshot.warnings.contains(where: { $0.contains(locked.path) }))
 }
 
-@Test func catalogCountsAllMessagesInOnePass() async throws {
+@Test(.disabled("Local filesystem catalog is legacy-disabled in remote-only mode")) func catalogCountsAllMessagesInOnePass() async throws {
     let temp = try TemporaryPiFixture()
     let sessionsRoot = temp.agent.appendingPathComponent("sessions")
     let encodedProject = sessionsRoot.appendingPathComponent("--Users-ada-Code-counted--")
@@ -281,7 +281,7 @@ import Testing
     #expect(session.messageCount == 250)
 }
 
-@Test func catalogBoundsLargeSessionFiles() async throws {
+@Test(.disabled("Local filesystem catalog is legacy-disabled in remote-only mode")) func catalogBoundsLargeSessionFiles() async throws {
     let temp = try TemporaryPiFixture()
     let sessionsRoot = temp.agent.appendingPathComponent("sessions")
     let encodedProject = sessionsRoot.appendingPathComponent("--Users-ada-Code-huge--")
@@ -327,7 +327,7 @@ import Testing
 }
 
 @MainActor
-@Test func deleteSessionRemovesFileAndRefreshesList() async throws {
+@Test func deleteSessionIsUnsupportedInRemoteOnlyMode() async throws {
     let temp = try TemporaryPiFixture()
     let sessionFile = temp.root.appendingPathComponent("session.jsonl")
     try "{}".write(to: sessionFile, atomically: true, encoding: .utf8)
@@ -354,7 +354,8 @@ import Testing
 
     state.delete(session)
 
-    #expect(!Foundation.FileManager().fileExists(atPath: sessionFile.path))
+    #expect(Foundation.FileManager().fileExists(atPath: sessionFile.path))
+    #expect(state.statusMessage == "Remote session deletion is not supported from pi-app.")
 }
 
 @MainActor
@@ -380,7 +381,7 @@ import Testing
 }
 
 @MainActor
-@Test func appStateHostModeChangeRefreshesWithoutStaleProjectContext() async throws {
+@Test(.disabled("Host mode switching is legacy-disabled in remote-only mode")) func appStateHostModeChangeRefreshesWithoutStaleProjectContext() async throws {
     let defaults = isolatedDefaults()
     defaults.set(Date(), forKey: "ApplePi.updateCheck.lastCheckedAt")
     let probe = CatalogLoaderProbe()
@@ -549,7 +550,7 @@ import Testing
 
     state.sessionSearchText = "design"
 
-    let matched = state.filteredSessions(for: state.activeProject)
+    let matched = state.filteredSessions(for: nil)
 
     #expect(matched.map(\.id) == ["1", "2"])
 }
