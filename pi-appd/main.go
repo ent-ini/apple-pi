@@ -37,6 +37,8 @@ const (
 	serverIdleTimeout               = 60 * time.Second
 	rpcCommandTimeout               = 2 * time.Minute
 	streamDisconnectKillGrace       = 5 * time.Second
+	agentEndCloseGrace              = 500 * time.Millisecond
+	queuedInputCloseGrace           = 30 * time.Second
 )
 
 type server struct {
@@ -64,9 +66,12 @@ type server struct {
 }
 
 type activeRun struct {
-	mu     sync.Mutex
-	stdin  io.WriteCloser
-	closed bool
+	mu            sync.Mutex
+	stdin         io.WriteCloser
+	closed        bool
+	generation    uint64
+	queuePending  bool
+	afterAgentEnd bool
 }
 
 func (r *activeRun) setStdin(stdin io.WriteCloser) {
@@ -88,7 +93,77 @@ func (r *activeRun) write(payload any) error {
 	if r.stdin == nil {
 		return errors.New("active run is not ready")
 	}
-	return writeRPCCommand(r.stdin, payload)
+	if err := writeRPCCommand(r.stdin, payload); err != nil {
+		return err
+	}
+	r.generation++
+	return nil
+}
+
+func (r *activeRun) markQueuePending(pending bool) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return false
+	}
+	if r.queuePending != pending {
+		r.generation++
+	}
+	r.queuePending = pending
+	return r.afterAgentEnd && !pending
+}
+
+func (r *activeRun) markContinuationStarted() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return
+	}
+	r.queuePending = false
+	r.afterAgentEnd = false
+	r.generation++
+}
+
+func (r *activeRun) markAgentEnded() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return
+	}
+	r.afterAgentEnd = true
+	r.generation++
+}
+
+func (r *activeRun) scheduleCloseAfter(delay time.Duration, forcePending bool) {
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return
+	}
+	generation := r.generation
+	r.mu.Unlock()
+
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		<-timer.C
+		r.closeIfIdle(generation, forcePending)
+	}()
+}
+
+func (r *activeRun) closeIfIdle(generation uint64, forcePending bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed || r.generation != generation {
+		return
+	}
+	if r.queuePending && !forcePending {
+		return
+	}
+	if r.stdin != nil {
+		_ = r.stdin.Close()
+	}
+	r.closed = true
 }
 
 func (r *activeRun) close() {
@@ -1236,6 +1311,12 @@ func (s *server) handleSessionSteer(w http.ResponseWriter, r *http.Request, sess
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
+	// A successfully written steer can be delivered after the current agent_end.
+	// Keep the RPC stdin open long enough for Pi to consume the queued steering
+	// message and start the continuation turn, but still force-close if Pi never
+	// resumes and no further output arrives.
+	run.markQueuePending(true)
+	run.scheduleCloseAfter(queuedInputCloseGrace, true)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -1815,8 +1896,25 @@ func (s *server) streamPiRPCCommand(
 			if flusher != nil {
 				flusher.Flush()
 			}
-			if rpcEventType(rawLine) == "agent_end" {
-				closeStdin()
+			switch eventType := rpcEventType(rawLine); eventType {
+			case "queue_update":
+				if pending, ok := rpcQueuePending(rawLine); ok {
+					if run.markQueuePending(pending) {
+						run.scheduleCloseAfter(agentEndCloseGrace, false)
+					}
+					if pending {
+						run.scheduleCloseAfter(queuedInputCloseGrace, true)
+					}
+				}
+			case "agent_start", "turn_start", "message_start":
+				run.markContinuationStarted()
+			case "agent_end":
+				// Pi can continue after agent_end when a late steering message was
+				// queued. Closing stdin immediately sends EOF to rpc-mode and can
+				// kill that continuation, so close only after a short idle grace.
+				run.markAgentEnded()
+				run.scheduleCloseAfter(agentEndCloseGrace, false)
+				run.scheduleCloseAfter(queuedInputCloseGrace, true)
 			}
 		}
 		if readErr != nil {
@@ -2279,6 +2377,21 @@ func rpcEventType(raw string) string {
 		return ""
 	}
 	return object.Type
+}
+
+func rpcQueuePending(raw string) (bool, bool) {
+	var object struct {
+		Type     string            `json:"type"`
+		Steering []json.RawMessage `json:"steering"`
+		FollowUp []json.RawMessage `json:"followUp"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &object); err != nil {
+		return false, false
+	}
+	if object.Type != "queue_update" {
+		return false, false
+	}
+	return len(object.Steering)+len(object.FollowUp) > 0, true
 }
 
 func parseRPCResponseEnvelope(raw string) (rpcResponseEnvelope, bool) {

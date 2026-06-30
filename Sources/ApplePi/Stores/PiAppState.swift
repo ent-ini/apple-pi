@@ -814,6 +814,7 @@ final class PiAppState: ObservableObject {
         let taggedPrompt = sourceTaggedAppPrompt(effectivePrompt)
         statusMessage = "Sending to Pi..."
         let remoteAPIHost = host
+        let steeringGeneration = session.currentSendGeneration
         let acceptedCallback = onAccepted.map(MainActorCallback.init)
         Task { [weak self, weak session, acceptedCallback] in
             do {
@@ -825,7 +826,11 @@ final class PiAppState: ObservableObject {
                     attachments: daemonAttachments
                 )
                 await MainActor.run {
-                    guard let self, let session else { return }
+                    guard let self, let session,
+                          self.host == remoteAPIHost,
+                          session.sessionID == sessionID,
+                          session.currentSendGeneration == steeringGeneration,
+                          session.hasActiveSend else { return }
                     session.appendSteeringPrompt(taggedPrompt, attachments: attachments)
                     self.statusMessage = "Sent to Pi"
                     acceptedCallback?()
@@ -834,6 +839,19 @@ final class PiAppState: ObservableObject {
                 await MainActor.run {
                     guard let self, let session else { return }
                     self.statusMessage = error.localizedDescription
+                    if let remoteError = error as? RemoteDaemonError,
+                       case .requestFailed(let status, _) = remoteError,
+                       status == 409,
+                       session.currentSendGeneration == steeringGeneration {
+                        session.cancelSend()
+                        session.finishSendingWithError(error.localizedDescription)
+                        session.loadFromDisk(force: true)
+                        self.setSessionSending(false, aliases: self.sessionAliases(for: session))
+                        self.restartSelectedSessionEventStream()
+                        self.scheduleCatalogRefresh(after: .milliseconds(50))
+                        self.refreshSessionRuntime(for: session, updatesStatus: false)
+                        return
+                    }
                     session.applyStreamingEvents([.other(type: "steer_error", lineIndex: session.lastPersistedLineIndex + 1)], isFinal: false)
                 }
             }
@@ -1175,7 +1193,10 @@ final class PiAppState: ObservableObject {
             session.applyStreamingEvents(events, isFinal: isFinal)
             syncSidebarTitleIfNeeded(for: session, previousTitle: previousTitle)
         case .turnEnd:
-            session.markTurnOutputComplete()
+            // A turn boundary is not necessarily the end of the live agent run:
+            // queued steering can be consumed after the current turn finishes.
+            // Keep the session steerable until agent_end/output_complete.
+            break
         case .agentEnd:
             session.markTurnOutputComplete()
         case .abort:
