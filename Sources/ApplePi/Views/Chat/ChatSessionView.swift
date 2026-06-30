@@ -368,6 +368,10 @@ struct ChatSessionView: View {
         )
     }
 
+    private var composerFieldBackgroundColor: Color {
+        appState.appearance.sidebarBackgroundColor(for: appState.appearance.resolvedColorScheme(current: colorScheme))
+    }
+
     @ViewBuilder
     private func composerInputSurface(controlHeight: CGFloat) -> some View {
         if audioRecorder.isRecording || isTranscribingAudio {
@@ -392,7 +396,7 @@ struct ChatSessionView: View {
             .frame(maxWidth: .infinity, minHeight: controlHeight, maxHeight: controlHeight)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.primary.opacity(0.035))
+                    .fill(composerFieldBackgroundColor)
                     .allowsHitTesting(false)
             )
             .overlay(
@@ -411,7 +415,7 @@ struct ChatSessionView: View {
             .frame(maxWidth: .infinity, minHeight: controlHeight, maxHeight: controlHeight)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.primary.opacity(0.035))
+                    .fill(composerFieldBackgroundColor)
                     .allowsHitTesting(false)
             )
             .overlay(
