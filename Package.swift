@@ -6,7 +6,8 @@ let package = Package(
     name: "apple-pi",
     defaultLocalization: "en",
     platforms: [
-        .macOS(.v14)
+        .macOS(.v14),
+        .iOS(.v17)
     ],
     products: [
         .library(
@@ -20,6 +21,10 @@ let package = Package(
         .executable(
             name: "ApplePi",
             targets: ["ApplePi"]
+        ),
+        .executable(
+            name: "ApplePiIOS",
+            targets: ["ApplePiIOS"]
         )
     ],
     dependencies: [],
@@ -40,6 +45,11 @@ let package = Package(
             resources: [
                 .copy("Resources")
             ]
+        ),
+        .executableTarget(
+            name: "ApplePiIOS",
+            dependencies: ["ApplePiCore", "ApplePiRemote"],
+            path: "Sources/ApplePiIOS"
         ),
         .testTarget(
             name: "ApplePiTests",
