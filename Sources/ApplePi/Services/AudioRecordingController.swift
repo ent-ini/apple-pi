@@ -123,7 +123,7 @@ final class AudioRecordingController: NSObject, ObservableObject, AVAudioRecorde
         AVCaptureDevice.authorizationStatus(for: .audio)
     }
 
-    nonisolated static func requestMicrophoneAccess(_ completion: @escaping (Bool) -> Void) {
+    nonisolated static func requestMicrophoneAccess(_ completion: @escaping @Sendable (Bool) -> Void) {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
             completion(true)
