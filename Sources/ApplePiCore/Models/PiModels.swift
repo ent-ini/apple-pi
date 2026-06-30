@@ -272,12 +272,12 @@ package struct PiLaunchRequest: Hashable, Sendable {
 }
 
 package extension String {
-    package var expandingTilde: String {
+    var expandingTilde: String {
         guard hasPrefix("~") else { return self }
         return NSString(string: self).expandingTildeInPath
     }
 
-    package var nilIfBlank: String? {
+    var nilIfBlank: String? {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
