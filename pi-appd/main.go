@@ -160,7 +160,7 @@ func (r *activeRun) closeIfIdle(generation uint64, forcePending bool) {
 	if r.closed || r.generation != generation {
 		return
 	}
-	if r.queuePending && !forcePending {
+	if r.queuePending && (!forcePending || !r.afterAgentEnd) {
 		return
 	}
 	if r.stdin != nil {

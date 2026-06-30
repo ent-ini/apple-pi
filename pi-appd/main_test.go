@@ -344,6 +344,30 @@ func TestHandleUploadsRejectsLargeFiles(t *testing.T) {
 	}
 }
 
+func TestActiveRunDoesNotForceCloseQueuedInputBeforeAgentEnd(t *testing.T) {
+	stdin := &bytes.Buffer{}
+	run := &activeRun{}
+	run.setStdin(bufferWriteCloser{stdin})
+	run.markQueuePending(true)
+	run.closeIfIdle(run.generation, true)
+
+	run.mu.Lock()
+	closedBeforeAgentEnd := run.closed
+	run.mu.Unlock()
+	if closedBeforeAgentEnd {
+		t.Fatal("queued input must not force-close stdin before agent_end")
+	}
+
+	run.markAgentEnded()
+	run.closeIfIdle(run.generation, true)
+	run.mu.Lock()
+	closedAfterAgentEnd := run.closed
+	run.mu.Unlock()
+	if !closedAfterAgentEnd {
+		t.Fatal("queued input should be force-closed after agent_end grace expires")
+	}
+}
+
 func TestSetSessionGeneratingPublishesDelta(t *testing.T) {
 	broker := newCatalogBroker()
 	updates := make(chan sessionRecord, 4)
