@@ -1,4 +1,6 @@
 import Foundation
+import ApplePiCore
+import ApplePiRemote
 
 /// Process-environment helpers shared by local Pi child processes.
 ///

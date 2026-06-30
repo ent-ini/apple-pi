@@ -2,6 +2,8 @@ import Foundation
 import Darwin
 import Testing
 @testable import ApplePi
+@testable import ApplePiCore
+@testable import ApplePiRemote
 
 /// Covers `SecureSecretFileWriter`, the single chokepoint used by
 /// `RemoteDaemonTokenStore`, `GroqAPIKeyStore`, and

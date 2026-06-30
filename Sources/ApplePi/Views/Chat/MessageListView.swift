@@ -1,4 +1,6 @@
 import SwiftUI
+import ApplePiCore
+import ApplePiRemote
 
 /// Scrollable list of `SessionEvent`s. Renders message bubbles for chat
 /// turns and compact disclosure rows for tool calls, tool results, and

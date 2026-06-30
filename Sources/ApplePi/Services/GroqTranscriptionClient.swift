@@ -1,4 +1,6 @@
 import Foundation
+import ApplePiCore
+import ApplePiRemote
 
 struct GroqTranscriptionClient {
     /// The hardcoded Groq audio transcription endpoint. The URL is

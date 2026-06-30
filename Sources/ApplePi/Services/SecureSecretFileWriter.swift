@@ -1,5 +1,7 @@
 import Foundation
 import Darwin
+import ApplePiCore
+import ApplePiRemote
 
 /// Securely writes small secret blobs (daemon bearer tokens,
 /// third-party API keys, etc.) to disk with mode 0600 from the very first

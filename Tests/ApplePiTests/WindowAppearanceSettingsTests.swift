@@ -2,6 +2,8 @@ import AppKit
 import Foundation
 import Testing
 @testable import ApplePi
+@testable import ApplePiCore
+@testable import ApplePiRemote
 
 @Test func windowAppearanceSettingsHonorTransparentTitlebarToggle() {
     var appearance = AppAppearance()

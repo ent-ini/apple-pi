@@ -1,5 +1,7 @@
 import AppKit
 import SwiftUI
+import ApplePiCore
+import ApplePiRemote
 
 struct ShortcutRecorderField: NSViewRepresentable {
     @Binding var shortcut: AppShortcut

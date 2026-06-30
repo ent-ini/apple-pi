@@ -1,6 +1,8 @@
 import AppKit
 import Foundation
 import UniformTypeIdentifiers
+import ApplePiCore
+import ApplePiRemote
 
 struct AttachmentStagingService {
     func stageFile(at sourceURL: URL) throws -> ChatAttachment {

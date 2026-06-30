@@ -1,5 +1,7 @@
 import SwiftUI
 import AppKit
+import ApplePiCore
+import ApplePiRemote
 
 struct UpdatePillView: View {
     let update: AvailableUpdate

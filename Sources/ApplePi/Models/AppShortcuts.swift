@@ -1,5 +1,7 @@
 import AppKit
 import SwiftUI
+import ApplePiCore
+import ApplePiRemote
 
 enum AppShortcutAction: String, Codable, CaseIterable, Identifiable, Sendable {
     case newSession

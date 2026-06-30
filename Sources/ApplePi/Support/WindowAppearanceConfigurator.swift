@@ -1,5 +1,7 @@
 import AppKit
 import SwiftUI
+import ApplePiCore
+import ApplePiRemote
 
 /// Pure, side-effect-free description of how the main window should look.
 /// Splitting the decision (this struct) from the application

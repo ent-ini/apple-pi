@@ -9,6 +9,14 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
+        .library(
+            name: "ApplePiCore",
+            targets: ["ApplePiCore"]
+        ),
+        .library(
+            name: "ApplePiRemote",
+            targets: ["ApplePiRemote"]
+        ),
         .executable(
             name: "ApplePi",
             targets: ["ApplePi"]
@@ -16,8 +24,18 @@ let package = Package(
     ],
     dependencies: [],
     targets: [
+        .target(
+            name: "ApplePiCore",
+            path: "Sources/ApplePiCore"
+        ),
+        .target(
+            name: "ApplePiRemote",
+            dependencies: ["ApplePiCore"],
+            path: "Sources/ApplePiRemote"
+        ),
         .executableTarget(
             name: "ApplePi",
+            dependencies: ["ApplePiCore", "ApplePiRemote"],
             path: "Sources/ApplePi",
             resources: [
                 .copy("Resources")
@@ -25,7 +43,7 @@ let package = Package(
         ),
         .testTarget(
             name: "ApplePiTests",
-            dependencies: ["ApplePi"],
+            dependencies: ["ApplePi", "ApplePiCore", "ApplePiRemote"],
             path: "Tests/ApplePiTests"
         )
     ]

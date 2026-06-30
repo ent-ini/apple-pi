@@ -1,6 +1,8 @@
 import SwiftUI
 import AppKit
 @preconcurrency import UserNotifications
+import ApplePiCore
+import ApplePiRemote
 
 @main
 struct ApplePiApp: App {

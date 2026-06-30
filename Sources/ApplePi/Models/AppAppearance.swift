@@ -1,6 +1,8 @@
 import AppKit
 import Foundation
 import SwiftUI
+import ApplePiCore
+import ApplePiRemote
 
 struct AppAppearance: Codable, Equatable {
     var windowOpacity: Double = 0.94

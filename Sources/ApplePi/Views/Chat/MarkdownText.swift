@@ -1,5 +1,7 @@
 import Foundation
 import SwiftUI
+import ApplePiCore
+import ApplePiRemote
 
 /// Lightweight Markdown renderer for chat messages. It intentionally avoids
 /// adding a heavy dependency while covering the shapes Pi responses commonly

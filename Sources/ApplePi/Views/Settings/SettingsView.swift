@@ -1,5 +1,7 @@
 import AppKit
 import SwiftUI
+import ApplePiCore
+import ApplePiRemote
 
 struct SettingsView: View {
     @EnvironmentObject private var appState: PiAppState

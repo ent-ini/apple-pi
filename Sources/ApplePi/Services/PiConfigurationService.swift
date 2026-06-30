@@ -1,4 +1,6 @@
 import Foundation
+import ApplePiCore
+import ApplePiRemote
 
 final class PiConfigurationService {
     private let fileManager: FileManager

@@ -1,5 +1,7 @@
 import AppKit
 import SwiftUI
+import ApplePiCore
+import ApplePiRemote
 
 /// View for a single open Pi session. The composer stays compact but now
 /// supports staged attachments above the input row.

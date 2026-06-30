@@ -1,20 +1,21 @@
 import Foundation
+import ApplePiCore
 
-struct PiRpcPromptPayload: Sendable {
-    let message: String
-    let images: [PiRpcImageContent]
+package struct PiRpcPromptPayload: Sendable {
+    package let message: String
+    package let images: [PiRpcImageContent]
 }
 
-struct PiRpcImageContent: Encodable, Sendable {
-    let type = "image"
-    let data: String
-    let mimeType: String
+package struct PiRpcImageContent: Encodable, Sendable {
+    package let type = "image"
+    package let data: String
+    package let mimeType: String
 }
 
-enum PiRpcPayloadBuilder {
+package enum PiRpcPayloadBuilder {
     private static let maxInlineTextBytes = 200_000
 
-    static func build(prompt: String, attachments: [ChatAttachment]) -> PiRpcPromptPayload {
+    package static func build(prompt: String, attachments: [ChatAttachment]) -> PiRpcPromptPayload {
         var prefix = ""
         var images: [PiRpcImageContent] = []
 

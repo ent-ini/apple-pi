@@ -1,4 +1,6 @@
 import SwiftUI
+import ApplePiCore
+import ApplePiRemote
 
 /// Root view for the chat area. The app now operates in a single-session
 /// mode: the sidebar selection controls which chat is open, and the old

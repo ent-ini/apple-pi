@@ -1,4 +1,6 @@
 import SwiftUI
+import ApplePiCore
+import ApplePiRemote
 
 /// Renders the assistant's `thinking` content as a compact single-line
 /// disclosure row. Collapsed state shows only the word `Thinking`; expanded

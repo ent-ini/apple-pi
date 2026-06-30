@@ -1,6 +1,8 @@
 import AVFoundation
 import CoreGraphics
 import Foundation
+import ApplePiCore
+import ApplePiRemote
 
 @MainActor
 final class AudioRecordingController: NSObject, ObservableObject, AVAudioRecorderDelegate, @unchecked Sendable {

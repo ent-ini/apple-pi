@@ -1,7 +1,8 @@
 import Foundation
+import ApplePiCore
 
-extension String {
-    var shellQuoted: String {
+package extension String {
+    package var shellQuoted: String {
         if isEmpty { return "''" }
         let safe = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_+-./:=@")
         if unicodeScalars.allSatisfy({ safe.contains($0) }) {

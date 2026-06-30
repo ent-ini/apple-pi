@@ -1,5 +1,7 @@
 import AppKit
 import SwiftUI
+import ApplePiCore
+import ApplePiRemote
 
 struct ChatFileReference: Identifiable, Hashable, Sendable {
     let path: String

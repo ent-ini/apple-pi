@@ -1,4 +1,5 @@
 import Foundation
+import ApplePiCore
 
 /// Sanitizes filenames used in `multipart/form-data` `Content-Disposition`
 /// headers, where the `filename` parameter is parsed by HTTP servers
@@ -20,18 +21,18 @@ import Foundation
 ///
 /// The helper never throws. Callers can use the result directly in
 /// the `filename="…"` parameter of a `Content-Disposition` header.
-enum MultipartFilenameSanitizer {
+package enum MultipartFilenameSanitizer {
     /// The default placeholder used when the sanitized result would
     /// otherwise be empty. Callers can override per-call if they have
     /// a more meaningful fallback (e.g. an attachment UUID).
-    static let defaultPlaceholder = "upload"
+    package static let defaultPlaceholder = "upload"
 
     /// Returns a safe version of `name` suitable for embedding in a
     /// `Content-Disposition: form-data; name="file"; filename="…"`
     /// header. Every character outside the whitelist is replaced with
     /// an underscore; the result is trimmed of leading and trailing
     /// whitespace; and an empty result is replaced with `placeholder`.
-    static func sanitize(_ name: String, placeholder: String = defaultPlaceholder) -> String {
+    package static func sanitize(_ name: String, placeholder: String = defaultPlaceholder) -> String {
         let allowed = CharacterSet.alphanumerics
             .union(CharacterSet(charactersIn: "._- "))
         let scalars = name.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" }

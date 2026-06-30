@@ -1,4 +1,6 @@
 import SwiftUI
+import ApplePiCore
+import ApplePiRemote
 
 struct NewSessionSheet: View {
     @EnvironmentObject private var appState: PiAppState

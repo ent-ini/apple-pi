@@ -1,6 +1,8 @@
 import AppKit
 import Foundation
 @preconcurrency import UserNotifications
+import ApplePiCore
+import ApplePiRemote
 
 /// Outcome of a notification delivery attempt. Exposed to the settings
 /// view so the user can see why a test banner may not have appeared.

@@ -1,6 +1,8 @@
 import Foundation
 import Testing
 @testable import ApplePi
+@testable import ApplePiCore
+@testable import ApplePiRemote
 
 /// Covers the `message.role == "toolResult"` JSONL shape, inline
 /// `toolCall` content blocks inside assistant messages, and the legacy

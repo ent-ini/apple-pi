@@ -1,17 +1,17 @@
 import Foundation
 
-struct PiSessionBinding: Sendable {
-    let sessionID: String?
-    let sessionPath: String?
-    let title: String
-    let workingDirectory: String?
+package struct PiSessionBinding: Sendable {
+    package let sessionID: String?
+    package let sessionPath: String?
+    package let title: String
+    package let workingDirectory: String?
 
-    var key: String {
+    package var key: String {
         sessionPath ?? sessionID ?? "pending-session"
     }
 }
 
-enum PiTurnStreamEvent: Sendable {
+package enum PiTurnStreamEvent: Sendable {
     case sessionBound(PiSessionBinding)
     case sessionHeader(SessionMeta)
     case sessionEvents([SessionEvent], isFinal: Bool)
@@ -22,8 +22,8 @@ enum PiTurnStreamEvent: Sendable {
     case streamError(String)
 }
 
-enum PiTurnStreamParser {
-    static func parseLine(_ rawLine: String) -> PiTurnStreamEvent? {
+package enum PiTurnStreamParser {
+    package static func parseLine(_ rawLine: String) -> PiTurnStreamEvent? {
         let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let data = trimmed.data(using: .utf8),

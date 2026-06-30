@@ -1,6 +1,8 @@
 import Foundation
 import Testing
 @testable import ApplePi
+@testable import ApplePiCore
+@testable import ApplePiRemote
 
 @Test func shellQuotingProtectsSpacesAndQuotes() {
     #expect("hello".shellQuoted == "hello")

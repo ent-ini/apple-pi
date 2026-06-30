@@ -1,4 +1,6 @@
 import Foundation
+import ApplePiCore
+import ApplePiRemote
 
 enum GroqAPIKeyStore {
     nonisolated(unsafe) static var applicationSupportOverride: String?

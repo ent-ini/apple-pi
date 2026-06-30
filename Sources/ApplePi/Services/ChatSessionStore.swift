@@ -1,23 +1,7 @@
 import Foundation
 import SwiftUI
-
-struct SessionEventsPage: Sendable {
-    let events: [SessionEvent]
-    let firstLine: Int?
-    let lastLine: Int?
-    let hasMoreBefore: Bool
-    let hasMoreAfter: Bool
-
-    static func fromEvents(_ events: [SessionEvent]) -> SessionEventsPage {
-        SessionEventsPage(
-            events: events,
-            firstLine: events.first?.lineIndex,
-            lastLine: events.last?.lineIndex,
-            hasMoreBefore: false,
-            hasMoreAfter: false
-        )
-    }
-}
+import ApplePiCore
+import ApplePiRemote
 
 /// One Pi session that the user has open in a tab. The read-only MVP loads
 /// the underlying `.jsonl` file once and exposes the events to the chat

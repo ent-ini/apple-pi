@@ -1,6 +1,8 @@
 import Foundation
 import AppKit
 import SwiftUI
+import ApplePiCore
+import ApplePiRemote
 
 typealias PiCatalogLoader = @Sendable (PiHostConfiguration, String?) async throws -> PiCatalogSnapshot
 

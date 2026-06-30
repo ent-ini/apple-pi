@@ -1,4 +1,6 @@
 import Foundation
+import ApplePiCore
+import ApplePiRemote
 
 /// One open tab captured for persistence. Only file-backed or remote
 /// sessions are saved — `new:<UUID>` and `fork:<path>:<UUID>` ephemeral

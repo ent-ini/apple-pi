@@ -1,5 +1,7 @@
 import AppKit
 import SwiftUI
+import ApplePiCore
+import ApplePiRemote
 
 private let messageBubbleMaxWidth: CGFloat = 420
 

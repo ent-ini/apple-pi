@@ -1,17 +1,17 @@
 import Foundation
 
-enum PiHostMode: String, CaseIterable, Identifiable, Sendable {
+package enum PiHostMode: String, CaseIterable, Identifiable, Sendable {
     /// Legacy value kept only so old preferences/tests can still decode. New UI
     /// exposes Remote API exclusively; local Pi execution is no longer a product
     /// mode and must not be selected by default.
     case local
     case remoteAPI
 
-    static var allCases: [PiHostMode] { [.remoteAPI] }
+    package static var allCases: [PiHostMode] { [.remoteAPI] }
 
-    var id: String { rawValue }
+    package var id: String { rawValue }
 
-    var title: String {
+    package var title: String {
         switch self {
         case .local: "Local Mac (legacy)"
         case .remoteAPI: "Remote API"
@@ -19,8 +19,8 @@ enum PiHostMode: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-extension PiHostMode: Codable {
-    init(from decoder: Decoder) throws {
+package extension PiHostMode: Codable {
+    package init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         let rawValue = (try? container.decode(String.self)) ?? Self.remoteAPI.rawValue
         switch rawValue {
@@ -34,25 +34,25 @@ extension PiHostMode: Codable {
         }
     }
 
-    func encode(to encoder: Encoder) throws {
+    package func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         try container.encode(rawValue)
     }
 }
 
-struct PiHostConfiguration: Codable, Equatable, Sendable {
-    var mode: PiHostMode = .remoteAPI
-    var piExecutable: String = "pi"
-    var agentDirectory: String = "~/.pi/agent"
+package struct PiHostConfiguration: Codable, Equatable, Sendable {
+    package var mode: PiHostMode = .remoteAPI
+    package var piExecutable: String = "pi"
+    package var agentDirectory: String = "~/.pi/agent"
     /// Base URL or IP:port of the `pi-appd` daemon that Apple Pi talks
     /// to in Remote API mode. The Mac client only ever reaches Pi
     /// through this daemon.
     ///
     /// Example: `http://100.100.20.10:8787`.
-    var remoteDaemonURL: String = ""
-    var defaultWorkingDirectory: String = "~/ai-agent/workspace"
+    package var remoteDaemonURL: String = ""
+    package var defaultWorkingDirectory: String = "~/ai-agent/workspace"
 
-    init(
+    package init(
         mode: PiHostMode = .remoteAPI,
         piExecutable: String = "pi",
         agentDirectory: String = "~/.pi/agent",
@@ -74,7 +74,7 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
         case defaultWorkingDirectory
     }
 
-    init(from decoder: Decoder) throws {
+    package init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         mode = try container.decodeIfPresent(PiHostMode.self, forKey: .mode) ?? .remoteAPI
         piExecutable = try container.decodeIfPresent(String.self, forKey: .piExecutable) ?? "pi"
@@ -83,7 +83,7 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
         defaultWorkingDirectory = try container.decodeIfPresent(String.self, forKey: .defaultWorkingDirectory) ?? "~/ai-agent/workspace"
     }
 
-    func encode(to encoder: Encoder) throws {
+    package func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(mode, forKey: .mode)
         try container.encode(piExecutable, forKey: .piExecutable)
@@ -92,15 +92,15 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
         try container.encode(defaultWorkingDirectory, forKey: .defaultWorkingDirectory)
     }
 
-    var sessionRoot: String {
+    package var sessionRoot: String {
         "\(agentDirectory.expandingTilde)/sessions"
     }
 
-    var remoteDaemonDisplayAddress: String {
+    package var remoteDaemonDisplayAddress: String {
         remoteDaemonURL.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    var hasRemoteDaemonConfigured: Bool {
+    package var hasRemoteDaemonConfigured: Bool {
         remoteDaemonDisplayAddress.nilIfBlank != nil
     }
 
@@ -108,11 +108,11 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
     /// configured keeps callers on the RemoteDaemonClient path, where they get
     /// a clear "Remote API URL is not configured" error instead of silently
     /// falling back to local process/filesystem behavior.
-    var usesRemoteDaemonTransport: Bool {
+    package var usesRemoteDaemonTransport: Bool {
         true
     }
 
-    var remoteDaemonBaseURL: URL? {
+    package var remoteDaemonBaseURL: URL? {
         let raw = remoteDaemonDisplayAddress
         guard let value = raw.nilIfBlank else { return nil }
         if let direct = URL(string: value), direct.scheme != nil {
@@ -122,61 +122,107 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
     }
 }
 
-struct PiProject: Identifiable, Hashable, Sendable {
-    let id: String
-    let title: String
-    let workingDirectory: String?
-    let sessionDirectory: String
-    let sessionCount: Int
-    let lastActivity: Date?
+package struct PiProject: Identifiable, Hashable, Sendable {
+    package let id: String
+    package let title: String
+    package let workingDirectory: String?
+    package let sessionDirectory: String
+    package let sessionCount: Int
+    package let lastActivity: Date?
+
+    package init(
+        id: String,
+        title: String,
+        workingDirectory: String?,
+        sessionDirectory: String,
+        sessionCount: Int,
+        lastActivity: Date?
+    ) {
+        self.id = id
+        self.title = title
+        self.workingDirectory = workingDirectory
+        self.sessionDirectory = sessionDirectory
+        self.sessionCount = sessionCount
+        self.lastActivity = lastActivity
+    }
 }
 
-struct PiSessionSummary: Identifiable, Hashable, Sendable {
-    let id: String
-    let filePath: String
-    let projectID: String
-    let title: String
-    let workingDirectory: String?
-    let messageCount: Int
-    let modifiedAt: Date
-    let displayName: String?
-    let parentSession: String?
-    let branchCount: Int
-    let labelCount: Int
-    let branchSummaryCount: Int
-    let latestModel: String?
+package struct PiSessionSummary: Identifiable, Hashable, Sendable {
+    package let id: String
+    package let filePath: String
+    package let projectID: String
+    package let title: String
+    package let workingDirectory: String?
+    package let messageCount: Int
+    package let modifiedAt: Date
+    package let displayName: String?
+    package let parentSession: String?
+    package let branchCount: Int
+    package let labelCount: Int
+    package let branchSummaryCount: Int
+    package let latestModel: String?
 
-    var subtitle: String {
+    package init(
+        id: String,
+        filePath: String,
+        projectID: String,
+        title: String,
+        workingDirectory: String?,
+        messageCount: Int,
+        modifiedAt: Date,
+        displayName: String?,
+        parentSession: String?,
+        branchCount: Int,
+        labelCount: Int,
+        branchSummaryCount: Int,
+        latestModel: String?
+    ) {
+        self.id = id
+        self.filePath = filePath
+        self.projectID = projectID
+        self.title = title
+        self.workingDirectory = workingDirectory
+        self.messageCount = messageCount
+        self.modifiedAt = modifiedAt
+        self.displayName = displayName
+        self.parentSession = parentSession
+        self.branchCount = branchCount
+        self.labelCount = labelCount
+        self.branchSummaryCount = branchSummaryCount
+        self.latestModel = latestModel
+    }
+
+    package var subtitle: String {
         if let workingDirectory, !workingDirectory.isEmpty {
             return workingDirectory
         }
         return URL(fileURLWithPath: filePath).lastPathComponent
     }
 
-    var hasMetadata: Bool {
+    package var hasMetadata: Bool {
         messageCount > 0 || parentSession != nil || branchCount > 0 || labelCount > 0 || branchSummaryCount > 0 || latestModel != nil
     }
 }
 
-enum PiSelection: Hashable, Sendable {
+package enum PiSelection: Hashable, Sendable {
     case project(String)
     case session(String)
 }
 
-struct PiLaunchRequest: Hashable, Sendable {
-    var workingDirectory: String?
-    var sessionPath: String?
-    var forkPath: String?
-    var sessionName: String?
-    var isEphemeral: Bool
-    var initialPrompt: String?
-    var initialModelProvider: String?
-    var initialModelID: String?
-    var initialThinkingLevel: String?
-    var hasExplicitInitialModel: Bool
-    var hasExplicitInitialThinkingLevel: Bool
+package struct PiLaunchRequest: Hashable, Sendable {
+    package var workingDirectory: String?
+    package var sessionPath: String?
+    package var forkPath: String?
+    package var sessionName: String?
+    package var isEphemeral: Bool
+    package var initialPrompt: String?
+    package var initialModelProvider: String?
+    package var initialModelID: String?
+    package var initialThinkingLevel: String?
+    package var hasExplicitInitialModel: Bool
+    package var hasExplicitInitialThinkingLevel: Bool
 
-    init(
+    package init(
         workingDirectory: String? = nil,
         sessionPath: String? = nil,
         forkPath: String? = nil,
@@ -202,7 +248,7 @@ struct PiLaunchRequest: Hashable, Sendable {
         self.hasExplicitInitialThinkingLevel = hasExplicitInitialThinkingLevel
     }
 
-    static func resume(_ session: PiSessionSummary) -> PiLaunchRequest {
+    package static func resume(_ session: PiSessionSummary) -> PiLaunchRequest {
         PiLaunchRequest(
             workingDirectory: session.workingDirectory,
             sessionPath: session.filePath,
@@ -213,7 +259,7 @@ struct PiLaunchRequest: Hashable, Sendable {
         )
     }
 
-    static func fork(_ session: PiSessionSummary) -> PiLaunchRequest {
+    package static func fork(_ session: PiSessionSummary) -> PiLaunchRequest {
         PiLaunchRequest(
             workingDirectory: session.workingDirectory,
             sessionPath: nil,
@@ -225,13 +271,13 @@ struct PiLaunchRequest: Hashable, Sendable {
     }
 }
 
-extension String {
-    var expandingTilde: String {
+package extension String {
+    package var expandingTilde: String {
         guard hasPrefix("~") else { return self }
         return NSString(string: self).expandingTildeInPath
     }
 
-    var nilIfBlank: String? {
+    package var nilIfBlank: String? {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }

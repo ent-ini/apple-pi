@@ -1,4 +1,6 @@
 import Foundation
+import ApplePiCore
+import ApplePiRemote
 
 struct AvailableUpdate: Equatable, Sendable {
     let latestVersion: String

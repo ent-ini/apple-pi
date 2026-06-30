@@ -1,5 +1,7 @@
 import Foundation
 import Darwin
+import ApplePiCore
+import ApplePiRemote
 
 struct LocalPiTurnRunner {
     func run(

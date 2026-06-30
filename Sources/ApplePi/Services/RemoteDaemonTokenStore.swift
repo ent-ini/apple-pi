@@ -1,4 +1,6 @@
 import Foundation
+import ApplePiCore
+import ApplePiRemote
 
 /// Stores per-remote-daemon bearer tokens on disk under Application Support,
 /// one file per daemon URL, mode 0600.

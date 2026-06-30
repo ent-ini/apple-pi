@@ -4,9 +4,9 @@ import Foundation
 /// We deliberately read the whole file at once for the read-only chat view;
 /// the live tail in `ChatSession` will append events incrementally using
 /// the same `decode(line:at:)` entry point.
-enum SessionEventParser {
+package enum SessionEventParser {
     /// Read every line from disk and parse it.
-    static func parse(fileURL: URL) throws -> [SessionEvent] {
+    package static func parse(fileURL: URL) throws -> [SessionEvent] {
         let data = try Data(contentsOf: fileURL)
         guard let text = String(data: data, encoding: .utf8) else { return [] }
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
@@ -14,7 +14,7 @@ enum SessionEventParser {
     }
 
     /// Parse a list of raw lines. Blank lines are skipped silently.
-    static func parse(lines: [String]) -> [SessionEvent] {
+    package static func parse(lines: [String]) -> [SessionEvent] {
         var events: [SessionEvent] = []
         events.reserveCapacity(lines.count)
 
@@ -32,7 +32,7 @@ enum SessionEventParser {
     /// `decodeAll(line:at:)`. The `decode(line:at:)` entry point returns
     /// the first event only and is kept around for the live-tail path,
     /// which appends one event per appended line.
-    static func decode(line raw: String, at lineIndex: Int) -> SessionEvent? {
+    package static func decode(line raw: String, at lineIndex: Int) -> SessionEvent? {
         let events = decodeAll(line: raw, at: lineIndex)
         if let message = events.first(where: {
             if case .message = $0 { return true }
@@ -45,7 +45,7 @@ enum SessionEventParser {
 
     /// Decode a single line and return *every* event encoded on it, in
     /// source order. Blank and malformed lines produce an empty array.
-    static func decodeAll(line raw: String, at lineIndex: Int) -> [SessionEvent] {
+    package static func decodeAll(line raw: String, at lineIndex: Int) -> [SessionEvent] {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let data = trimmed.data(using: .utf8),
@@ -72,7 +72,7 @@ enum SessionEventParser {
 
     // MARK: - Field decoders
 
-    static func decodeSessionMeta(from object: [String: Any]) -> SessionMeta? {
+    package static func decodeSessionMeta(from object: [String: Any]) -> SessionMeta? {
         let id = stringValue(from: object, keys: ["sessionId", "sessionID", "id"])
         let cwd = stringValue(from: object, keys: ["cwd", "workingDirectory"])
         let parent = stringValue(from: object, keys: ["parentSession"])
@@ -94,7 +94,7 @@ enum SessionEventParser {
     /// line can expand to several events: the chat message itself plus
     /// zero or more tool calls. `role: "toolResult"` lines short-circuit
     /// to a single `SessionEvent.toolResult` so we never lose them.
-    static func decodeMessageEvents(from object: [String: Any], lineIndex: Int) -> [SessionEvent] {
+    package static func decodeMessageEvents(from object: [String: Any], lineIndex: Int) -> [SessionEvent] {
         guard let payload = object["message"] as? [String: Any],
               let roleString = payload["role"] as? String
         else { return [] }
@@ -155,7 +155,7 @@ enum SessionEventParser {
     /// a `type: "message"` line. `toolResult` roles and inline tool-call
     /// blocks are dropped here; callers that care about every event on
     /// the line should use `decodeMessageEvents` instead.
-    static func decodeMessage(from object: [String: Any]) -> Message? {
+    package static func decodeMessage(from object: [String: Any]) -> Message? {
         let events = decodeMessageEvents(from: object, lineIndex: 0)
         for event in events {
             if case .message(let message, _) = event { return message }
