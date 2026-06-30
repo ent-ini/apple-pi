@@ -1,13 +1,13 @@
 import Foundation
 
-package struct SessionEventsPage: Sendable {
-    package let events: [SessionEvent]
-    package let firstLine: Int?
-    package let lastLine: Int?
-    package let hasMoreBefore: Bool
-    package let hasMoreAfter: Bool
+public struct SessionEventsPage: Sendable {
+    public let events: [SessionEvent]
+    public let firstLine: Int?
+    public let lastLine: Int?
+    public let hasMoreBefore: Bool
+    public let hasMoreAfter: Bool
 
-    package init(
+    public init(
         events: [SessionEvent],
         firstLine: Int?,
         lastLine: Int?,
@@ -21,7 +21,7 @@ package struct SessionEventsPage: Sendable {
         self.hasMoreAfter = hasMoreAfter
     }
 
-    package static func fromEvents(_ events: [SessionEvent]) -> SessionEventsPage {
+    public static func fromEvents(_ events: [SessionEvent]) -> SessionEventsPage {
         SessionEventsPage(
             events: events,
             firstLine: events.first?.lineIndex,

@@ -36,7 +36,6 @@ final class MobilePiAppState: ObservableObject {
     @Published var draft = ""
 
     private let defaults: UserDefaults
-    private let client = RemoteDaemonClient()
     private let hostDefaultsKey = "ApplePiIOS.host"
     private var catalogStreamTask: Task<Void, Never>?
 
@@ -80,7 +79,7 @@ final class MobilePiAppState: ObservableObject {
             return
         }
         do {
-            statusMessage = try await client.testConnection(host: host, tokenOverride: daemonToken.nilIfBlank)
+            statusMessage = try await RemoteDaemonClient().testConnection(host: host, tokenOverride: daemonToken.nilIfBlank)
         } catch {
             statusMessage = error.localizedDescription
         }
@@ -94,7 +93,7 @@ final class MobilePiAppState: ObservableObject {
         isLoadingCatalog = true
         defer { isLoadingCatalog = false }
         do {
-            let snapshot = try await client.loadCatalog(
+            let snapshot = try await RemoteDaemonClient().loadCatalog(
                 host: host,
                 activeProjectDirectory: nil,
                 tokenOverride: daemonToken.nilIfBlank
@@ -111,7 +110,8 @@ final class MobilePiAppState: ObservableObject {
         guard isConfigured else { return }
         let host = host
         let token = daemonToken.nilIfBlank
-        catalogStreamTask = Task { [client] in
+        let client = RemoteDaemonClient()
+        catalogStreamTask = Task {
             do {
                 for try await event in client.streamCatalogSnapshots(host: host, tokenOverride: token) {
                     guard !Task.isCancelled else { return }
@@ -147,7 +147,7 @@ final class MobilePiAppState: ObservableObject {
         isLoadingSession = true
         defer { isLoadingSession = false }
         do {
-            let page = try await client.loadSessionEventPage(
+            let page = try await RemoteDaemonClient().loadSessionEventPage(
                 host: host,
                 sessionID: selectedSession.id,
                 limit: 120,
@@ -168,12 +168,12 @@ final class MobilePiAppState: ObservableObject {
         defer { isSending = false }
         do {
             if let selectedSession {
-                try await client.streamSend(host: host, sessionID: selectedSession.id, prompt: prompt) { event in
+                try await RemoteDaemonClient().streamSend(host: host, sessionID: selectedSession.id, prompt: prompt) { event in
                     await self.handleTurnStreamEvent(event)
                 }
             } else {
                 let request = PiLaunchRequest(workingDirectory: host.defaultWorkingDirectory)
-                try await client.streamNewSession(host: host, request: request, prompt: prompt) { event in
+                try await RemoteDaemonClient().streamNewSession(host: host, request: request, prompt: prompt) { event in
                     await self.handleTurnStreamEvent(event)
                 }
             }

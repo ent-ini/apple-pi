@@ -5,23 +5,23 @@ import ApplePiCore
 /// needs the event name and the joined data payload — the catalog stream
 /// is fire-and-forget: each snapshot replaces the previous one and we
 /// never replay missed events.
-package struct SSECatalogEvent: Sendable {
-    package let event: String
-    package let data: String
+public struct SSECatalogEvent: Sendable {
+    public let event: String
+    public let data: String
 }
 
 /// Typed events from the daemon's global `/sessions/stream` SSE channel.
 /// The first event on connect is always `snapshot` (full catalog);
 /// subsequent events are small deltas so the client does not have to
 /// reparse the whole catalog on every change.
-package enum CatalogStreamEvent: Sendable {
+public enum CatalogStreamEvent: Sendable {
     case snapshot(PiCatalogSnapshot)
     case sessionUpdated(PiSessionSummary)
     case sessionRemoved(sessionId: String)
     case runtimeChanged(sessionId: String, runtime: SessionRuntimeState)
     case unknown(String, String)
 
-    package var eventName: String {
+    public var eventName: String {
         switch self {
         case .snapshot: return "snapshot"
         case .sessionUpdated: return "session_updated"
@@ -32,24 +32,24 @@ package enum CatalogStreamEvent: Sendable {
     }
 }
 
-package struct RuntimeChangedPayload: Decodable {
-    package let sessionId: String?
-    package let runtime: RuntimePayload?
+public struct RuntimeChangedPayload: Decodable {
+    public let sessionId: String?
+    public let runtime: RuntimePayload?
 }
 
-package struct SessionRemovedPayload: Decodable {
-    package let sessionId: String
+public struct SessionRemovedPayload: Decodable {
+    public let sessionId: String
 }
 
-package struct RuntimePayload: Decodable {
-    package let sessionId: String?
-    package let sessionFile: String?
-    package let model: RuntimeModelPayload?
-    package let thinkingLevel: String?
-    package let tokens: RuntimePayloadTokenTotals?
-    package let contextUsage: RuntimePayloadContextUsage?
+public struct RuntimePayload: Decodable {
+    public let sessionId: String?
+    public let sessionFile: String?
+    public let model: RuntimeModelPayload?
+    public let thinkingLevel: String?
+    public let tokens: RuntimePayloadTokenTotals?
+    public let contextUsage: RuntimePayloadContextUsage?
 
-    package var runtimeState: SessionRuntimeState {
+    public var runtimeState: SessionRuntimeState {
         SessionRuntimeState(
             sessionID: sessionId,
             sessionPath: sessionFile,
@@ -75,25 +75,25 @@ package struct RuntimePayload: Decodable {
     }
 }
 
-package struct RuntimeModelPayload: Decodable {
-    package let id: String
-    package let name: String?
-    package let provider: String
-    package let contextWindow: Int?
+public struct RuntimeModelPayload: Decodable {
+    public let id: String
+    public let name: String?
+    public let provider: String
+    public let contextWindow: Int?
 }
 
-package struct RuntimePayloadTokenTotals: Decodable {
-    package let input: Int
-    package let output: Int
-    package let cacheRead: Int
-    package let cacheWrite: Int
-    package let total: Int
+public struct RuntimePayloadTokenTotals: Decodable {
+    public let input: Int
+    public let output: Int
+    public let cacheRead: Int
+    public let cacheWrite: Int
+    public let total: Int
 }
 
-package struct RuntimePayloadContextUsage: Decodable {
-    package let tokens: Int?
-    package let contextWindow: Int?
-    package let percent: Double?
+public struct RuntimePayloadContextUsage: Decodable {
+    public let tokens: Int?
+    public let contextWindow: Int?
+    public let percent: Double?
 }
 
 /// Line-oriented parser for Server-Sent Events. Implements the slice of
@@ -112,11 +112,11 @@ package struct RuntimePayloadContextUsage: Decodable {
 ///
 /// Malformed frames are dropped, not fatal. A single bad event from the
 /// daemon must never tear down the live subscription.
-package final class SSECatalogEventParser {
+public final class SSECatalogEventParser {
     private var currentEvent: String = "message"
     private var currentDataBuffer: [String] = []
 
-    package func feed(_ rawLine: String) -> SSECatalogEvent? {
+    public func feed(_ rawLine: String) -> SSECatalogEvent? {
         let line = rawLine.hasSuffix("\r") ? String(rawLine.dropLast()) : rawLine
 
         // Empty / blank line terminates the current event.

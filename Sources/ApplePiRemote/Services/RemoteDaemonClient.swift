@@ -1,10 +1,10 @@
 import Foundation
 import ApplePiCore
 
-package struct RemoteDaemonClient {
-    package init() {}
+public struct RemoteDaemonClient: Sendable {
+    public init() {}
 
-    package func testConnection(host: PiHostConfiguration, tokenOverride: String? = nil) async throws -> String {
+    public func testConnection(host: PiHostConfiguration, tokenOverride: String? = nil) async throws -> String {
         let _: HealthResponse = try await send(
             host: host,
             path: "/healthz",
@@ -24,19 +24,26 @@ package struct RemoteDaemonClient {
     /// frames are silently skipped — the stream only finishes (with an
     /// error) when the underlying HTTP request itself fails. The caller
     /// owns the reconnect cadence.
-    package func streamCatalogSnapshots(
+    public func streamCatalogSnapshots(
         host: PiHostConfiguration,
         tokenOverride: String? = nil
     ) -> AsyncThrowingStream<CatalogStreamEvent, Error> {
         AsyncThrowingStream { continuation in
+            let request: URLRequest
+            do {
+                request = try makeLiveRequest(
+                    host: host,
+                    path: "/sessions/stream",
+                    tokenOverride: tokenOverride,
+                    accept: "text/event-stream"
+                )
+            } catch {
+                continuation.finish(throwing: error)
+                return
+            }
+
             let worker = Task {
                 do {
-                    let request = try self.makeLiveRequest(
-                        host: host,
-                        path: "/sessions/stream",
-                        tokenOverride: tokenOverride,
-                        accept: "text/event-stream"
-                    )
                     let (bytes, response) = try await Self.liveSession.bytes(for: request)
                     guard let http = response as? HTTPURLResponse else {
                         throw RemoteDaemonError.invalidResponse
@@ -107,22 +114,29 @@ package struct RemoteDaemonClient {
     /// connection open and emits every newly appended JSONL line as an
     /// `event` frame. The caller still owns history pagination (`before`) and
     /// reconnect cadence; this stream is the fast path for live catch-up.
-    package func streamSessionEventPages(
+    public func streamSessionEventPages(
         host: PiHostConfiguration,
         sessionID: String,
         after: Int,
         tokenOverride: String? = nil
     ) -> AsyncThrowingStream<SessionEventsPage, Error> {
         AsyncThrowingStream { continuation in
+            let request: URLRequest
+            do {
+                request = try makeLiveRequest(
+                    host: host,
+                    path: "/sessions/\(encodedPathComponent(sessionID))/stream",
+                    queryItems: [URLQueryItem(name: "after", value: String(after))],
+                    tokenOverride: tokenOverride,
+                    accept: "text/event-stream"
+                )
+            } catch {
+                continuation.finish(throwing: error)
+                return
+            }
+
             let worker = Task {
                 do {
-                    let request = try self.makeLiveRequest(
-                        host: host,
-                        path: "/sessions/\(encodedPathComponent(sessionID))/stream",
-                        queryItems: [URLQueryItem(name: "after", value: String(after))],
-                        tokenOverride: tokenOverride,
-                        accept: "text/event-stream"
-                    )
                     let (bytes, response) = try await Self.liveSession.bytes(for: request)
                     guard let http = response as? HTTPURLResponse else {
                         throw RemoteDaemonError.invalidResponse
@@ -182,7 +196,7 @@ package struct RemoteDaemonClient {
         return (object["error"] as? String)?.nilIfBlank ?? data.nilIfBlank
     }
 
-    package func loadCatalog(host: PiHostConfiguration, activeProjectDirectory: String?, tokenOverride: String? = nil) async throws -> PiCatalogSnapshot {
+    public func loadCatalog(host: PiHostConfiguration, activeProjectDirectory: String?, tokenOverride: String? = nil) async throws -> PiCatalogSnapshot {
         let response: CatalogResponse = try await send(
             host: host,
             path: "/sessions",
@@ -192,7 +206,7 @@ package struct RemoteDaemonClient {
         return Self.catalogSnapshot(from: response)
     }
 
-    package func loadSessionEventPage(
+    public func loadSessionEventPage(
         host: PiHostConfiguration,
         sessionID: String,
         limit: Int? = 60,
@@ -226,7 +240,7 @@ package struct RemoteDaemonClient {
         )
     }
 
-    package func loadSessionEvents(
+    public func loadSessionEvents(
         host: PiHostConfiguration,
         sessionID: String,
         limit: Int? = 60,
@@ -245,7 +259,7 @@ package struct RemoteDaemonClient {
         return page.events
     }
 
-    package func loadSessionDefaults(host: PiHostConfiguration, workingDirectory: String?, tokenOverride: String? = nil) async throws -> SessionDefaultsSnapshot {
+    public func loadSessionDefaults(host: PiHostConfiguration, workingDirectory: String?, tokenOverride: String? = nil) async throws -> SessionDefaultsSnapshot {
         let response: SessionDefaultsResponse = try await send(
             host: host,
             path: "/runtime/defaults",
@@ -258,7 +272,7 @@ package struct RemoteDaemonClient {
         )
     }
 
-    package func loadSessionRuntime(host: PiHostConfiguration, sessionID: String, tokenOverride: String? = nil) async throws -> SessionRuntimeState {
+    public func loadSessionRuntime(host: PiHostConfiguration, sessionID: String, tokenOverride: String? = nil) async throws -> SessionRuntimeState {
         let response: SessionRuntimeResponse = try await send(
             host: host,
             path: "/sessions/\(encodedPathComponent(sessionID))/runtime",
@@ -267,7 +281,7 @@ package struct RemoteDaemonClient {
         return response.runtimeState
     }
 
-    package func loadAvailableModels(host: PiHostConfiguration, sessionID: String? = nil, tokenOverride: String? = nil) async throws -> [PiModelOption] {
+    public func loadAvailableModels(host: PiHostConfiguration, sessionID: String? = nil, tokenOverride: String? = nil) async throws -> [PiModelOption] {
         let response: AvailableModelsResponse = try await send(
             host: host,
             path: "/models",
@@ -276,7 +290,7 @@ package struct RemoteDaemonClient {
         return response.models.map(\.piModelOption)
     }
 
-    package func setSessionModel(
+    public func setSessionModel(
         host: PiHostConfiguration,
         sessionID: String,
         provider: String,
@@ -294,7 +308,7 @@ package struct RemoteDaemonClient {
         return response.runtimeState
     }
 
-    package func setSessionThinkingLevel(
+    public func setSessionThinkingLevel(
         host: PiHostConfiguration,
         sessionID: String,
         level: String,
@@ -311,7 +325,7 @@ package struct RemoteDaemonClient {
         return response.runtimeState
     }
 
-    package func renameSession(
+    public func renameSession(
         host: PiHostConfiguration,
         sessionID: String,
         name: String,
@@ -328,7 +342,7 @@ package struct RemoteDaemonClient {
         return Self.sessionSummary(from: response)
     }
 
-    package func listDirectories(host: PiHostConfiguration, path: String?, tokenOverride: String? = nil) async throws -> RemoteDirectoryListing {
+    public func listDirectories(host: PiHostConfiguration, path: String?, tokenOverride: String? = nil) async throws -> RemoteDirectoryListing {
         let response: FileListResponse = try await send(
             host: host,
             path: "/files",
@@ -344,7 +358,7 @@ package struct RemoteDaemonClient {
         )
     }
 
-    package func streamNewSession(
+    public func streamNewSession(
         host: PiHostConfiguration,
         request: PiLaunchRequest,
         prompt: String,
@@ -371,7 +385,7 @@ package struct RemoteDaemonClient {
         )
     }
 
-    package func streamSend(
+    public func streamSend(
         host: PiHostConfiguration,
         sessionID: String,
         prompt: String,
@@ -400,7 +414,7 @@ package struct RemoteDaemonClient {
         }
     }
 
-    package func abortSession(host: PiHostConfiguration, sessionID: String, tokenOverride: String? = nil) async throws {
+    public func abortSession(host: PiHostConfiguration, sessionID: String, tokenOverride: String? = nil) async throws {
         let _: EmptyOKResponse = try await send(
             host: host,
             path: "/sessions/\(encodedPathComponent(sessionID))/abort",
@@ -411,7 +425,7 @@ package struct RemoteDaemonClient {
         )
     }
 
-    package func steerSession(
+    public func steerSession(
         host: PiHostConfiguration,
         sessionID: String,
         prompt: String,
@@ -428,7 +442,7 @@ package struct RemoteDaemonClient {
         )
     }
 
-    package func compactSession(
+    public func compactSession(
         host: PiHostConfiguration,
         sessionID: String,
         instructions: String = "",
@@ -444,7 +458,7 @@ package struct RemoteDaemonClient {
         )
     }
 
-    package func downloadFile(host: PiHostConfiguration, path: String, baseDirectory: String? = nil, tokenOverride: String? = nil) async throws -> RemoteFileDownload {
+    public func downloadFile(host: PiHostConfiguration, path: String, baseDirectory: String? = nil, tokenOverride: String? = nil) async throws -> RemoteFileDownload {
         var queryItems = [URLQueryItem(name: "path", value: path)]
         if let baseDirectory = baseDirectory?.nilIfBlank {
             queryItems.append(URLQueryItem(name: "base", value: baseDirectory))
@@ -472,7 +486,7 @@ package struct RemoteDaemonClient {
         )
     }
 
-    package func uploadAttachment(host: PiHostConfiguration, attachment: ChatAttachment) async throws -> UploadedAttachmentReference {
+    public func uploadAttachment(host: PiHostConfiguration, attachment: ChatAttachment) async throws -> UploadedAttachmentReference {
         let boundary = "ApplePiBoundary-\(UUID().uuidString)"
         var request = try makeRequest(
             host: host,
@@ -519,7 +533,7 @@ package struct RemoteDaemonClient {
     /// helper so the test suite can pin the exact wire format (in
     /// particular the sanitised filename and the `Content-Disposition`
     /// header) without having to mock `URLSession`.
-    package static func makeUploadMultipartBody(
+    public static func makeUploadMultipartBody(
         fileName: String,
         mimeType: String?,
         fileData: Data,
@@ -839,7 +853,7 @@ private final class RemoteDaemonDateParsers: @unchecked Sendable {
     }
 }
 
-package enum RemoteDaemonError: LocalizedError {
+public enum RemoteDaemonError: LocalizedError {
     case missingBaseURL
     case invalidBaseURL
     case missingToken
@@ -847,7 +861,7 @@ package enum RemoteDaemonError: LocalizedError {
     case requestFailed(status: Int, body: String?)
     case decodingFailed(String)
 
-    package var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .missingBaseURL:
             return "Remote API URL is not configured."
@@ -1004,11 +1018,11 @@ private struct RuntimeContextUsage: Decodable {
     let percent: Double?
 }
 
-package struct SessionDefaultsSnapshot: Sendable {
-    package let runtimeState: SessionRuntimeState
-    package let availableModels: [PiModelOption]
+public struct SessionDefaultsSnapshot: Sendable {
+    public let runtimeState: SessionRuntimeState
+    public let availableModels: [PiModelOption]
 
-    package init(runtimeState: SessionRuntimeState, availableModels: [PiModelOption]) {
+    public init(runtimeState: SessionRuntimeState, availableModels: [PiModelOption]) {
         self.runtimeState = runtimeState
         self.availableModels = availableModels
     }
@@ -1023,25 +1037,25 @@ private struct AvailableModelsResponse: Decodable {
     let models: [RuntimeModelRecord]
 }
 
-package struct RemoteFileDownload: Sendable {
-    package let data: Data
-    package let fileName: String
-    package let mimeType: String?
+public struct RemoteFileDownload: Sendable {
+    public let data: Data
+    public let fileName: String
+    public let mimeType: String?
 
-    package init(data: Data, fileName: String, mimeType: String?) {
+    public init(data: Data, fileName: String, mimeType: String?) {
         self.data = data
         self.fileName = fileName
         self.mimeType = mimeType
     }
 }
 
-package struct UploadedAttachmentReference: Codable, Hashable, Sendable {
-    package let path: String
-    package let fileName: String
-    package let mimeType: String?
-    package let size: Int64?
+public struct UploadedAttachmentReference: Codable, Hashable, Sendable {
+    public let path: String
+    public let fileName: String
+    public let mimeType: String?
+    public let size: Int64?
 
-    package init(path: String, fileName: String, mimeType: String?, size: Int64?) {
+    public init(path: String, fileName: String, mimeType: String?, size: Int64?) {
         self.path = path
         self.fileName = fileName
         self.mimeType = mimeType

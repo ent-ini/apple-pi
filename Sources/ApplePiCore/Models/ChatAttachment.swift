@@ -1,20 +1,20 @@
 import Foundation
 
-package struct ChatAttachment: Identifiable, Hashable, Sendable {
-    package enum Kind: String, Hashable, Sendable {
+public struct ChatAttachment: Identifiable, Hashable, Sendable {
+    public enum Kind: String, Hashable, Sendable {
         case image
         case file
         case audio
     }
 
-    package let id: UUID
-    package let kind: Kind
-    package let fileURL: URL
-    package let displayName: String
-    package let mimeType: String?
-    package let size: Int64?
+    public let id: UUID
+    public let kind: Kind
+    public let fileURL: URL
+    public let displayName: String
+    public let mimeType: String?
+    public let size: Int64?
 
-    package init(
+    public init(
         id: UUID = UUID(),
         kind: Kind,
         fileURL: URL,
@@ -30,11 +30,11 @@ package struct ChatAttachment: Identifiable, Hashable, Sendable {
         self.size = size
     }
 
-    package var filePath: String {
+    public var filePath: String {
         fileURL.path
     }
 
-    package var isImage: Bool {
+    public var isImage: Bool {
         kind == .image
     }
 }

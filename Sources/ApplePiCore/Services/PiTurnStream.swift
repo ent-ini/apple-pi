@@ -1,24 +1,24 @@
 import Foundation
 
-package struct PiSessionBinding: Sendable {
-    package let sessionID: String?
-    package let sessionPath: String?
-    package let title: String
-    package let workingDirectory: String?
+public struct PiSessionBinding: Sendable {
+    public let sessionID: String?
+    public let sessionPath: String?
+    public let title: String
+    public let workingDirectory: String?
 
-    package init(sessionID: String?, sessionPath: String?, title: String, workingDirectory: String?) {
+    public init(sessionID: String?, sessionPath: String?, title: String, workingDirectory: String?) {
         self.sessionID = sessionID
         self.sessionPath = sessionPath
         self.title = title
         self.workingDirectory = workingDirectory
     }
 
-    package var key: String {
+    public var key: String {
         sessionPath ?? sessionID ?? "pending-session"
     }
 }
 
-package enum PiTurnStreamEvent: Sendable {
+public enum PiTurnStreamEvent: Sendable {
     case sessionBound(PiSessionBinding)
     case sessionHeader(SessionMeta)
     case sessionEvents([SessionEvent], isFinal: Bool)
@@ -29,8 +29,8 @@ package enum PiTurnStreamEvent: Sendable {
     case streamError(String)
 }
 
-package enum PiTurnStreamParser {
-    package static func parseLine(_ rawLine: String) -> PiTurnStreamEvent? {
+public enum PiTurnStreamParser {
+    public static func parseLine(_ rawLine: String) -> PiTurnStreamEvent? {
         let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
               let data = trimmed.data(using: .utf8),

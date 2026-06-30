@@ -1,11 +1,11 @@
 import Foundation
 
-package enum PiTrustStatus: Equatable, Sendable {
+public enum PiTrustStatus: Equatable, Sendable {
     case trusted
     case untrusted
     case unknown
 
-    package var title: String {
+    public var title: String {
         switch self {
         case .trusted: "Trusted"
         case .untrusted: "Untrusted"
@@ -14,23 +14,23 @@ package enum PiTrustStatus: Equatable, Sendable {
     }
 }
 
-package struct PiConfigurationSummary: Equatable, Sendable {
-    package var projectDirectory: String?
-    package var isRemote: Bool = false
-    package var trustStatus: PiTrustStatus
-    package var globalSettingsPath: String
-    package var projectSettingsPath: String?
-    package var piDirectoryPath: String?
-    package var agentDirectoryPath: String
-    package var sessionRoot: String
-    package var settingsCount: Int
-    package var contextFileCount: Int
-    package var resourceCount: Int
-    package var settingsPaths: [String]
-    package var contextFilePaths: [String]
-    package var resourceRootPaths: [String]
+public struct PiConfigurationSummary: Equatable, Sendable {
+    public var projectDirectory: String?
+    public var isRemote: Bool = false
+    public var trustStatus: PiTrustStatus
+    public var globalSettingsPath: String
+    public var projectSettingsPath: String?
+    public var piDirectoryPath: String?
+    public var agentDirectoryPath: String
+    public var sessionRoot: String
+    public var settingsCount: Int
+    public var contextFileCount: Int
+    public var resourceCount: Int
+    public var settingsPaths: [String]
+    public var contextFilePaths: [String]
+    public var resourceRootPaths: [String]
 
-    package init(
+    public init(
         projectDirectory: String?,
         isRemote: Bool = false,
         trustStatus: PiTrustStatus,
@@ -62,11 +62,11 @@ package struct PiConfigurationSummary: Equatable, Sendable {
         self.resourceRootPaths = resourceRootPaths
     }
 
-    package var hasProjectContext: Bool {
+    public var hasProjectContext: Bool {
         projectDirectory != nil
     }
 
-    package var trustDisplayTitle: String {
+    public var trustDisplayTitle: String {
         if isRemote { return "Remote API" }
         guard hasProjectContext else { return "Global" }
         if settingsCount <= 1 && contextFileCount <= 1 {
@@ -75,7 +75,7 @@ package struct PiConfigurationSummary: Equatable, Sendable {
         return trustStatus.title
     }
 
-    package var trustDetail: String {
+    public var trustDetail: String {
         if isRemote {
             return "This session group is on a remote host reached through pi-appd. Local file actions and trust checks are unavailable from the Mac client."
         }
@@ -95,7 +95,7 @@ package struct PiConfigurationSummary: Equatable, Sendable {
         }
     }
 
-    package static func empty(host: PiHostConfiguration) -> PiConfigurationSummary {
+    public static func empty(host: PiHostConfiguration) -> PiConfigurationSummary {
         let agentDirectory = host.agentDirectory.expandingTilde
         return PiConfigurationSummary(
             projectDirectory: nil,
@@ -115,7 +115,7 @@ package struct PiConfigurationSummary: Equatable, Sendable {
         )
     }
 
-    package static func remote(host: PiHostConfiguration, projectDirectory: String?) -> PiConfigurationSummary {
+    public static func remote(host: PiHostConfiguration, projectDirectory: String?) -> PiConfigurationSummary {
         let agentDirectory = host.agentDirectory.nilIfBlank ?? "~/.pi/agent"
         let projectDirectory = projectDirectory?.nilIfBlank
         return PiConfigurationSummary(
@@ -137,17 +137,17 @@ package struct PiConfigurationSummary: Equatable, Sendable {
     }
 }
 
-package struct PiSessionRootResolution: Equatable, Sendable {
-    package let roots: [String]
-    package let displayRoot: String
+public struct PiSessionRootResolution: Equatable, Sendable {
+    public let roots: [String]
+    public let displayRoot: String
 
-    package init(roots: [String], displayRoot: String) {
+    public init(roots: [String], displayRoot: String) {
         self.roots = roots
         self.displayRoot = displayRoot
     }
 }
 
-package enum PiConfigurationMetric: Sendable {
+public enum PiConfigurationMetric: Sendable {
     case config
     case instructions
     case resources

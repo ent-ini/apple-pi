@@ -1,32 +1,32 @@
 import Foundation
 
-package struct SubagentSession: Identifiable, Hashable, Sendable {
-    package let id: String
-    package let callId: String
-    package let name: String
-    package let model: String?
-    package let task: String
-    package let cwd: String?
-    package let status: String
-    package let output: String?
-    package let isError: Bool
+public struct SubagentSession: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let callId: String
+    public let name: String
+    public let model: String?
+    public let task: String
+    public let cwd: String?
+    public let status: String
+    public let output: String?
+    public let isError: Bool
 
-    package var displayModel: String {
+    public var displayModel: String {
         model?.nilIfBlank ?? "default model"
     }
 
-    package var displayStatus: String {
+    public var displayStatus: String {
         let value = status.trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? (output == nil ? "running" : "completed") : value
     }
 
-    package var taskPreview: String {
+    public var taskPreview: String {
         let trimmed = task.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "No task text" }
         return trimmed.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
     }
 
-    package static func extract(from events: [SessionEvent]) -> [SubagentSession] {
+    public static func extract(from events: [SessionEvent]) -> [SubagentSession] {
         var calls: [(call: ToolCall, lineIndex: Int)] = []
         var resultsByCallId: [String: ToolResult] = [:]
 
