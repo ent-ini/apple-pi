@@ -4,6 +4,22 @@ import Testing
 @testable import ApplePiCore
 @testable import ApplePiRemote
 
+private actor SessionEventsPageBox {
+    private var page: SessionEventsPage
+
+    init(_ page: SessionEventsPage) {
+        self.page = page
+    }
+
+    func get() -> SessionEventsPage {
+        page
+    }
+
+    func set(_ page: SessionEventsPage) {
+        self.page = page
+    }
+}
+
 // MARK: - ChatSession cancellation
 
 @MainActor
@@ -206,6 +222,71 @@ import Testing
 
     #expect(session.hasEarlierHistory)
     #expect(session.firstPersistedLineIndex == 2)
+}
+
+@MainActor
+@Test func chatSessionPagedReloadKeepsPreviouslyLoadedRowsVisible() async throws {
+    let pageBox = SessionEventsPageBox(SessionEventsPage(
+        events: [
+            .message(
+                Message(id: "m10", role: .assistant, content: [.text("ten")], model: nil, timestamp: nil, parentId: nil),
+                lineIndex: 10
+            )
+        ],
+        firstLine: 10,
+        lastLine: 10,
+        hasMoreBefore: true,
+        hasMoreAfter: false
+    ))
+
+    let session = ChatSession(
+        key: "test",
+        title: "Test",
+        eventLoader: { await pageBox.get() },
+        historyPageLoader: { _, _ in
+            SessionEventsPage(
+                events: [
+                    .message(
+                        Message(id: "m5", role: .user, content: [.text("older user prompt")], model: nil, timestamp: nil, parentId: nil),
+                        lineIndex: 5
+                    )
+                ],
+                firstLine: 5,
+                lastLine: 5,
+                hasMoreBefore: true,
+                hasMoreAfter: true
+            )
+        }
+    )
+
+    session.loadFromDisk(force: true)
+    try await waitUntil { session.firstPersistedLineIndex == 10 }
+    session.loadEarlierHistory(limit: 60)
+    try await waitUntil { session.firstPersistedLineIndex == 5 }
+
+    await pageBox.set(SessionEventsPage(
+        events: [
+            .message(
+                Message(id: "m11", role: .assistant, content: [.text("eleven")], model: nil, timestamp: nil, parentId: nil),
+                lineIndex: 11
+            )
+        ],
+        firstLine: 11,
+        lastLine: 11,
+        hasMoreBefore: true,
+        hasMoreAfter: false
+    ))
+    session.loadFromDisk(force: true)
+    try await waitUntil { session.lastPersistedLineIndex == 11 }
+
+    #expect(session.events.contains { event in
+        if case .message(let message, _) = event { return message.id == "m5" }
+        return false
+    })
+    #expect(session.events.contains { event in
+        if case .message(let message, _) = event { return message.id == "m11" }
+        return false
+    })
 }
 
 @MainActor

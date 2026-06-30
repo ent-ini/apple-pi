@@ -15,12 +15,31 @@ struct MarkdownText: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Self.cachedBlocks(for: text)) { block in
-                blockView(block)
+        if usesSingleSelectableText {
+            // SwiftUI selection is scoped per Text view. Plain multi-paragraph
+            // chat messages used to be split into multiple Text views, so a
+            // drag could only select one block at a time. Render simple
+            // paragraph-only messages as one Text so selection can span the
+            // whole bubble.
+            inlineMarkdownText(text)
+                .font(.body)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Self.cachedBlocks(for: text)) { block in
+                    blockView(block)
+                }
             }
+            .textSelection(.enabled)
         }
-        .textSelection(.enabled)
+    }
+
+    private var usesSingleSelectableText: Bool {
+        Self.cachedBlocks(for: text).allSatisfy { block in
+            if case .paragraph = block.kind { return true }
+            return false
+        }
     }
 
     @ViewBuilder

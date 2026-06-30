@@ -506,10 +506,10 @@ final class ChatSession: ObservableObject, Identifiable {
                 statusMessage = "Session is not backed by a file yet."
                 finishLoad(completionGeneration: completionGeneration)
             case .loaded(let page, let modificationDate):
-                persistedEvents = page.events
-                hasEarlierHistory = page.hasMoreBefore
+                persistedEvents = reloadedPersistedEvents(from: page)
+                hasEarlierHistory = hasEarlierHistoryAvailable(afterReloading: page)
                 updateTitleFromSessionMetadata(in: page.events)
-                reconcileTransientEvents(with: page.events)
+                reconcileTransientEvents(with: persistedEvents)
                 rebuildEvents()
                 statusMessage = page.events.isEmpty ? "Session is empty." : "\(page.events.count) events"
                 hasLoadedOnce = true
@@ -559,6 +559,38 @@ final class ChatSession: ObservableObject, Identifiable {
     private func rebuildEvents() {
         events = persistedEvents + visibleTransientEvents
         streamRevision &+= 1
+    }
+
+    private func reloadedPersistedEvents(from page: SessionEventsPage) -> [SessionEvent] {
+        guard hasLoadedOnce, page.hasMoreBefore || page.hasMoreAfter else {
+            return page.events
+        }
+
+        // Remote reloads usually fetch only the latest page. If older rows were
+        // already visible, replacing the transcript with just that page makes
+        // them appear to vanish. Keep the loaded window and merge in the fresh
+        // page; a full/non-paged reload still replaces the transcript above.
+        let incomingIDs = Set(page.events.map(\.id))
+        let retainedEvents = persistedEvents.filter { !incomingIDs.contains($0.id) }
+        return (retainedEvents + page.events)
+            .enumerated()
+            .sorted { lhs, rhs in
+                let lhsLine = lhs.element.lineIndex
+                let rhsLine = rhs.element.lineIndex
+                if lhsLine != rhsLine { return lhsLine < rhsLine }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
+    }
+
+    private func hasEarlierHistoryAvailable(afterReloading page: SessionEventsPage) -> Bool {
+        guard hasLoadedOnce, page.hasMoreBefore || page.hasMoreAfter else {
+            return page.hasMoreBefore
+        }
+        guard let firstLine = persistedEvents.first?.lineIndex else {
+            return page.hasMoreBefore
+        }
+        return firstLine > 0
     }
 
     private var visibleTransientEvents: [SessionEvent] {

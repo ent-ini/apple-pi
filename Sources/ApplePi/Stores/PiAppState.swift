@@ -815,10 +815,14 @@ final class PiAppState: ObservableObject {
         let effectivePrompt = trimmed.isEmpty ? "Please inspect the attached item(s)." : trimmed
         let taggedPrompt = sourceTaggedAppPrompt(effectivePrompt)
         statusMessage = "Sending to Pi..."
+        // UI-wise queued input is just another user message. The daemon decides
+        // whether /input becomes a fresh turn or active-run steering; the app
+        // should render the accepted prompt immediately in both cases.
+        session.appendSteeringPrompt(taggedPrompt, attachments: attachments)
+        onAccepted?()
         let remoteAPIHost = host
         let steeringGeneration = session.currentSendGeneration
-        let acceptedCallback = onAccepted.map(MainActorCallback.init)
-        Task { [weak self, weak session, acceptedCallback] in
+        Task { [weak self, weak session] in
             do {
                 let daemonAttachments = try await self?.uploadAttachmentsIfNeeded(attachments) ?? []
                 try await RemoteDaemonClient().submitSessionInput(
@@ -833,9 +837,7 @@ final class PiAppState: ObservableObject {
                           session.sessionID == sessionID,
                           session.currentSendGeneration == steeringGeneration,
                           session.hasActiveSend else { return }
-                    session.appendSteeringPrompt(taggedPrompt, attachments: attachments)
                     self.statusMessage = "Sent to Pi"
-                    acceptedCallback?()
                 }
             } catch {
                 await MainActor.run {

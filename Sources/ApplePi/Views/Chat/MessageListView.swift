@@ -14,7 +14,6 @@ struct MessageListView: View {
 
     @State private var isAnchoredToBottom = true
     @State private var stickyAutoScrollUntil: Date?
-    @State private var visibilityFrames: [String: CGRect] = [:]
     @State private var hasCompletedInitialPlacement = false
     @State private var bottomScrollWorkItems: [DispatchWorkItem] = []
     @State private var ensureVisibleWorkItems: [DispatchWorkItem] = []
@@ -62,11 +61,6 @@ struct MessageListView: View {
                         viewportHeight: proxy.size.height,
                         scrollProxy: scrollProxy
                     )
-                }
-                .onPreferenceChange(ChatVisibilityTargetPreferenceKey.self) { frames in
-                    if visibilityFrames != frames {
-                        visibilityFrames = frames
-                    }
                 }
                 .onPreferenceChange(HistoryLoadRowMinYPreferenceKey.self) { minY in
                     historyLoadRowMinY = minY
@@ -330,7 +324,7 @@ struct MessageListView: View {
         bottomScrollWorkItems = workItems
     }
 
-    private func ensureVisible(_ targetID: String, using scrollProxy: ScrollViewProxy, viewportHeight: CGFloat) {
+    private func ensureVisible(_ targetID: String, using scrollProxy: ScrollViewProxy, viewportHeight _: CGFloat) {
         stickyAutoScrollUntil = nil
         cancelBottomScrollWorkItems()
         cancelEnsureVisibleWorkItems()
@@ -340,22 +334,8 @@ struct MessageListView: View {
         let workItems = Self.ensureVisibleSettleDelays.enumerated().map { index, delay in
             let item = DispatchWorkItem {
                 guard ensureVisibleGeneration == generation else { return }
-                guard let frame = visibilityFrames[targetID] else { return }
-                let topInset: CGFloat = 24
-                let bottomInset: CGFloat = 24
-                let height = frame.height
-                // If the block fits inside the viewport with a small inset, do
-                // not touch the scroll position at all — it is already where
-                // the user expects to see it (e.g. short thinking disclosure
-                // sitting in the middle of the screen).
-                if height <= viewportHeight - topInset - bottomInset {
-                    let overlapsTop = frame.minY < topInset
-                    let overlapsBottom = frame.maxY > viewportHeight - bottomInset
-                    if !overlapsTop && !overlapsBottom { return }
-                }
-                let anchor: UnitPoint = height > viewportHeight - topInset - bottomInset ? .top : .bottom
                 withAnimation(.easeOut(duration: 0.18)) {
-                    scrollProxy.scrollTo(targetID, anchor: anchor)
+                    scrollProxy.scrollTo(targetID, anchor: .top)
                 }
                 if index == Self.ensureVisibleSettleDelays.count - 1,
                    ensureVisibleGeneration == generation {
@@ -399,14 +379,6 @@ private struct HistoryLoadRowMinYPreferenceKey: PreferenceKey {
     }
 }
 
-struct ChatVisibilityTargetPreferenceKey: PreferenceKey {
-    static let defaultValue: [String: CGRect] = [:]
-
-    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
-    }
-}
-
 struct ChatEnsureVisibleAction: @unchecked Sendable {
     let action: @MainActor (String) -> Void
 
@@ -429,16 +401,7 @@ extension EnvironmentValues {
 
 extension View {
     func chatVisibilityTarget(_ id: String) -> some View {
-        self
-            .id(id)
-            .background {
-                GeometryReader { proxy in
-                    Color.clear.preference(
-                        key: ChatVisibilityTargetPreferenceKey.self,
-                        value: [id: proxy.frame(in: .named(MessageListView.scrollCoordinateSpaceName))]
-                    )
-                }
-            }
+        self.id(id)
     }
 }
 
