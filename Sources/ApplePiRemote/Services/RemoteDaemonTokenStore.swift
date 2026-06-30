@@ -1,17 +1,16 @@
 import Foundation
 import ApplePiCore
-import ApplePiRemote
 
 /// Stores per-remote-daemon bearer tokens on disk under Application Support,
 /// one file per daemon URL, mode 0600.
-enum RemoteDaemonTokenStore {
-    nonisolated(unsafe) static var applicationSupportOverride: String?
+package enum RemoteDaemonTokenStore {
+    package nonisolated(unsafe) static var applicationSupportOverride: String?
 
-    enum TokenError: LocalizedError {
+    package enum TokenError: LocalizedError {
         case homeDirectoryUnavailable
         case ioFailure(String)
 
-        var errorDescription: String? {
+        package var errorDescription: String? {
             switch self {
             case .homeDirectoryUnavailable:
                 return "Could not resolve the Application Support directory."
@@ -21,12 +20,12 @@ enum RemoteDaemonTokenStore {
         }
     }
 
-    static func saveToken(_ token: String, for host: PiHostConfiguration) throws {
+    package static func saveToken(_ token: String, for host: PiHostConfiguration) throws {
         let data = Data(token.utf8)
         try write(data: data, for: host)
     }
 
-    static func deleteToken(for host: PiHostConfiguration) throws {
+    package static func deleteToken(for host: PiHostConfiguration) throws {
         let fileManager = Foundation.FileManager()
         let path = try tokenPath(for: host)
         if fileManager.fileExists(atPath: path) {
@@ -34,12 +33,12 @@ enum RemoteDaemonTokenStore {
         }
     }
 
-    static func hasToken(for host: PiHostConfiguration) -> Bool {
+    package static func hasToken(for host: PiHostConfiguration) -> Bool {
         guard let path = try? tokenPath(for: host) else { return false }
         return Foundation.FileManager().fileExists(atPath: path)
     }
 
-    static func readToken(for host: PiHostConfiguration) -> String? {
+    package static func readToken(for host: PiHostConfiguration) -> String? {
         guard let path = try? tokenPath(for: host),
               let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else {
             return nil
@@ -47,7 +46,7 @@ enum RemoteDaemonTokenStore {
         return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
     }
 
-    static func tokenPath(for host: PiHostConfiguration) throws -> String {
+    package static func tokenPath(for host: PiHostConfiguration) throws -> String {
         let support = try supportDirectory()
         let hostHash = sanitizedHostIdentifier(for: host)
         return "\(support)/\(hostHash).token"

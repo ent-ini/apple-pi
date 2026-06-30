@@ -1,7 +1,6 @@
 import Foundation
 import Darwin
 import ApplePiCore
-import ApplePiRemote
 
 /// Securely writes small secret blobs (daemon bearer tokens,
 /// third-party API keys, etc.) to disk with mode 0600 from the very first
@@ -23,15 +22,15 @@ import ApplePiRemote
 /// This helper fixes all three: a unique temp name, a file created with
 /// `O_CREAT|O_EXCL` and mode 0o600 from the start, and a directory
 /// `chmod` whose failure is propagated as an error to the caller.
-enum SecureSecretFileWriter {
-    enum WriterError: LocalizedError {
+package enum SecureSecretFileWriter {
+    package enum WriterError: LocalizedError {
         case directoryCreationFailed(String)
         case directoryChmodFailed(String)
         case writeFailed(String)
         case renameFailed(String)
         case finalChmodFailed(String)
 
-        var errorDescription: String? {
+        package var errorDescription: String? {
             switch self {
             case .directoryCreationFailed(let detail):
                 return "Could not create directory: \(detail)"
@@ -51,7 +50,7 @@ enum SecureSecretFileWriter {
     /// with `directoryMode` (default 0o700); the file itself is created
     /// with `fileMode` (default 0o600) and chmod'd again after the rename
     /// to defend against any filesystem that does not preserve the mode.
-    static func writeAtomically(
+    package static func writeAtomically(
         data: Data,
         to path: String,
         directoryMode: mode_t = 0o700,
