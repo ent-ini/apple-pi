@@ -70,7 +70,6 @@ struct ChatSessionView: View {
             ZStack(alignment: .topLeading) {
                 VStack(spacing: 0) {
                     MessageListView(session: session)
-                    Divider().opacity(0.25)
                     composerArea
                 }
 

@@ -161,13 +161,14 @@ struct MessageListView: View {
     private static let bottomAnchorID = "chat.list.bottom"
     static let scrollCoordinateSpaceName = "chat.list.scroll"
     private static let bottomStickinessBuffer: CGFloat = 24
-    private static let historyAutoLoadDistance: CGFloat = 240
+    private static let historyAutoLoadDistance: CGFloat = 900
     // Keep this small so a normal two-finger trackpad scroll immediately
     // breaks the streaming auto-scroll lock. A large value made touchpad
     // scrolling feel ignored unless the user dragged the scrollbar thumb.
     private static let stickyBreakawayDistance: CGFloat = 32
     private static let bottomReachedEpsilon: CGFloat = 3
     private static let stickyAutoScrollDuration: TimeInterval = 0
+    private static let historyPageSize = 240
     private static let scrollSettleDelays: [TimeInterval] = [0.04, 0.16, 0.34]
     private static let ensureVisibleSettleDelays: [TimeInterval] = [0.04, 0.16, 0.34, 0.65]
 
@@ -233,7 +234,7 @@ struct MessageListView: View {
               historyLoadRowMinY <= Self.historyAutoLoadDistance else {
             return
         }
-        session.loadEarlierHistory()
+        session.loadEarlierHistory(limit: Self.historyPageSize)
     }
 
     private var isStickyAutoScrollActive: Bool {
