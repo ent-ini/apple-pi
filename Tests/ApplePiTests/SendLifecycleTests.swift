@@ -252,8 +252,8 @@ import Testing
 
     #expect(session.firstPersistedLineIndex == 0)
     #expect(session.hasEarlierHistory == false)
-    #expect(session.pendingHistoryAnchorID == "m2")
-    #expect(session.consumePendingHistoryAnchorID() == "m2")
+    #expect(session.pendingHistoryAnchorID == "message:m2")
+    #expect(session.consumePendingHistoryAnchorID() == "message:m2")
 }
 
 // MARK: - ChatSessionStore close/closeAll cancellation
