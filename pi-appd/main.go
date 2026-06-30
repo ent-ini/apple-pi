@@ -591,6 +591,14 @@ func (s *server) handleSessionSubroutes(w http.ResponseWriter, r *http.Request) 
 		s.handleSessionSteer(w, r, sessionID)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "send" && s.activeRunForSession(sessionID) != nil {
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.handleSessionSendToActiveRun(w, r, sessionID, nil)
+		return
+	}
 	record, ok, err := s.lookupSessionRecord(sessionID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -1301,19 +1309,8 @@ func (s *server) handleSessionAbort(w http.ResponseWriter, r *http.Request, sess
 }
 
 func (s *server) handleSessionSteer(w http.ResponseWriter, r *http.Request, sessionID string) {
-	var request sendSessionRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
-	}
-	prompt := strings.TrimSpace(request.Prompt)
-	if prompt == "" {
-		writeError(w, http.StatusBadRequest, "prompt is required")
-		return
-	}
-	rpcPrompt, err := s.buildRPCPromptPayload(prompt, request.Attachments)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	rpcPrompt, ok := s.decodeSendPrompt(w, r)
+	if !ok {
 		return
 	}
 	if err := s.routePromptToActiveRun(sessionID, rpcPrompt); err != nil {
@@ -1321,6 +1318,37 @@ func (s *server) handleSessionSteer(w http.ResponseWriter, r *http.Request, sess
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *server) handleSessionSendToActiveRun(w http.ResponseWriter, r *http.Request, sessionID string, binding *sessionBoundRecord) {
+	rpcPrompt, ok := s.decodeSendPrompt(w, r)
+	if !ok {
+		return
+	}
+	if err := s.routePromptToActiveRun(sessionID, rpcPrompt); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeQueuedSteerAccepted(w, binding)
+}
+
+func (s *server) decodeSendPrompt(w http.ResponseWriter, r *http.Request) (rpcPromptCommand, bool) {
+	var request sendSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return rpcPromptCommand{}, false
+	}
+	prompt := strings.TrimSpace(request.Prompt)
+	if prompt == "" {
+		writeError(w, http.StatusBadRequest, "prompt is required")
+		return rpcPromptCommand{}, false
+	}
+	rpcPrompt, err := s.buildRPCPromptPayload(prompt, request.Attachments)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return rpcPromptCommand{}, false
+	}
+	return rpcPrompt, true
 }
 
 func (s *server) routePromptToActiveRun(sessionID string, rpcPrompt rpcPromptCommand) error {

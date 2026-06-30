@@ -452,6 +452,36 @@ func TestRefreshCatalogAppliesGeneratingState(t *testing.T) {
 	}
 }
 
+func TestHandleSessionsSendRoutesActiveRunBeforeCatalogLookup(t *testing.T) {
+	server := &server{agentDir: t.TempDir()}
+	stdin := &bytes.Buffer{}
+	run := &activeRun{}
+	run.setStdin(bufferWriteCloser{stdin})
+	if !server.reserveActiveRun("new-session", run) {
+		t.Fatal("failed to reserve active run")
+	}
+	defer server.unregisterActiveRun("new-session", run)
+
+	body, err := json.Marshal(sendSessionRequest{Prompt: "early follow-up"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/sessions/new-session/send", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+
+	server.handleSessionSubroutes(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(stdin.String(), `"streamingBehavior":"steer"`) || !strings.Contains(stdin.String(), "early follow-up") {
+		t.Fatalf("stdin = %q, want steer prompt", stdin.String())
+	}
+	if !strings.Contains(response.Body.String(), `"type":"output_complete"`) {
+		t.Fatalf("response body = %q, want output_complete", response.Body.String())
+	}
+}
+
 func TestHandleSessionSendRoutesActiveRunToSteer(t *testing.T) {
 	agentDir := t.TempDir()
 	server := &server{agentDir: agentDir}
