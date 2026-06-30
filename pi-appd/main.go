@@ -251,6 +251,7 @@ type attachmentReference struct {
 }
 
 type createSessionRequest struct {
+	SessionID            string                `json:"sessionId"`
 	WorkingDirectory     string                `json:"workingDirectory"`
 	SessionName          string                `json:"sessionName"`
 	IsTemporary          bool                  `json:"isTemporary"`
@@ -451,6 +452,7 @@ func main() {
 	mux.HandleFunc("/healthz", srv.handleHealthz)
 	mux.HandleFunc("/models", srv.handleModels)
 	mux.HandleFunc("/runtime/defaults", srv.handleRuntimeDefaults)
+	mux.HandleFunc("/input", srv.handleInput)
 	mux.HandleFunc("/sessions", srv.handleSessions)
 	mux.HandleFunc("/sessions/", srv.handleSessionSubroutes)
 	mux.HandleFunc("/files", srv.handleFiles)
@@ -1151,12 +1153,33 @@ func offsetForLineStart(data []byte, lineIndex int) int64 {
 	return int64(len(data))
 }
 
+func (s *server) handleInput(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var request createSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if sessionID := strings.TrimSpace(request.SessionID); sessionID != "" {
+		s.handleSessionInputRequest(w, r.Context().Done(), sessionID, request)
+		return
+	}
+	s.handleCreateSessionRequest(w, r, request)
+}
+
 func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var request createSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
+	s.handleCreateSessionRequest(w, r, request)
+}
+
+func (s *server) handleCreateSessionRequest(w http.ResponseWriter, r *http.Request, request createSessionRequest) {
 	if request.IsTemporary {
 		writeError(w, http.StatusBadRequest, "temporary sessions are not supported yet")
 		return
@@ -1226,6 +1249,27 @@ func (s *server) handleSessionSend(w http.ResponseWriter, r *http.Request, recor
 		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
+	s.handleSessionSendRequest(w, r.Context().Done(), record, request)
+}
+
+func (s *server) handleSessionInputRequest(w http.ResponseWriter, requestDone <-chan struct{}, sessionID string, request createSessionRequest) {
+	if s.activeRunForSession(sessionID) != nil {
+		s.handleSessionSendToActiveRunFromRequest(w, sessionID, sendSessionRequest{Prompt: request.Prompt, Attachments: request.Attachments}, nil)
+		return
+	}
+	record, ok, err := s.lookupSessionRecord(sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "unknown session")
+		return
+	}
+	s.handleSessionSendRequest(w, requestDone, record, sendSessionRequest{Prompt: request.Prompt, Attachments: request.Attachments})
+}
+
+func (s *server) handleSessionSendRequest(w http.ResponseWriter, requestDone <-chan struct{}, record sessionRecord, request sendSessionRequest) {
 	prompt := strings.TrimSpace(request.Prompt)
 	if prompt == "" {
 		writeError(w, http.StatusBadRequest, "prompt is required")
@@ -1256,7 +1300,7 @@ func (s *server) handleSessionSend(w http.ResponseWriter, r *http.Request, recor
 		return
 	}
 	args := []string{"--mode", "rpc", "--session", record.FilePath}
-	if err := s.streamPiRPCCommand(w, r.Context().Done(), cwd, args, rpcPrompt, nil, binding, record.Title, record.WorkingDirectory); err != nil {
+	if err := s.streamPiRPCCommand(w, requestDone, cwd, args, rpcPrompt, nil, binding, record.Title, record.WorkingDirectory); err != nil {
 		if strings.Contains(err.Error(), "active run") {
 			if routeErr := s.routePromptToActiveRun(record.ID, rpcPrompt); routeErr == nil {
 				writeQueuedSteerAccepted(w, binding)
@@ -1332,12 +1376,28 @@ func (s *server) handleSessionSendToActiveRun(w http.ResponseWriter, r *http.Req
 	writeQueuedSteerAccepted(w, binding)
 }
 
+func (s *server) handleSessionSendToActiveRunFromRequest(w http.ResponseWriter, sessionID string, request sendSessionRequest, binding *sessionBoundRecord) {
+	rpcPrompt, ok := s.sendPromptPayload(w, request)
+	if !ok {
+		return
+	}
+	if err := s.routePromptToActiveRun(sessionID, rpcPrompt); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeQueuedSteerAccepted(w, binding)
+}
+
 func (s *server) decodeSendPrompt(w http.ResponseWriter, r *http.Request) (rpcPromptCommand, bool) {
 	var request sendSessionRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json body")
 		return rpcPromptCommand{}, false
 	}
+	return s.sendPromptPayload(w, request)
+}
+
+func (s *server) sendPromptPayload(w http.ResponseWriter, request sendSessionRequest) (rpcPromptCommand, bool) {
 	prompt := strings.TrimSpace(request.Prompt)
 	if prompt == "" {
 		writeError(w, http.StatusBadRequest, "prompt is required")

@@ -365,7 +365,8 @@ public struct RemoteDaemonClient: Sendable {
         attachments: [UploadedAttachmentReference] = [],
         onEvent: @escaping @Sendable (PiTurnStreamEvent) async -> Void
     ) async throws {
-        let body = CreateSessionRequestBody(
+        let body = InputRequestBody(
+            sessionId: nil,
             workingDirectory: request.workingDirectory,
             sessionName: request.sessionName,
             isTemporary: request.isEphemeral,
@@ -378,7 +379,7 @@ public struct RemoteDaemonClient: Sendable {
         )
         try await stream(
             host: host,
-            path: "/sessions",
+            path: "/input",
             method: "POST",
             body: body,
             onEvent: onEvent
@@ -392,13 +393,13 @@ public struct RemoteDaemonClient: Sendable {
         attachments: [UploadedAttachmentReference] = [],
         onEvent: @escaping @Sendable (PiTurnStreamEvent) async -> Void
     ) async throws {
-        let body = SendSessionRequestBody(prompt: prompt, attachments: attachments)
+        let body = InputRequestBody(sessionId: sessionID, prompt: prompt, attachments: attachments)
         var attempt = 0
         while true {
             do {
                 try await stream(
                     host: host,
-                    path: "/sessions/\(encodedPathComponent(sessionID))/send",
+                    path: "/input",
                     method: "POST",
                     body: body,
                     onEvent: onEvent
@@ -432,10 +433,10 @@ public struct RemoteDaemonClient: Sendable {
         attachments: [UploadedAttachmentReference] = [],
         tokenOverride: String? = nil
     ) async throws {
-        let body = SendSessionRequestBody(prompt: prompt, attachments: attachments)
+        let body = InputRequestBody(sessionId: sessionID, prompt: prompt, attachments: attachments)
         try await stream(
             host: host,
-            path: "/sessions/\(encodedPathComponent(sessionID))/send",
+            path: "/input",
             method: "POST",
             body: body,
             tokenOverride: tokenOverride,
@@ -1066,7 +1067,8 @@ public struct UploadedAttachmentReference: Codable, Hashable, Sendable {
     }
 }
 
-private struct CreateSessionRequestBody: Encodable {
+private struct InputRequestBody: Encodable {
+    let sessionId: String?
     let workingDirectory: String?
     let sessionName: String?
     let isTemporary: Bool
@@ -1076,6 +1078,30 @@ private struct CreateSessionRequestBody: Encodable {
     let initialModelProvider: String?
     let initialModelId: String?
     let initialThinkingLevel: String?
+
+    init(
+        sessionId: String?,
+        workingDirectory: String? = nil,
+        sessionName: String? = nil,
+        isTemporary: Bool = false,
+        prompt: String,
+        forkPath: String? = nil,
+        attachments: [UploadedAttachmentReference],
+        initialModelProvider: String? = nil,
+        initialModelId: String? = nil,
+        initialThinkingLevel: String? = nil
+    ) {
+        self.sessionId = sessionId
+        self.workingDirectory = workingDirectory
+        self.sessionName = sessionName
+        self.isTemporary = isTemporary
+        self.prompt = prompt
+        self.forkPath = forkPath
+        self.attachments = attachments
+        self.initialModelProvider = initialModelProvider
+        self.initialModelId = initialModelId
+        self.initialThinkingLevel = initialThinkingLevel
+    }
 }
 
 private struct SendSessionRequestBody: Encodable {
