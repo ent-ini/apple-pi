@@ -1235,9 +1235,21 @@ func (s *server) handleSessionSend(w http.ResponseWriter, r *http.Request, recor
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if s.activeRunForSession(record.ID) != nil {
+		if err := s.routePromptToActiveRun(record.ID, rpcPrompt); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeQueuedSteerAccepted(w, binding)
+		return
+	}
 	args := []string{"--mode", "rpc", "--session", record.FilePath}
 	if err := s.streamPiRPCCommand(w, r.Context().Done(), cwd, args, rpcPrompt, nil, binding, record.Title, record.WorkingDirectory); err != nil {
 		if strings.Contains(err.Error(), "active run") {
+			if routeErr := s.routePromptToActiveRun(record.ID, rpcPrompt); routeErr == nil {
+				writeQueuedSteerAccepted(w, binding)
+				return
+			}
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
@@ -1295,21 +1307,27 @@ func (s *server) handleSessionSteer(w http.ResponseWriter, r *http.Request, sess
 		writeError(w, http.StatusBadRequest, "prompt is required")
 		return
 	}
-	run := s.activeRunForSession(sessionID)
-	if run == nil {
-		writeError(w, http.StatusConflict, "session is not currently streaming")
-		return
-	}
 	rpcPrompt, err := s.buildRPCPromptPayload(prompt, request.Attachments)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := s.routePromptToActiveRun(sessionID, rpcPrompt); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *server) routePromptToActiveRun(sessionID string, rpcPrompt rpcPromptCommand) error {
+	run := s.activeRunForSession(sessionID)
+	if run == nil {
+		return errors.New("session is not currently streaming")
+	}
 	rpcPrompt.ID = "pi-appd-steer"
 	rpcPrompt.StreamingBehavior = "steer"
 	if err := run.write(rpcPrompt); err != nil {
-		writeError(w, http.StatusConflict, err.Error())
-		return
+		return err
 	}
 	// A successfully written steer can be delivered after the current agent_end.
 	// Keep the RPC stdin open long enough for Pi to consume the queued steering
@@ -1317,7 +1335,21 @@ func (s *server) handleSessionSteer(w http.ResponseWriter, r *http.Request, sess
 	// resumes and no further output arrives.
 	run.markQueuePending(true)
 	run.scheduleCloseAfter(queuedInputCloseGrace, true)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	return nil
+}
+
+func writeQueuedSteerAccepted(w http.ResponseWriter, binding *sessionBoundRecord) {
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	flusher, _ := w.(http.Flusher)
+	if binding != nil {
+		writeNDJSON(w, binding)
+	}
+	writeNDJSON(w, map[string]any{"type": "output_complete"})
+	if flusher != nil {
+		flusher.Flush()
+	}
 }
 
 func (s *server) handleSessionCompact(w http.ResponseWriter, r *http.Request, record sessionRecord) {

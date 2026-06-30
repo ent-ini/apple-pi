@@ -15,6 +15,12 @@ import (
 	"time"
 )
 
+type bufferWriteCloser struct {
+	*bytes.Buffer
+}
+
+func (w bufferWriteCloser) Close() error { return nil }
+
 func TestSessionRecordLessUsesStableTieBreakers(t *testing.T) {
 	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
 	older := now.Add(-time.Minute)
@@ -335,6 +341,42 @@ func TestHandleUploadsRejectsLargeFiles(t *testing.T) {
 	server.handleUploads(response, request)
 	if response.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusRequestEntityTooLarge, response.Body.String())
+	}
+}
+
+func TestHandleSessionSendRoutesActiveRunToSteer(t *testing.T) {
+	agentDir := t.TempDir()
+	server := &server{agentDir: agentDir}
+	stdin := &bytes.Buffer{}
+	run := &activeRun{}
+	run.setStdin(bufferWriteCloser{stdin})
+	if !server.reserveActiveRun("session-1", run) {
+		t.Fatal("failed to reserve active run")
+	}
+	defer server.unregisterActiveRun("session-1", run)
+
+	body, err := json.Marshal(sendSessionRequest{Prompt: "hello while busy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/sessions/session-1/send", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	record := sessionRecord{ID: "session-1", FilePath: filepath.Join(agentDir, "session-1.jsonl"), Title: "Busy", WorkingDirectory: agentDir}
+
+	server.handleSessionSend(response, request, record)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", response.Code, response.Body.String())
+	}
+	if contentType := response.Header().Get("Content-Type"); contentType != "application/x-ndjson" {
+		t.Fatalf("content-type = %q, want application/x-ndjson", contentType)
+	}
+	written := stdin.String()
+	if !strings.Contains(written, `"streamingBehavior":"steer"`) || !strings.Contains(written, "hello while busy") {
+		t.Fatalf("stdin = %q, want steer prompt", written)
+	}
+	if !strings.Contains(response.Body.String(), `"type":"output_complete"`) {
+		t.Fatalf("response body = %q, want output_complete", response.Body.String())
 	}
 }
 
