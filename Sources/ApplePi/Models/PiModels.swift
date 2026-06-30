@@ -1,14 +1,19 @@
 import Foundation
 
 enum PiHostMode: String, CaseIterable, Identifiable, Sendable {
+    /// Legacy value kept only so old preferences/tests can still decode. New UI
+    /// exposes Remote API exclusively; local Pi execution is no longer a product
+    /// mode and must not be selected by default.
     case local
     case remoteAPI
+
+    static var allCases: [PiHostMode] { [.remoteAPI] }
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .local: "Local Mac"
+        case .local: "Local Mac (legacy)"
         case .remoteAPI: "Remote API"
         }
     }
@@ -17,12 +22,15 @@ enum PiHostMode: String, CaseIterable, Identifiable, Sendable {
 extension PiHostMode: Codable {
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
-        let rawValue = (try? container.decode(String.self)) ?? Self.local.rawValue
+        let rawValue = (try? container.decode(String.self)) ?? Self.remoteAPI.rawValue
         switch rawValue {
-        case "remote\u{53}\u{53}\u{48}":
+        case "remote\u{53}\u{53}\u{48}", Self.remoteAPI.rawValue:
             self = .remoteAPI
         default:
-            self = Self(rawValue: rawValue) ?? .local
+            // pi-app is remote-daemon-only. Treat old/unknown modes (including
+            // legacy `local`) as Remote API so the app never falls back to
+            // spawning a local `pi` process.
+            self = .remoteAPI
         }
     }
 
@@ -33,7 +41,7 @@ extension PiHostMode: Codable {
 }
 
 struct PiHostConfiguration: Codable, Equatable, Sendable {
-    var mode: PiHostMode = .local
+    var mode: PiHostMode = .remoteAPI
     var piExecutable: String = "pi"
     var agentDirectory: String = "~/.pi/agent"
     /// Base URL or IP:port of the `pi-appd` daemon that Apple Pi talks
@@ -45,7 +53,7 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
     var defaultWorkingDirectory: String = "~/ai-agent/workspace"
 
     init(
-        mode: PiHostMode = .local,
+        mode: PiHostMode = .remoteAPI,
         piExecutable: String = "pi",
         agentDirectory: String = "~/.pi/agent",
         remoteDaemonURL: String = "",
@@ -68,7 +76,7 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        mode = try container.decodeIfPresent(PiHostMode.self, forKey: .mode) ?? .local
+        mode = try container.decodeIfPresent(PiHostMode.self, forKey: .mode) ?? .remoteAPI
         piExecutable = try container.decodeIfPresent(String.self, forKey: .piExecutable) ?? "pi"
         agentDirectory = try container.decodeIfPresent(String.self, forKey: .agentDirectory) ?? "~/.pi/agent"
         remoteDaemonURL = try container.decodeIfPresent(String.self, forKey: .remoteDaemonURL) ?? ""
@@ -96,10 +104,12 @@ struct PiHostConfiguration: Codable, Equatable, Sendable {
         remoteDaemonDisplayAddress.nilIfBlank != nil
     }
 
-    /// Remote read APIs should prefer pi-appd whenever it is configured,
-    /// even if the host mode picker is still left on Local Mac.
+    /// pi-app is remote-daemon-only. Returning true even before the URL is
+    /// configured keeps callers on the RemoteDaemonClient path, where they get
+    /// a clear "Remote API URL is not configured" error instead of silently
+    /// falling back to local process/filesystem behavior.
     var usesRemoteDaemonTransport: Bool {
-        hasRemoteDaemonConfigured
+        true
     }
 
     var remoteDaemonBaseURL: URL? {

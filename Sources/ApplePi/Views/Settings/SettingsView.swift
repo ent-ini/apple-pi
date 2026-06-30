@@ -330,23 +330,16 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Host sections (Pi Host + Remote API + Apply/Discard bar)
+    // MARK: - Host sections (Remote API + Apply/Discard bar)
 
     @ViewBuilder
     private var hostSections: some View {
         Section {
-            Picker("Mode", selection: editingHostBinding(\.mode)) {
-                ForEach(PiHostMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            TextField("Local Pi executable", text: editingHostBinding(\.piExecutable))
-            TextField("Agent directory", text: editingHostBinding(\.agentDirectory))
             TextField("Default workspace", text: editingHostBinding(\.defaultWorkingDirectory))
         } header: {
-            Text("Pi Host")
+            Text("Remote workspace")
         } footer: {
-            Text("Changes are buffered. Click Apply to commit and reload the catalog; Discard to revert.")
+            Text("pi-app is remote-daemon-only. New sessions start in this workspace on the daemon host.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -438,16 +431,7 @@ struct SettingsView: View {
 
     private var hostCommitMessage: String {
         guard let pending = pendingHostCommit else { return "" }
-        let modeChanged = pending.mode != appState.host.mode
-        if pending.usesRemoteDaemonTransport {
-            return "Switching to the remote API will close all open chat tabs and reload the session catalog from \(pending.remoteDaemonDisplayAddress.isEmpty ? "the configured daemon" : pending.remoteDaemonDisplayAddress)."
-        } else if modeChanged && pending.mode == .remoteAPI {
-            return "Switching to Remote API mode without a configured pi-appd URL will fail. Set the daemon URL and token first."
-        } else if modeChanged {
-            return "Switching to Local Mac will close all open chat tabs and reload the session catalog from your local Pi agent directory."
-        } else {
-            return "Applying these host settings will close all open chat tabs and reload the session catalog."
-        }
+        return "Applying these Remote API settings will close all open chat tabs and reload the session catalog from \(pending.remoteDaemonDisplayAddress.isEmpty ? "the configured daemon" : pending.remoteDaemonDisplayAddress)."
     }
 
     private func requestHostCommit() {
@@ -459,26 +443,28 @@ struct SettingsView: View {
     private func performHostCommit() {
         guard let pending = pendingHostCommit else { return }
 
-        if pending.hasRemoteDaemonConfigured {
-            guard pending.remoteDaemonBaseURL != nil else {
-                apiTokenStatus = "Remote API URL is invalid."
-                return
-            }
-
-            if !apiTokenInput.isEmpty {
-                if let error = appState.saveRemoteDaemonToken(apiTokenInput, for: pending) {
-                    apiTokenStatus = error
-                    return
-                }
-                apiTokenInput = ""
-                apiTokenStatus = "Saved."
-            } else if !appState.hasRemoteDaemonTokenStored(for: pending) {
-                apiTokenStatus = "Save a bearer token before enabling the remote API URL."
-                return
-            }
+        guard pending.remoteDaemonBaseURL != nil else {
+            apiTokenStatus = pending.remoteDaemonDisplayAddress.isEmpty
+                ? "Remote API URL is required."
+                : "Remote API URL is invalid."
+            return
         }
 
-        appState.host = pending
+        if !apiTokenInput.isEmpty {
+            if let error = appState.saveRemoteDaemonToken(apiTokenInput, for: pending) {
+                apiTokenStatus = error
+                return
+            }
+            apiTokenInput = ""
+            apiTokenStatus = "Saved."
+        } else if !appState.hasRemoteDaemonTokenStored(for: pending) {
+            apiTokenStatus = "Save a bearer token before applying Remote API settings."
+            return
+        }
+
+        var remoteOnlyPending = pending
+        remoteOnlyPending.mode = .remoteAPI
+        appState.host = remoteOnlyPending
         pendingHostCommit = nil
         refreshAPITokenStatus()
     }
