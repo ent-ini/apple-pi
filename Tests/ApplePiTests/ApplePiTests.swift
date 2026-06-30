@@ -182,7 +182,7 @@ import Testing
     let symlink = sessionsRoot.appendingPathComponent("link-to-real.jsonl")
     try Foundation.FileManager().createSymbolicLink(at: symlink, withDestinationURL: realFile)
     let host = PiHostConfiguration(agentDirectory: temp.agent.path)
-    let service = PiSessionCatalogService(configurationService: PiConfigurationService(environment: []))
+    let service = PiSessionCatalogService(configurationService: PiConfigurationService(environment: [:]))
 
     let snapshot = try await service.loadCatalog(host: host)
 
@@ -209,7 +209,7 @@ import Testing
     invalidBytes.append(Data(#"{"type":"message","role":"user","content":"ok"}"#.utf8))
     try invalidBytes.write(to: bad)
     let host = PiHostConfiguration(agentDirectory: temp.agent.path)
-    let service = PiSessionCatalogService(configurationService: PiConfigurationService(environment: []))
+    let service = PiSessionCatalogService(configurationService: PiConfigurationService(environment: [:]))
 
     let snapshot = try await service.loadCatalog(host: host)
 
@@ -249,7 +249,7 @@ import Testing
         try? fileManager.setAttributes([.posixPermissions: NSNumber(value: 0o600)], ofItemAtPath: locked.path)
     }
     let host = PiHostConfiguration(agentDirectory: temp.agent.path)
-    let service = PiSessionCatalogService(configurationService: PiConfigurationService(environment: []))
+    let service = PiSessionCatalogService(configurationService: PiConfigurationService(environment: [:]))
 
     let snapshot = try await service.loadCatalog(host: host)
 
@@ -273,7 +273,7 @@ import Testing
     }
     try lines.joined(separator: "\n").write(to: sessionFile, atomically: true, encoding: .utf8)
     let host = PiHostConfiguration(agentDirectory: temp.agent.path)
-    let service = PiSessionCatalogService(configurationService: PiConfigurationService(environment: []))
+    let service = PiSessionCatalogService(configurationService: PiConfigurationService(environment: [:]))
 
     let snapshot = try await service.loadCatalog(host: host)
     let session = try #require(snapshot.sessions.first)
@@ -298,7 +298,7 @@ import Testing
     }
     try lines.joined(separator: "\n").write(to: sessionFile, atomically: true, encoding: .utf8)
     let host = PiHostConfiguration(agentDirectory: temp.agent.path)
-    let service = PiSessionCatalogService(configurationService: PiConfigurationService(environment: []))
+    let service = PiSessionCatalogService(configurationService: PiConfigurationService(environment: [:]))
 
     let snapshot = try await service.loadCatalog(host: host)
     let session = try #require(snapshot.sessions.first)
@@ -307,6 +307,7 @@ import Testing
     #expect(snapshot.warnings.contains(where: { $0.contains("Truncated") }))
 }
 
+@MainActor
 @Test func catalogStatusMessageIncludesWarningsAndCount() {
     #expect(PiAppState.catalogStatusMessage(sessionCount: 0, warnings: []) == "Loaded 0 Pi sessions")
     #expect(PiAppState.catalogStatusMessage(sessionCount: 1, warnings: []) == "Loaded 1 Pi session")

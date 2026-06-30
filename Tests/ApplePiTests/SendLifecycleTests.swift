@@ -28,7 +28,7 @@ import Testing
 @MainActor
 @Test func chatSessionCancelSendCancelsActiveTask() async throws {
     let session = ChatSession(key: "test", title: "Test")
-    let task = Task {
+    let task = Task<Void, Never> {
         // Long-running dummy work that the test will cancel.
         try? await Task.sleep(for: .seconds(30))
     }
@@ -50,7 +50,7 @@ import Testing
 @MainActor
 @Test func chatSessionCancelSendTwiceIsIdempotent() async throws {
     let session = ChatSession(key: "test", title: "Test")
-    let task = Task { try? await Task.sleep(for: .seconds(30)) }
+    let task = Task<Void, Never> { try? await Task.sleep(for: .seconds(30)) }
     session.sendTask = task
 
     session.cancelSend()
@@ -262,7 +262,7 @@ import Testing
 @Test func chatSessionStoreCloseCancelsActiveSend() async throws {
     let store = ChatSessionStore()
     let session = store.openTab(key: "test", title: "Test")
-    let task = Task { try? await Task.sleep(for: .seconds(30)) }
+    let task = Task<Void, Never> { try? await Task.sleep(for: .seconds(30)) }
     session.sendTask = task
 
     store.close(session)
@@ -277,8 +277,8 @@ import Testing
     let store = ChatSessionStore()
     let sessionA = store.openTab(key: "a", title: "A")
     let sessionB = store.openTab(key: "b", title: "B")
-    let taskA = Task { try? await Task.sleep(for: .seconds(30)) }
-    let taskB = Task { try? await Task.sleep(for: .seconds(30)) }
+    let taskA = Task<Void, Never> { try? await Task.sleep(for: .seconds(30)) }
+    let taskB = Task<Void, Never> { try? await Task.sleep(for: .seconds(30)) }
     sessionA.sendTask = taskA
     sessionB.sendTask = taskB
 
@@ -307,7 +307,7 @@ import Testing
     let store = ChatSessionStore()
     let session = ChatSession(key: "test", title: "Test")
     // Note: session is not appended to `store.tabs`.
-    let task = Task { try? await Task.sleep(for: .seconds(30)) }
+    let task = Task<Void, Never> { try? await Task.sleep(for: .seconds(30)) }
     session.sendTask = task
 
     store.close(session)

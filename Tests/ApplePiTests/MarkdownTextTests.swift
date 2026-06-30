@@ -6,11 +6,13 @@ import Testing
 @Suite("MarkdownText parser")
 struct MarkdownTextTests {
     @Test
+    @MainActor
     func emptyInputProducesNoBlocks() {
         #expect(MarkdownText.parseBlocks("").isEmpty)
     }
 
     @Test
+    @MainActor
     func parsesParagraphsAndHeadings() {
         let blocks = MarkdownText.parseBlocks("# Title\n\nHello **world**")
 
@@ -21,6 +23,7 @@ struct MarkdownTextTests {
     }
 
     @Test
+    @MainActor
     func parsesUnorderedAndOrderedLists() {
         let blocks = MarkdownText.parseBlocks("- first\n- second\n\n1. one\n2. two")
 
@@ -33,6 +36,7 @@ struct MarkdownTextTests {
     }
 
     @Test
+    @MainActor
     func parsesFencedCodeBlocks() {
         let markdown = """
         Before
@@ -54,6 +58,7 @@ struct MarkdownTextTests {
     }
 
     @Test
+    @MainActor
     func parsesBlockQuotesAndHorizontalRules() {
         let blocks = MarkdownText.parseBlocks("> first\n> second\n\n---\n\nDone")
 
