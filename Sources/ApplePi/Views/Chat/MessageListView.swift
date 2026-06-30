@@ -168,7 +168,7 @@ struct MessageListView: View {
     private static let stickyBreakawayDistance: CGFloat = 32
     private static let bottomReachedEpsilon: CGFloat = 3
     private static let stickyAutoScrollDuration: TimeInterval = 0
-    private static let historyPageSize = 80
+    private static let historyPageSize = 40
     private static let scrollSettleDelays: [TimeInterval] = [0.04, 0.16, 0.34]
     private static let ensureVisibleSettleDelays: [TimeInterval] = [0.04, 0.16, 0.34, 0.65]
 
