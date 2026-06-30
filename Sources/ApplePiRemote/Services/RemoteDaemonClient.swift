@@ -796,8 +796,8 @@ package struct RemoteDaemonClient {
 }
 
 private func joinedPath(basePath: String, requestPath: String) -> String {
-    package let left = basePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-    package let right = requestPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    let left = basePath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    let right = requestPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     switch (left.isEmpty, right.isEmpty) {
     case (true, true): return "/"
     case (true, false): return "/\(right)"
