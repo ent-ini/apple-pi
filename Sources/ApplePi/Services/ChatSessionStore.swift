@@ -102,20 +102,6 @@ final class ChatSession: ObservableObject, Identifiable {
 
     var hasAbortedCurrentSend: Bool { didAbortCurrentSend }
 
-    var pendingAssistantMessageForDisplay: Message? {
-        guard isSending,
-              transientStreamEvents.isEmpty,
-              case .message(let message, _) = transientAssistantEvent else {
-            return nil
-        }
-        return message
-    }
-
-    var shouldShowPendingAssistantPlaceholder: Bool {
-        guard let message = pendingAssistantMessageForDisplay else { return false }
-        return !messageHasVisibleAssistantContent(message)
-    }
-
     /// Cancel the active send task, if any, and drop the reference.
     /// Safe to call from any state, including when no task is running.
     /// The task body still runs to completion but its cancellation
@@ -752,27 +738,6 @@ final class ChatSession: ObservableObject, Identifiable {
                 return abs(persistedTimestamp.timeIntervalSince(transientTimestamp)) < 30
             }
             return persistedMessage.parentId == transientMessage.parentId
-        }
-    }
-
-    private func messageHasVisibleAssistantContent(_ message: Message) -> Bool {
-        let hasThinking = message.content.contains { block in
-            if case .thinking(let text, _) = block {
-                return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            }
-            return false
-        }
-        if hasThinking { return true }
-
-        return message.content.contains { block in
-            switch block {
-            case .text(let text):
-                return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case .image(let path, _):
-                return !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            case .thinking:
-                return false
-            }
         }
     }
 

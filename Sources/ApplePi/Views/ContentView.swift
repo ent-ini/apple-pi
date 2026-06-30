@@ -1005,10 +1005,7 @@ private struct SubagentDetailView: View {
                     }
 
                     MessageBubble(message: userMessage)
-                    MessageBubble(
-                        message: assistantMessage,
-                        showsStreamingPlaceholder: subagent.output == nil
-                    )
+                    MessageBubble(message: assistantMessage)
                 }
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)

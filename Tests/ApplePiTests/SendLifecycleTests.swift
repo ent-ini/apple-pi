@@ -105,12 +105,18 @@ import Testing
 }
 
 @MainActor
-@Test func chatSessionShowsPlaceholderOnlyBeforeStreamEventsArrive() {
+@Test func chatSessionDoesNotExposeSyntheticAssistantPlaceholderBeforeStreamEventsArrive() {
     let session = ChatSession(key: "test", title: "Test")
     session.beginSending(prompt: "hello")
 
-    #expect(session.pendingAssistantMessageForDisplay != nil)
-    #expect(session.shouldShowPendingAssistantPlaceholder)
+    #expect(session.events.contains { event in
+        if case .message(let message, _) = event { return message.role == .user }
+        return false
+    })
+    #expect(!session.events.contains { event in
+        if case .message(let message, _) = event { return message.role == .assistant }
+        return false
+    })
 
     session.applyStreamingEvents(
         [
@@ -129,8 +135,10 @@ import Testing
         isFinal: false
     )
 
-    #expect(session.pendingAssistantMessageForDisplay == nil)
-    #expect(session.shouldShowPendingAssistantPlaceholder == false)
+    #expect(session.events.contains { event in
+        if case .message(let message, _) = event { return message.role == .assistant && message.content == [.text("Hi there")] }
+        return false
+    })
 }
 
 @MainActor

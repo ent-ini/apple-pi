@@ -35,14 +35,6 @@ struct MessageListView: View {
                             eventRow(for: row)
                                 .id(row.id)
                         }
-                        if let pendingAssistantMessage = session.pendingAssistantMessageForDisplay {
-                            MessageBubble(
-                                message: pendingAssistantMessage,
-                                showsStreamingPlaceholder: session.shouldShowPendingAssistantPlaceholder,
-                                fileReferenceBaseDirectory: fileReferenceBaseDirectory
-                            )
-                            .id(Self.pendingAssistantBubbleID)
-                        }
                         Color.clear
                             .frame(height: 1)
                             .background {
@@ -173,7 +165,6 @@ struct MessageListView: View {
     }
 
     private static let bottomAnchorID = "chat.list.bottom"
-    private static let pendingAssistantBubbleID = "chat.list.pending.assistant"
     static let scrollCoordinateSpaceName = "chat.list.scroll"
     private static let bottomStickinessBuffer: CGFloat = 180
     private static let historyAutoLoadDistance: CGFloat = 240

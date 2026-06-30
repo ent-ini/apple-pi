@@ -263,7 +263,6 @@ private final class ChatImageCache: @unchecked Sendable {
 struct MessageBubble: View {
     @EnvironmentObject private var appState: PiAppState
     let message: Message
-    var showsStreamingPlaceholder = false
     var fileReferenceBaseDirectory: String?
 
     @ViewBuilder
@@ -297,10 +296,6 @@ struct MessageBubble: View {
                     timestampOverlaysContent: presentation.isAttachmentOnly
                 ) {
                     userPresentationView(presentation)
-                }
-            } else if showsStreamingPlaceholder {
-                bubbleSurface(isLastVisibleBlock: true, prefersCompactWidth: true) {
-                    BouncingDotsView()
                 }
             } else {
                 ForEach(Array(visibleBlocks.enumerated()), id: \.offset) { index, block in
@@ -455,7 +450,6 @@ struct MessageBubble: View {
     }
 
     private var shouldRenderRow: Bool {
-        if showsStreamingPlaceholder { return true }
         if message.role != .assistant { return true }
         return !thinkingText.isEmpty || !visibleBlocks.isEmpty || userPresentation != nil
     }
