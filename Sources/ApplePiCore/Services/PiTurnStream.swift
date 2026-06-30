@@ -6,6 +6,13 @@ package struct PiSessionBinding: Sendable {
     package let title: String
     package let workingDirectory: String?
 
+    package init(sessionID: String?, sessionPath: String?, title: String, workingDirectory: String?) {
+        self.sessionID = sessionID
+        self.sessionPath = sessionPath
+        self.title = title
+        self.workingDirectory = workingDirectory
+    }
+
     package var key: String {
         sessionPath ?? sessionID ?? "pending-session"
     }

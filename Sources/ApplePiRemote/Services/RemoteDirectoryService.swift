@@ -21,6 +21,8 @@ package struct RemoteDirectoryEntry: Identifiable, Hashable, Sendable {
 /// HTTP to `pi-appd`. The macOS client never shells out to helper tools
 /// on the remote host for directory listing.
 package struct RemoteDirectoryService: Sendable {
+    package init() {}
+
     package func listDirectories(host: PiHostConfiguration, path: String?) async throws -> RemoteDirectoryListing {
         try await RemoteDaemonClient().listDirectories(host: host, path: path)
     }

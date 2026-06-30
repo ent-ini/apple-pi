@@ -2,6 +2,8 @@ import Foundation
 import ApplePiCore
 
 package struct RemoteDaemonClient {
+    package init() {}
+
     package func testConnection(host: PiHostConfiguration, tokenOverride: String? = nil) async throws -> String {
         let _: HealthResponse = try await send(
             host: host,
