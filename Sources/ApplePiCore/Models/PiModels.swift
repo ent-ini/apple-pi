@@ -161,6 +161,7 @@ public struct PiSessionSummary: Identifiable, Hashable, Sendable {
     public let labelCount: Int
     public let branchSummaryCount: Int
     public let latestModel: String?
+    public let isGenerating: Bool
 
     public init(
         id: String,
@@ -175,7 +176,8 @@ public struct PiSessionSummary: Identifiable, Hashable, Sendable {
         branchCount: Int,
         labelCount: Int,
         branchSummaryCount: Int,
-        latestModel: String?
+        latestModel: String?,
+        isGenerating: Bool = false
     ) {
         self.id = id
         self.filePath = filePath
@@ -190,6 +192,7 @@ public struct PiSessionSummary: Identifiable, Hashable, Sendable {
         self.labelCount = labelCount
         self.branchSummaryCount = branchSummaryCount
         self.latestModel = latestModel
+        self.isGenerating = isGenerating
     }
 
     public var subtitle: String {

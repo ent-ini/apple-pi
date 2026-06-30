@@ -344,6 +344,90 @@ func TestHandleUploadsRejectsLargeFiles(t *testing.T) {
 	}
 }
 
+func TestSetSessionGeneratingPublishesDelta(t *testing.T) {
+	broker := newCatalogBroker()
+	updates := make(chan sessionRecord, 4)
+	ch := broker.subscribe()
+	go func() {
+		defer close(updates)
+		for event := range ch {
+			if event.Type != "session_updated" {
+				continue
+			}
+			var record sessionRecord
+			if err := json.Unmarshal(event.Payload, &record); err != nil {
+				t.Errorf("invalid session_updated payload: %v", err)
+				return
+			}
+			updates <- record
+		}
+	}()
+
+	server := &server{
+		broker:         broker,
+		generatingByID: map[string]bool{},
+		sessionsByID: map[string]sessionRecord{
+			"session-1": {ID: "session-1", Title: "Busy"},
+		},
+	}
+
+	server.setSessionGenerating("session-1", true)
+	server.setSessionGenerating("session-1", true)
+
+	select {
+	case record := <-updates:
+		if !record.IsGenerating {
+			t.Fatalf("record = %+v, want isGenerating=true", record)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("did not receive session_updated with isGenerating=true")
+	}
+
+	server.setSessionGenerating("session-1", false)
+	select {
+	case record := <-updates:
+		if record.IsGenerating {
+			t.Fatalf("record = %+v, want isGenerating=false", record)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("did not receive session_updated with isGenerating=false")
+	}
+}
+
+func TestRefreshCatalogAppliesGeneratingState(t *testing.T) {
+	agentDir := t.TempDir()
+	sessionsDir := filepath.Join(agentDir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sessionPath := filepath.Join(sessionsDir, "2026-01-01T00-00-00-000Z_abc123.jsonl")
+	if err := os.WriteFile(sessionPath, []byte("{\"type\":\"session\",\"id\":\"abc123\"}\n{\"type\":\"message\",\"id\":\"m1\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	otherPath := filepath.Join(sessionsDir, "2026-01-01T00-00-00-000Z_def456.jsonl")
+	if err := os.WriteFile(otherPath, []byte("{\"type\":\"session\",\"id\":\"def456\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	server := &server{agentDir: agentDir, generatingByID: map[string]bool{"abc123": true}}
+	if err := server.refreshCatalog(true); err != nil {
+		t.Fatal(err)
+	}
+	server.mu.RLock()
+	defer server.mu.RUnlock()
+	for _, record := range server.snapshot.Sessions {
+		switch record.ID {
+		case "abc123":
+			if !record.IsGenerating {
+				t.Fatalf("abc123 record = %+v, want isGenerating=true", record)
+			}
+		case "def456":
+			if record.IsGenerating {
+				t.Fatalf("def456 record = %+v, want isGenerating=false", record)
+			}
+		}
+	}
+}
+
 func TestHandleSessionSendRoutesActiveRunToSteer(t *testing.T) {
 	agentDir := t.TempDir()
 	server := &server{agentDir: agentDir}

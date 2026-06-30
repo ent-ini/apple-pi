@@ -2569,7 +2569,8 @@ final class PiAppState: ObservableObject {
             branchCount: 0,
             labelCount: 0,
             branchSummaryCount: 0,
-            latestModel: session.runtimeState?.modelDisplayName.nilIfBlank
+            latestModel: session.runtimeState?.modelDisplayName.nilIfBlank,
+            isGenerating: session.isSending
         )
     }
 
@@ -2653,7 +2654,8 @@ final class PiAppState: ObservableObject {
             branchCount: session.branchCount,
             labelCount: session.labelCount,
             branchSummaryCount: session.branchSummaryCount,
-            latestModel: session.latestModel
+            latestModel: session.latestModel,
+            isGenerating: session.isGenerating
         )
         upsertCatalogSession(renamed)
         syncOpenTabTitles(with: renamed)

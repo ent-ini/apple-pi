@@ -1182,7 +1182,7 @@ private struct SessionListRow: View {
             Spacer(minLength: 0)
 
             SessionActivityIndicator(
-                isSending: appState.isSessionSending(session),
+                isGenerating: session.isGenerating || appState.isSessionSending(session),
                 showsUnread: appState.hasUnreadIndicator(session),
                 accentColor: appState.appearance.accentColor
             )
@@ -1200,16 +1200,17 @@ private struct SessionListRow: View {
 }
 
 private struct SessionActivityIndicator: View {
-    let isSending: Bool
+    let isGenerating: Bool
     let showsUnread: Bool
     let accentColor: Color
 
     var body: some View {
         Group {
-            if isSending {
+            if isGenerating {
                 ProgressView()
                     .controlSize(.small)
                     .tint(accentColor)
+                    .help("Pi is generating a response")
             } else if showsUnread {
                 Circle()
                     .fill(accentColor)

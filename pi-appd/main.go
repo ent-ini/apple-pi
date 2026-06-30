@@ -63,6 +63,9 @@ type server struct {
 	modelsInflight       chan struct{}
 
 	broker *catalogBroker
+
+	generatingMu   sync.Mutex
+	generatingByID map[string]bool
 }
 
 type activeRun struct {
@@ -206,6 +209,7 @@ type sessionRecord struct {
 	LabelCount         int       `json:"labelCount"`
 	BranchSummaryCount int       `json:"branchSummaryCount"`
 	LatestModel        string    `json:"latestModel,omitempty"`
+	IsGenerating       bool      `json:"isGenerating,omitempty"`
 }
 
 type eventsResponse struct {
@@ -1719,6 +1723,7 @@ func (s *server) reserveActiveRun(sessionID string, run *activeRun) bool {
 		return false
 	}
 	s.activeRuns[sessionID] = run
+	s.setSessionGeneratingLocked(sessionID, true)
 	return true
 }
 
@@ -1732,6 +1737,95 @@ func (s *server) unregisterActiveRun(sessionID string, run *activeRun) {
 		delete(s.activeRuns, sessionID)
 	}
 	s.activeRunsMu.Unlock()
+	s.setSessionGenerating(sessionID, false)
+}
+
+// setSessionGenerating records the active-run state for the catalog and
+// publishes a per-session `session_updated` delta so the client list can
+// show a typing/generating indicator without waiting for a file change.
+// Pass `generating=false` only when the active run for this session is the
+// one being torn down; cross-call interference is guarded by the global
+// activeRuns registry.
+func (s *server) setSessionGenerating(sessionID string, generating bool) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	if !generating && s.activeRunForSession(sessionID) != nil {
+		return
+	}
+	s.generatingMu.Lock()
+	previous, hasPrevious := s.generatingByID[sessionID]
+	if s.generatingByID == nil {
+		s.generatingByID = map[string]bool{}
+	}
+	if hasPrevious && previous == generating {
+		s.generatingMu.Unlock()
+		return
+	}
+	if generating {
+		s.generatingByID[sessionID] = true
+	} else {
+		delete(s.generatingByID, sessionID)
+	}
+	s.generatingMu.Unlock()
+	if hasPrevious && previous == generating {
+		return
+	}
+	s.publishSessionGeneratingDelta(sessionID, generating)
+}
+
+func (s *server) setSessionGeneratingLocked(sessionID string, generating bool) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	s.generatingMu.Lock()
+	previous, hasPrevious := s.generatingByID[sessionID]
+	if s.generatingByID == nil {
+		s.generatingByID = map[string]bool{}
+	}
+	if generating {
+		s.generatingByID[sessionID] = true
+	} else if hasPrevious {
+		delete(s.generatingByID, sessionID)
+	}
+	s.generatingMu.Unlock()
+	if hasPrevious && previous == generating {
+		return
+	}
+	go s.publishSessionGeneratingDelta(sessionID, generating)
+}
+
+func (s *server) publishSessionGeneratingDelta(sessionID string, generating bool) {
+	if s.broker == nil {
+		return
+	}
+	s.mu.RLock()
+	record, ok := s.sessionsByID[sessionID]
+	s.mu.RUnlock()
+	if !ok {
+		return
+	}
+	record.IsGenerating = generating
+	s.broker.publishSessionUpdated(record)
+}
+
+// applyGeneratingState overlays the in-memory active-run flags onto the
+// freshly built catalog snapshot so SSE full snapshots also reflect
+// typing state without needing a subsequent `session_updated` for the
+// same transition.
+func (s *server) applyGeneratingState(snapshot *catalogResponse) {
+	s.generatingMu.Lock()
+	defer s.generatingMu.Unlock()
+	if len(s.generatingByID) == 0 {
+		return
+	}
+	for i := range snapshot.Sessions {
+		if s.generatingByID[snapshot.Sessions[i].ID] {
+			snapshot.Sessions[i].IsGenerating = true
+		}
+	}
 }
 
 func (s *server) activeRunForSession(sessionID string) *activeRun {
@@ -2512,10 +2606,23 @@ func (s *server) refreshCatalog(force bool) error {
 	if time.Since(s.lastRefresh) < ttl && !force {
 		return nil
 	}
+	s.applyGeneratingState(&catalog)
+	for id := range byID {
+		if record, ok := byID[id]; ok {
+			record.IsGenerating = s.isGeneratingLocked(id)
+			byID[id] = record
+		}
+	}
 	s.snapshot = catalog
 	s.sessionsByID = byID
 	s.lastRefresh = time.Now()
 	return nil
+}
+
+func (s *server) isGeneratingLocked(sessionID string) bool {
+	s.generatingMu.Lock()
+	defer s.generatingMu.Unlock()
+	return s.generatingByID[sessionID]
 }
 
 func (s *server) catalogCacheTTL() time.Duration {
@@ -3268,11 +3375,14 @@ func (s *server) handleCatalogChange() {
 		return out, s.snapshot
 	}()
 	if !hadCatalog || !projectsEqual(previousProjects, snapshot.Projects) {
+		s.applyGeneratingState(&snapshot)
 		s.broker.broadcastSnapshot(snapshot)
 		return
 	}
 	for _, record := range snapshot.Sessions {
 		previous, ok := previousSessions[record.ID]
+		generating := s.isGeneratingLocked(record.ID)
+		record.IsGenerating = generating
 		if !ok || previous != record {
 			s.broker.publishSessionUpdated(record)
 		}

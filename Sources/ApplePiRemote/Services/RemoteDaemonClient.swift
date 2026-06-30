@@ -798,7 +798,8 @@ public struct RemoteDaemonClient: Sendable {
             branchCount: record.branchCount,
             labelCount: record.labelCount,
             branchSummaryCount: record.branchSummaryCount,
-            latestModel: record.latestModel
+            latestModel: record.latestModel,
+            isGenerating: record.isGenerating ?? false
         )
     }
 
@@ -922,6 +923,7 @@ private struct SessionRecord: Decodable {
     let labelCount: Int
     let branchSummaryCount: Int
     let latestModel: String?
+    let isGenerating: Bool?
 }
 
 private struct EventPageResponse: Decodable {
