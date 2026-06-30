@@ -27,7 +27,8 @@ struct ChatWorkspaceView: View {
                     .id(activeTab.id)
             }
         }
-        .background(workspaceSurfaceTint(opacity: appearance.effectiveChatOpacity * 0.78))
+        .foregroundStyle(appearance.textColor(for: appearance.resolvedColorScheme(current: colorScheme)))
+        .background(appearance.mainBackgroundColor(for: appearance.resolvedColorScheme(current: colorScheme)))
         .onChange(of: workspace.selectedTabID) { _, _ in
             guard let tab = workspace.selectedTab else { return }
             if tab.sessionID != nil {
@@ -38,7 +39,4 @@ struct ChatWorkspaceView: View {
         }
     }
 
-    private func workspaceSurfaceTint(opacity: Double) -> Color {
-        colorScheme == .dark ? Color.black.opacity(opacity) : Color.white.opacity(opacity)
-    }
 }

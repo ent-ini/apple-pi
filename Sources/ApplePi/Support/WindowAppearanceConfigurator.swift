@@ -21,12 +21,8 @@ extension AppAppearance {
     /// Pure function of the appearance struct; the applier reads this
     /// and copies the values onto a live `NSWindow`.
     var windowAppearanceSettings: WindowAppearanceSettings {
-        // The window-level alpha is clamped to a sane lower bound so the
-        // user can never end up with a fully invisible window. The
-        // side-panel surfaces have their own per-pane opacity on top.
-        let clampedOpacity = min(max(effectiveWindowOpacity, 0.55), 1.0)
         return WindowAppearanceSettings(
-            alpha: CGFloat(clampedOpacity),
+            alpha: 1.0,
             isOpaque: false,
             titlebarAppearsTransparent: useTransparentTitlebar,
             usesFullSizeContentView: useTransparentTitlebar,

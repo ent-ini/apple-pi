@@ -5,24 +5,24 @@ import ApplePiCore
 import ApplePiRemote
 
 struct AppAppearance: Codable, Equatable {
-    var windowOpacity: Double = 0.94
-    var sidebarOpacity: Double = 0.52
-    var listOpacity: Double = 0.64
-    var chromeOpacity: Double = 0.76
-    var chatSurfaceOpacity: Double = 0.92
     var accentColorValue: CodableAccentColor = .yellow
+    var mainBackgroundColorValue: CodableAccentColor?
+    var sidebarBackgroundColorValue: CodableAccentColor?
+    var textColorValue: CodableAccentColor?
+    var userMessageBackgroundColorValue: CodableAccentColor?
+    var userMessageTextColorValue: CodableAccentColor?
+    var assistantMessageBackgroundColorValue: CodableAccentColor?
+    var assistantMessageTextColorValue: CodableAccentColor?
     var colorScheme: AppColorSchemePreference = .system
-    var reduceTransparency: Bool = false
     var useTransparentTitlebar: Bool = true
     var emptyChatMessage: String = "Hi"
     var notifications: TerminalNotificationPreferences = TerminalNotificationPreferences()
 
     init() {}
 
-    // Explicit CodingKeys: we keep `terminalOpacity` and
-    // `emptyTerminalMessage` around so a 0.x user's saved settings still
-    // decode after the rename. The current code only writes the new
-    // names, so the legacy keys are only consulted on read.
+    // Explicit CodingKeys: opacity keys and `emptyTerminalMessage` are kept
+    // only so older saved settings still decode. New encodes do not write
+    // opacity settings any more: colors are now the customization surface.
     enum CodingKeys: String, CodingKey {
         case windowOpacity
         case sidebarOpacity
@@ -30,10 +30,17 @@ struct AppAppearance: Codable, Equatable {
         case chromeOpacity
         case chatSurfaceOpacity
         case terminalOpacity
+        case reduceTransparency
         case accentColorValue
         case accentColorName
+        case mainBackgroundColorValue
+        case sidebarBackgroundColorValue
+        case textColorValue
+        case userMessageBackgroundColorValue
+        case userMessageTextColorValue
+        case assistantMessageBackgroundColorValue
+        case assistantMessageTextColorValue
         case colorScheme
-        case reduceTransparency
         case useTransparentTitlebar
         case emptyChatMessage
         case emptyTerminalMessage
@@ -42,21 +49,17 @@ struct AppAppearance: Codable, Equatable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        windowOpacity = try container.decodeIfPresent(Double.self, forKey: .windowOpacity) ?? 0.94
-        sidebarOpacity = try container.decodeIfPresent(Double.self, forKey: .sidebarOpacity) ?? 0.52
-        listOpacity = try container.decodeIfPresent(Double.self, forKey: .listOpacity) ?? 0.64
-        chromeOpacity = try container.decodeIfPresent(Double.self, forKey: .chromeOpacity) ?? 0.76
-        // Backward compatibility: accept the old `terminalOpacity` key from
-        // the previous app version so users on 0.x settings do not lose
-        // their configured transparency when upgrading to the chat build.
-        chatSurfaceOpacity = try container.decodeIfPresent(Double.self, forKey: .chatSurfaceOpacity)
-            ?? container.decodeIfPresent(Double.self, forKey: .terminalOpacity)
-            ?? 0.92
         accentColorValue = try container.decodeIfPresent(CodableAccentColor.self, forKey: .accentColorValue)
             ?? (try container.decodeIfPresent(AccentColorName.self, forKey: .accentColorName).map(CodableAccentColor.init))
             ?? .yellow
+        mainBackgroundColorValue = try container.decodeIfPresent(CodableAccentColor.self, forKey: .mainBackgroundColorValue)
+        sidebarBackgroundColorValue = try container.decodeIfPresent(CodableAccentColor.self, forKey: .sidebarBackgroundColorValue)
+        textColorValue = try container.decodeIfPresent(CodableAccentColor.self, forKey: .textColorValue)
+        userMessageBackgroundColorValue = try container.decodeIfPresent(CodableAccentColor.self, forKey: .userMessageBackgroundColorValue)
+        userMessageTextColorValue = try container.decodeIfPresent(CodableAccentColor.self, forKey: .userMessageTextColorValue)
+        assistantMessageBackgroundColorValue = try container.decodeIfPresent(CodableAccentColor.self, forKey: .assistantMessageBackgroundColorValue)
+        assistantMessageTextColorValue = try container.decodeIfPresent(CodableAccentColor.self, forKey: .assistantMessageTextColorValue)
         colorScheme = try container.decodeIfPresent(AppColorSchemePreference.self, forKey: .colorScheme) ?? .system
-        reduceTransparency = try container.decodeIfPresent(Bool.self, forKey: .reduceTransparency) ?? false
         useTransparentTitlebar = try container.decodeIfPresent(Bool.self, forKey: .useTransparentTitlebar) ?? true
         emptyChatMessage = try container.decodeIfPresent(String.self, forKey: .emptyChatMessage)
             ?? container.decodeIfPresent(String.self, forKey: .emptyTerminalMessage)
@@ -64,22 +67,17 @@ struct AppAppearance: Codable, Equatable {
         notifications = try container.decodeIfPresent(TerminalNotificationPreferences.self, forKey: .notifications) ?? TerminalNotificationPreferences()
     }
 
-    // We have to write the encoder by hand because `CodingKeys` lists two
-    // legacy cases (`terminalOpacity`, `emptyTerminalMessage`) that do not
-    // correspond to any stored property any more. Without this method
-    // Swift refuses to synthesise `Encodable`.
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(windowOpacity, forKey: .windowOpacity)
-        try container.encode(sidebarOpacity, forKey: .sidebarOpacity)
-        try container.encode(listOpacity, forKey: .listOpacity)
-        try container.encode(chromeOpacity, forKey: .chromeOpacity)
-        try container.encode(chatSurfaceOpacity, forKey: .chatSurfaceOpacity)
-        // terminalOpacity / emptyTerminalMessage are legacy read-only
-        // fields; new encodes always write the renamed properties.
         try container.encode(accentColorValue, forKey: .accentColorValue)
+        try container.encodeIfPresent(mainBackgroundColorValue, forKey: .mainBackgroundColorValue)
+        try container.encodeIfPresent(sidebarBackgroundColorValue, forKey: .sidebarBackgroundColorValue)
+        try container.encodeIfPresent(textColorValue, forKey: .textColorValue)
+        try container.encodeIfPresent(userMessageBackgroundColorValue, forKey: .userMessageBackgroundColorValue)
+        try container.encodeIfPresent(userMessageTextColorValue, forKey: .userMessageTextColorValue)
+        try container.encodeIfPresent(assistantMessageBackgroundColorValue, forKey: .assistantMessageBackgroundColorValue)
+        try container.encodeIfPresent(assistantMessageTextColorValue, forKey: .assistantMessageTextColorValue)
         try container.encode(colorScheme, forKey: .colorScheme)
-        try container.encode(reduceTransparency, forKey: .reduceTransparency)
         try container.encode(useTransparentTitlebar, forKey: .useTransparentTitlebar)
         try container.encode(emptyChatMessage, forKey: .emptyChatMessage)
         try container.encode(notifications, forKey: .notifications)
@@ -90,11 +88,85 @@ struct AppAppearance: Codable, Equatable {
     }
 
     var accentForegroundColor: Color {
-        accentColorValue.isDark ? .white : .black
+        accentColorValue.readableForegroundColor
+    }
+
+    var userMessageBackgroundColor: Color {
+        userMessageBackgroundColorValue?.color ?? accentColor
+    }
+
+    var userMessageTextColor: Color {
+        userMessageTextColorValue?.color ?? accentForegroundColor
     }
 
     mutating func setAccentColor(_ color: Color) {
         accentColorValue = CodableAccentColor(color)
+    }
+
+    mutating func setMainBackgroundColor(_ color: Color) {
+        mainBackgroundColorValue = CodableAccentColor(color)
+    }
+
+    mutating func setSidebarBackgroundColor(_ color: Color) {
+        sidebarBackgroundColorValue = CodableAccentColor(color)
+    }
+
+    mutating func setTextColor(_ color: Color) {
+        textColorValue = CodableAccentColor(color)
+    }
+
+    mutating func setUserMessageBackgroundColor(_ color: Color) {
+        userMessageBackgroundColorValue = CodableAccentColor(color)
+    }
+
+    mutating func setUserMessageTextColor(_ color: Color) {
+        userMessageTextColorValue = CodableAccentColor(color)
+    }
+
+    mutating func setAssistantMessageBackgroundColor(_ color: Color) {
+        assistantMessageBackgroundColorValue = CodableAccentColor(color)
+    }
+
+    mutating func setAssistantMessageTextColor(_ color: Color) {
+        assistantMessageTextColorValue = CodableAccentColor(color)
+    }
+
+    mutating func resetCustomColors() {
+        mainBackgroundColorValue = nil
+        sidebarBackgroundColorValue = nil
+        textColorValue = nil
+        userMessageBackgroundColorValue = nil
+        userMessageTextColorValue = nil
+        assistantMessageBackgroundColorValue = nil
+        assistantMessageTextColorValue = nil
+    }
+
+    func resolvedColorScheme(current: ColorScheme) -> ColorScheme {
+        colorScheme.colorScheme ?? current
+    }
+
+    func mainBackgroundColor(for colorScheme: ColorScheme) -> Color {
+        mainBackgroundColorValue?.color ?? adaptiveSurfaceColor(for: colorScheme)
+    }
+
+    func sidebarBackgroundColor(for colorScheme: ColorScheme) -> Color {
+        sidebarBackgroundColorValue?.color ?? adaptiveSidebarColor(for: colorScheme)
+    }
+
+    func textColor(for colorScheme: ColorScheme) -> Color {
+        textColorValue?.color ?? adaptiveTextColor(for: colorScheme)
+    }
+
+    func assistantMessageBackgroundColor(for colorScheme: ColorScheme) -> Color {
+        assistantMessageBackgroundColorValue?.color ?? (colorScheme == .dark ? Color.white.opacity(0.10) : Color.black.opacity(0.06))
+    }
+
+    func assistantMessageTextColor(for colorScheme: ColorScheme) -> Color {
+        assistantMessageTextColorValue?.color ?? adaptiveTextColor(for: colorScheme)
+    }
+
+    func systemMessageBackgroundColor(for colorScheme: ColorScheme) -> Color {
+        assistantMessageBackgroundColor(for: colorScheme).opacity(0.72)
     }
 
     var resolvedEmptyChatMessage: String {
@@ -102,24 +174,16 @@ struct AppAppearance: Codable, Equatable {
         return trimmedMessage.isEmpty ? "Hi" : trimmedMessage
     }
 
-    var effectiveWindowOpacity: Double {
-        reduceTransparency ? 1.0 : windowOpacity
+    private func adaptiveSurfaceColor(for colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark ? Color(red: 0.055, green: 0.058, blue: 0.065) : Color(red: 0.965, green: 0.965, blue: 0.955)
     }
 
-    var effectiveSidebarOpacity: Double {
-        reduceTransparency ? 0.92 : sidebarOpacity
+    private func adaptiveSidebarColor(for colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark ? Color(red: 0.078, green: 0.082, blue: 0.092) : Color(red: 0.91, green: 0.91, blue: 0.895)
     }
 
-    var effectiveListOpacity: Double {
-        reduceTransparency ? 0.92 : listOpacity
-    }
-
-    var effectiveChromeOpacity: Double {
-        reduceTransparency ? 0.94 : chromeOpacity
-    }
-
-    var effectiveChatOpacity: Double {
-        reduceTransparency ? 1.0 : chatSurfaceOpacity
+    private func adaptiveTextColor(for colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark ? .white : .black
     }
 }
 
@@ -230,6 +294,10 @@ struct CodableAccentColor: Codable, Equatable {
 
     var isDark: Bool {
         relativeLuminance < 0.58
+    }
+
+    var readableForegroundColor: Color {
+        isDark ? .white : .black
     }
 
     private var relativeLuminance: Double {

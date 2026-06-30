@@ -25,18 +25,10 @@ import Testing
     #expect(settings.usesFullSizeContentView)
 }
 
-@Test func windowAppearanceSettingsClampAlphaToAvoidInvisibleWindow() {
-    var appearance = AppAppearance()
-    appearance.windowOpacity = 0.10
+@Test func windowAppearanceSettingsUseFullyOpaqueWindowAlpha() {
+    let appearance = AppAppearance()
     let settings = appearance.windowAppearanceSettings
-    #expect(settings.alpha >= 0.55)
-}
-
-@Test func windowAppearanceSettingsClampAlphaToAtMostOne() {
-    var appearance = AppAppearance()
-    appearance.windowOpacity = 1.5
-    let settings = appearance.windowAppearanceSettings
-    #expect(settings.alpha <= 1.0)
+    #expect(settings.alpha == 1.0)
 }
 
 @MainActor

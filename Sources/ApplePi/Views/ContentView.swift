@@ -4,6 +4,7 @@ import ApplePiCore
 import ApplePiRemote
 
 struct ContentView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var appState: PiAppState
     @AppStorage("ApplePi.showsSessionList") private var wantsSessionList = true
     @AppStorage("ApplePi.sessionListWidth") private var storedSessionListWidth = PaneLayout.sessionListDefault
@@ -87,6 +88,7 @@ struct ContentView: View {
             }
             .animation(.snappy(duration: 0.18), value: paneVisibility)
         }
+        .foregroundStyle(appState.appearance.textColor(for: appState.appearance.resolvedColorScheme(current: colorScheme)))
         .background(AppBackdrop(appearance: appState.appearance))
         .onAppear {
             liveSessionListWidth = storedSessionListWidth
@@ -326,22 +328,9 @@ private struct AppBackdrop: View {
     var body: some View {
         ZStack {
             Rectangle()
-                .fill(.ultraThinMaterial)
-            LinearGradient(
-                colors: [
-                    backdropShade(opacity: 0.16),
-                    backdropShade(opacity: 0.34),
-                    appearance.accentColor.opacity(0.05)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
+                .fill(appearance.mainBackgroundColor(for: appearance.resolvedColorScheme(current: colorScheme)))
         }
         .ignoresSafeArea()
-    }
-
-    private func backdropShade(opacity: Double) -> Color {
-        colorScheme == .dark ? Color.black.opacity(opacity) : Color.white.opacity(opacity)
     }
 }
 
@@ -382,10 +371,7 @@ struct ProjectSidebarView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
         }
-        .background(
-            surfaceTint(for: colorScheme, opacity: appState.appearance.effectiveSidebarOpacity)
-                .background(.ultraThinMaterial)
-        )
+        .background(appState.appearance.sidebarBackgroundColor(for: appState.appearance.resolvedColorScheme(current: colorScheme)))
     }
 }
 
@@ -727,10 +713,7 @@ struct SessionListView: View {
             }
             .scrollContentBackground(.hidden)
         }
-        .background(
-            surfaceTint(for: colorScheme, opacity: appState.appearance.effectiveListOpacity)
-                .background(.thinMaterial)
-        )
+        .background(appState.appearance.sidebarBackgroundColor(for: appState.appearance.resolvedColorScheme(current: colorScheme)))
         .onAppear {
             applyPendingSearchFocus()
         }
@@ -781,10 +764,7 @@ private struct UtilitySidebarSessionContent: View {
                 )
             }
         }
-        .background(
-            surfaceTint(for: colorScheme, opacity: appState.appearance.effectiveListOpacity)
-                .background(.thinMaterial)
-        )
+        .background(appState.appearance.sidebarBackgroundColor(for: appState.appearance.resolvedColorScheme(current: colorScheme)))
     }
 
     private var headerSubtitle: String {
@@ -1284,15 +1264,8 @@ struct DetailView: View {
                 appearance: appState.appearance
             )
         }
-        .background(
-            surfaceTint(for: colorScheme, opacity: appState.appearance.effectiveChatOpacity)
-                .background(.regularMaterial)
-        )
+        .background(appState.appearance.mainBackgroundColor(for: appState.appearance.resolvedColorScheme(current: colorScheme)))
     }
-}
-
-private func surfaceTint(for colorScheme: ColorScheme, opacity: Double) -> Color {
-    colorScheme == .dark ? Color.black.opacity(opacity) : Color.white.opacity(opacity)
 }
 
 private func controlTint(for colorScheme: ColorScheme, opacity: Double) -> Color {

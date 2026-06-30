@@ -261,6 +261,7 @@ private final class ChatImageCache: @unchecked Sendable {
 /// background; assistant messages span almost the full width with a
 /// neutral surface so long responses are easy to read.
 struct MessageBubble: View {
+    @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var appState: PiAppState
     let message: Message
     var fileReferenceBaseDirectory: String?
@@ -475,23 +476,27 @@ struct MessageBubble: View {
         return ChatFileReferenceExtractor.extract(from: rawText)
     }
 
+    private var resolvedColorScheme: ColorScheme {
+        appState.appearance.resolvedColorScheme(current: colorScheme)
+    }
+
     private var bubbleBackground: Color {
         switch message.role {
         case .user:
-            return appState.appearance.accentColor
+            return appState.appearance.userMessageBackgroundColor
         case .assistant:
-            return Color.gray.opacity(0.10)
+            return appState.appearance.assistantMessageBackgroundColor(for: resolvedColorScheme)
         case .system:
-            return Color.gray.opacity(0.06)
+            return appState.appearance.systemMessageBackgroundColor(for: resolvedColorScheme)
         }
     }
 
     private var textColor: Color {
         switch message.role {
         case .user:
-            return appState.appearance.accentForegroundColor
+            return appState.appearance.userMessageTextColor
         case .assistant, .system:
-            return .primary
+            return appState.appearance.assistantMessageTextColor(for: resolvedColorScheme)
         }
     }
 
@@ -503,9 +508,9 @@ struct MessageBubble: View {
     private var timestampColor: Color {
         switch message.role {
         case .user:
-            return appState.appearance.accentForegroundColor.opacity(0.82)
+            return appState.appearance.userMessageTextColor.opacity(0.82)
         case .assistant, .system:
-            return .secondary
+            return appState.appearance.assistantMessageTextColor(for: resolvedColorScheme).opacity(0.64)
         }
     }
 

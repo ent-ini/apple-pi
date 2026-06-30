@@ -4,6 +4,7 @@ import ApplePiCore
 import ApplePiRemote
 
 struct SettingsView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var appState: PiAppState
     @State private var notificationTestStatus: String?
     @State private var apiTokenInput: String = ""
@@ -219,49 +220,65 @@ struct SettingsView: View {
             }
             .pickerStyle(.segmented)
 
-            opacitySlider(
-                "Window opacity",
-                value: appState.appearance.windowOpacity,
-                range: 0.58...1.0
-            ) { value in
-                appState.updateAppearance { $0.windowOpacity = value }
-            }
-
-            opacitySlider(
-                "Project sidebar",
-                value: appState.appearance.sidebarOpacity,
-                range: 0.25...0.85
-            ) { value in
-                appState.updateAppearance { $0.sidebarOpacity = value }
-            }
-
-            opacitySlider(
-                "Session list",
-                value: appState.appearance.listOpacity,
-                range: 0.30...0.90
-            ) { value in
-                appState.updateAppearance { $0.listOpacity = value }
-            }
-
-            opacitySlider(
-                "Chat surface",
-                value: appState.appearance.chatSurfaceOpacity,
-                range: 0.55...1.0
-            ) { value in
-                appState.updateAppearance { $0.chatSurfaceOpacity = value }
-            }
-
-            Toggle("Reduce transparency", isOn: Binding(
-                get: { appState.appearance.reduceTransparency },
-                set: { newValue in appState.updateAppearance { $0.reduceTransparency = newValue } }
-            ))
-
             ColorPicker("Accent", selection: Binding(
                 get: { appState.appearance.accentColor },
                 set: { newValue in
                     appState.updateAppearance { $0.setAccentColor(newValue) }
                 }
             ), supportsOpacity: false)
+
+            ColorPicker("Main background", selection: Binding(
+                get: { appState.appearance.mainBackgroundColor(for: appState.appearance.resolvedColorScheme(current: colorScheme)) },
+                set: { newValue in
+                    appState.updateAppearance { $0.setMainBackgroundColor(newValue) }
+                }
+            ), supportsOpacity: false)
+
+            ColorPicker("Sidebars background", selection: Binding(
+                get: { appState.appearance.sidebarBackgroundColor(for: appState.appearance.resolvedColorScheme(current: colorScheme)) },
+                set: { newValue in
+                    appState.updateAppearance { $0.setSidebarBackgroundColor(newValue) }
+                }
+            ), supportsOpacity: false)
+
+            ColorPicker("Text", selection: Binding(
+                get: { appState.appearance.textColor(for: appState.appearance.resolvedColorScheme(current: colorScheme)) },
+                set: { newValue in
+                    appState.updateAppearance { $0.setTextColor(newValue) }
+                }
+            ), supportsOpacity: false)
+
+            ColorPicker("User message", selection: Binding(
+                get: { appState.appearance.userMessageBackgroundColor },
+                set: { newValue in
+                    appState.updateAppearance { $0.setUserMessageBackgroundColor(newValue) }
+                }
+            ), supportsOpacity: false)
+
+            ColorPicker("User message text", selection: Binding(
+                get: { appState.appearance.userMessageTextColor },
+                set: { newValue in
+                    appState.updateAppearance { $0.setUserMessageTextColor(newValue) }
+                }
+            ), supportsOpacity: false)
+
+            ColorPicker("Assistant message", selection: Binding(
+                get: { appState.appearance.assistantMessageBackgroundColor(for: appState.appearance.resolvedColorScheme(current: colorScheme)) },
+                set: { newValue in
+                    appState.updateAppearance { $0.setAssistantMessageBackgroundColor(newValue) }
+                }
+            ), supportsOpacity: false)
+
+            ColorPicker("Assistant message text", selection: Binding(
+                get: { appState.appearance.assistantMessageTextColor(for: appState.appearance.resolvedColorScheme(current: colorScheme)) },
+                set: { newValue in
+                    appState.updateAppearance { $0.setAssistantMessageTextColor(newValue) }
+                }
+            ), supportsOpacity: false)
+
+            Button("Reset custom colors") {
+                appState.updateAppearance { $0.resetCustomColors() }
+            }
 
             Toggle("Transparent titlebar", isOn: Binding(
                 get: { appState.appearance.useTransparentTitlebar },
@@ -497,30 +514,6 @@ struct SettingsView: View {
                 appState.updateShortcut(newValue, for: action)
             }
         )
-    }
-
-    private func opacitySlider(
-        _ title: String,
-        value: Double,
-        range: ClosedRange<Double>,
-        update: @escaping (Double) -> Void
-    ) -> some View {
-        HStack {
-            Slider(
-                value: Binding(
-                    get: { value },
-                    set: { update($0) }
-                ),
-                in: range,
-                step: 0.01
-            ) {
-                Text(title)
-            }
-            Text("\(Int(value * 100))%")
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-                .frame(width: 42, alignment: .trailing)
-        }
     }
 
     private var currentEditingHost: PiHostConfiguration {

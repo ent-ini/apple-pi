@@ -6,6 +6,7 @@ import ApplePiRemote
 /// View for a single open Pi session. The composer stays compact but now
 /// supports staged attachments above the input row.
 struct ChatSessionView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var appState: PiAppState
     @ObservedObject var session: ChatSession
 
@@ -397,6 +398,7 @@ struct ChatSessionView: View {
             ComposerTextView(
                 text: draftTextBinding,
                 dynamicHeight: draftHeightBinding,
+                textColor: appState.appearance.textColor(for: appState.appearance.resolvedColorScheme(current: colorScheme)),
                 onSubmit: handleComposerSubmit,
                 onPasteAttachments: handlePasteAttachments
             )
@@ -897,6 +899,7 @@ private struct VoiceWaveformView: View {
 private struct ComposerTextView: NSViewRepresentable {
     @Binding var text: String
     @Binding var dynamicHeight: CGFloat
+    let textColor: Color
     let onSubmit: () -> Void
     let onPasteAttachments: (NSPasteboard) -> Void
 
@@ -939,8 +942,9 @@ private struct ComposerTextView: NSViewRepresentable {
         textView.drawsBackground = false
         textView.backgroundColor = .clear
         textView.font = .systemFont(ofSize: NSFont.systemFontSize)
-        textView.textColor = .labelColor
-        textView.insertionPointColor = .labelColor
+        let resolvedTextColor = NSColor(textColor).usingColorSpace(.sRGB) ?? .labelColor
+        textView.textColor = resolvedTextColor
+        textView.insertionPointColor = resolvedTextColor
         textView.textContainerInset = NSSize(width: 10, height: 6)
         textView.textContainer?.lineFragmentPadding = 0
         textView.textContainer?.lineBreakMode = .byCharWrapping
@@ -970,6 +974,9 @@ private struct ComposerTextView: NSViewRepresentable {
         if textView.string != text {
             textView.string = text
         }
+        let resolvedTextColor = NSColor(textColor).usingColorSpace(.sRGB) ?? .labelColor
+        textView.textColor = resolvedTextColor
+        textView.insertionPointColor = resolvedTextColor
         if let composerScrollView = scrollView as? ComposerScrollView {
             composerScrollView.composerTextView = textView
             composerScrollView.needsLayout = true
