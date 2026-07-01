@@ -169,6 +169,13 @@ final class MobilePiAppState: ObservableObject {
         await reloadSelectedSession()
     }
 
+    func startNewSession() {
+        selectedSession = nil
+        resetSelectedTranscript()
+        stopSelectedSessionStream()
+        statusMessage = "New session ready."
+    }
+
     func reloadSelectedSession() async {
         guard let selectedSession else { return }
         let generation = UUID()

@@ -12,6 +12,12 @@ struct MobileRootView: View {
                 .toolbar {
                     ToolbarItemGroup(placement: .primaryAction) {
                         Button {
+                            appState.startNewSession()
+                        } label: {
+                            Label("New", systemImage: "square.and.pencil")
+                        }
+
+                        Button {
                             Task { await appState.reloadCatalog() }
                         } label: {
                             Label("Refresh", systemImage: "arrow.clockwise")
@@ -146,6 +152,12 @@ private struct MobileSessionDetailView: View {
                     ProgressView()
                 }
                 Button {
+                    appState.startNewSession()
+                } label: {
+                    Label("New", systemImage: "square.and.pencil")
+                }
+
+                Button {
                     Task { await appState.reloadSelectedSession() }
                 } label: {
                     Label("Reload", systemImage: "arrow.clockwise")
@@ -188,14 +200,10 @@ private struct MobileSessionDetailView: View {
             Button {
                 Task { await appState.sendDraft() }
             } label: {
-                if appState.isSending {
-                    ProgressView()
-                } else {
-                    Image(systemName: "paperplane.fill")
-                }
+                Image(systemName: "paperplane.fill")
             }
             .buttonStyle(.borderedProminent)
-            .disabled(appState.isSending || appState.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(appState.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
         .padding()
     }
@@ -227,16 +235,29 @@ private struct MessageBubble: View {
         HStack {
             if message.role == .user { Spacer(minLength: 32) }
             VStack(alignment: .leading, spacing: 6) {
-                Text(message.role.rawValue.capitalized)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(message.plainText)
-                    .textSelection(.enabled)
+                MarkdownMessageText(markdown: message.plainText)
             }
             .padding(12)
             .background(message.role == .user ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.12))
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             if message.role != .user { Spacer(minLength: 32) }
+        }
+    }
+}
+
+private struct MarkdownMessageText: View {
+    let markdown: String
+
+    var body: some View {
+        if let attributed = try? AttributedString(
+            markdown: markdown,
+            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)
+        ) {
+            Text(attributed)
+                .textSelection(.enabled)
+        } else {
+            Text(markdown)
+                .textSelection(.enabled)
         }
     }
 }
