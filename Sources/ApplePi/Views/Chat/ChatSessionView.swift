@@ -49,8 +49,7 @@ struct ChatSessionView: View {
     }
 
     private var canAdjustSessionOptions: Bool {
-        appState.host.usesRemoteDaemonTransport &&
-        (session.sessionID != nil || session.launchRequest != nil)
+        session.sessionID != nil || session.launchRequest != nil
     }
 
     private var slashCommandMatches: [SlashCommand] {

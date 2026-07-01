@@ -70,10 +70,10 @@ import Testing
     #expect(a.persistenceFingerprint != b.persistenceFingerprint)
 }
 
-@Test func hostFingerprintChangesWithMode() {
-    let a = PiHostConfiguration(mode: .local, agentDirectory: "/tmp/agent")
-    let b = PiHostConfiguration(mode: .remoteAPI, agentDirectory: "/tmp/agent")
-    #expect(a.persistenceFingerprint != b.persistenceFingerprint)
+@Test func hostFingerprintDecodesLegacyLocalAsRemoteAPI() throws {
+    let data = #"{"mode":"local","agentDirectory":"/tmp/agent"}"#.data(using: .utf8)!
+    let decoded = try JSONDecoder().decode(PiHostConfiguration.self, from: data)
+    #expect(decoded.mode == .remoteAPI)
 }
 
 @Test func hostFingerprintChangesWithDaemonURL() {
@@ -85,7 +85,7 @@ import Testing
 // MARK: - PiAppState save
 
 @MainActor
-@Test func appStateSavePersistsFileBackedTabsAndFiltersEphemeralKeys() throws {
+@Test func appStateSavePersistsRemoteTabsAndFiltersLocalOrEphemeralKeys() throws {
     let defaults = isolatedDefaults()
     defaults.set(Date(), forKey: "ApplePi.updateCheck.lastCheckedAt")
     let state = PiAppState(
@@ -97,14 +97,14 @@ import Testing
     let realFile = try makeSessionFile(contents: "")
     state.chatWorkspace.openOrSelectTab(
         key: realFile.path,
-        title: "Real",
+        title: "Local legacy",
         sessionID: nil,
         sessionPath: realFile.path
     )
     state.chatWorkspace.openOrSelectTab(
-        key: "new:00000000-0000-0000-0000-000000000001",
-        title: "Ephemeral",
-        sessionID: nil,
+        key: "remote-1",
+        title: "Remote",
+        sessionID: "remote-1",
         sessionPath: nil
     )
     state.chatWorkspace.openOrSelectTab(
@@ -119,7 +119,7 @@ import Testing
     let loaded = ChatTabPersistence(defaults: defaults).load()
     let snapshot = try #require(loaded)
     #expect(snapshot.tabs.count == 1)
-    #expect(snapshot.tabs.first?.key == realFile.path)
+    #expect(snapshot.tabs.first?.key == "remote-1")
     // The selected tab is the fork one, which is filtered out, so the
     // persisted selected key must be nil.
     #expect(snapshot.selectedTabKey == nil)
@@ -127,7 +127,7 @@ import Testing
 }
 
 @MainActor
-@Test func appStateSavePersistsSelectedKeyForFileBackedTab() throws {
+@Test func appStateSavePersistsSelectedKeyForRemoteTab() throws {
     let defaults = isolatedDefaults()
     defaults.set(Date(), forKey: "ApplePi.updateCheck.lastCheckedAt")
     let state = PiAppState(
@@ -136,18 +136,17 @@ import Testing
         startsBackgroundWork: false
     )
 
-    let realFile = try makeSessionFile(contents: "")
     state.chatWorkspace.openOrSelectTab(
-        key: realFile.path,
-        title: "Real",
-        sessionID: nil,
-        sessionPath: realFile.path
+        key: "remote-1",
+        title: "Remote",
+        sessionID: "remote-1",
+        sessionPath: nil
     )
 
     state.savePersistedChatTabs()
 
     let snapshot = try #require(ChatTabPersistence(defaults: defaults).load())
-    #expect(snapshot.selectedTabKey == realFile.path)
+    #expect(snapshot.selectedTabKey == "remote-1")
 }
 
 // MARK: - PiAppState restore
@@ -176,7 +175,7 @@ import Testing
 }
 
 @MainActor
-@Test func appStateRestoreReopensLocalFileBackedTab() throws {
+@Test func appStateRestoreIgnoresLegacyLocalFileBackedTab() throws {
     let defaults = isolatedDefaults()
     let realFile = try makeSessionFile(contents: "{\"type\":\"session\",\"id\":\"a\"}\n")
     let host = PiHostConfiguration()
@@ -194,9 +193,8 @@ import Testing
         startsBackgroundWork: false
     )
 
-    #expect(state.chatWorkspace.tabs.count == 1)
-    #expect(state.chatWorkspace.tabs.first?.key == realFile.path)
-    #expect(state.chatWorkspace.selectedTab?.key == realFile.path)
+    #expect(state.chatWorkspace.tabs.isEmpty)
+    #expect(state.chatWorkspace.selectedTab == nil)
 }
 
 @MainActor
@@ -283,19 +281,17 @@ import Testing
 }
 
 @MainActor
-@Test func appStateRestoreFallsBackGracefullyWhenSelectedKeyMissing() throws {
+@Test func appStateRestoreFallsBackGracefullyWhenSelectedRemoteKeyMissing() throws {
     let defaults = isolatedDefaults()
-    let fileA = try makeSessionFile(contents: "")
-    let fileB = try makeSessionFile(contents: "")
     let snapshot = PersistedChatTabsSnapshot(
         hostFingerprint: PiHostConfiguration().persistenceFingerprint,
         tabs: [
-            PersistedChatTab(key: fileA.path, title: "A", sessionID: nil),
-            PersistedChatTab(key: fileB.path, title: "B", sessionID: nil)
+            PersistedChatTab(key: "remote-a", title: "A", sessionID: "remote-a"),
+            PersistedChatTab(key: "remote-b", title: "B", sessionID: "remote-b")
         ],
-        // Selected key is stale (file deleted) — we should not crash
-        // and we should leave the natural selection alone.
-        selectedTabKey: "/tmp/this-file-is-gone-\(UUID().uuidString).jsonl"
+        // Selected key is stale — we should not crash and we should leave the
+        // natural selection alone.
+        selectedTabKey: "missing-remote"
     )
     ChatTabPersistence(defaults: defaults).save(snapshot)
     defaults.set(Date(), forKey: "ApplePi.updateCheck.lastCheckedAt")

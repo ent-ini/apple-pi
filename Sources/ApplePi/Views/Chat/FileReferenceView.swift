@@ -277,33 +277,11 @@ struct ChatFileReferenceCard: View {
     }
 
     private func fetchFile() async throws -> RemoteFileDownload {
-        if appState.host.usesRemoteDaemonTransport {
-            return try await RemoteDaemonClient().downloadFile(
-                host: appState.host,
-                path: reference.path,
-                baseDirectory: baseDirectory
-            )
-        }
-
-        let url = URL(fileURLWithPath: resolvedLocalPath())
-        return RemoteFileDownload(
-            data: try Data(contentsOf: url),
-            fileName: url.lastPathComponent,
-            mimeType: nil
+        try await RemoteDaemonClient().downloadFile(
+            host: appState.host,
+            path: reference.path,
+            baseDirectory: baseDirectory
         )
-    }
-
-    private func resolvedLocalPath() -> String {
-        let expanded = (reference.path as NSString).expandingTildeInPath
-        if expanded.hasPrefix("/") { return expanded }
-        if let baseDirectory = baseDirectory?.nilIfBlank {
-            return URL(fileURLWithPath: (baseDirectory as NSString).expandingTildeInPath)
-                .appendingPathComponent(reference.path)
-                .path
-        }
-        return URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .appendingPathComponent(reference.path)
-            .path
     }
 
     private func sanitizeFileName(_ value: String) -> String {

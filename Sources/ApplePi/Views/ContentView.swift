@@ -844,8 +844,7 @@ private struct UtilitySubagentsPanel: View {
     }
 
     private func loadFullSessionEventsIfAvailable() async {
-        guard appState.host.usesRemoteDaemonTransport,
-              let sessionID = session.sessionID?.nilIfBlank else {
+        guard let sessionID = session.sessionID?.nilIfBlank else {
             fullSessionEvents = []
             loadedFullSessionID = nil
             return

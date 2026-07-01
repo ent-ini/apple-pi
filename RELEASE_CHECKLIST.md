@@ -23,7 +23,6 @@ swift test
 Expected coverage areas:
 
 - shell quoting
-- local Pi command construction
 - remote API URL/host parsing
 - session-root resolution
 - project trust handling
@@ -31,7 +30,7 @@ Expected coverage areas:
 - remote delete safety
 - remote configuration summaries
 - configuration summary counts
-- `PiProcessEnvironment` environment-variable allowlist (shared by local and remote)
+- remote-only catalog/send/tab restore behavior
 
 ## Build
 

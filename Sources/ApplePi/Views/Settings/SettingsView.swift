@@ -153,13 +153,9 @@ struct SettingsView: View {
                 Button(appState.isLoadingAvailableModels ? "Loading models…" : "Refresh model list") {
                     appState.refreshAvailableModelsCache(force: true)
                 }
-                .disabled(appState.isLoadingAvailableModels || !appState.host.usesRemoteDaemonTransport)
+                .disabled(appState.isLoadingAvailableModels)
 
-                if !appState.host.usesRemoteDaemonTransport {
-                    Text("Available for remote daemon hosts only.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else if appState.cachedAvailableModels.isEmpty {
+                if appState.cachedAvailableModels.isEmpty {
                     Text("No cached models yet. Refresh once to populate the picker.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -573,15 +569,7 @@ struct SettingsView: View {
     }
 
     private var notificationExtensionHelpText: String {
-        if appState.host.usesRemoteDaemonTransport {
-            return "Remote sessions need a Pi notification helper installed on the remote host. The bundled helper is only available to local sessions started from this app."
-        }
-
-        if appState.appearance.notifications.isEnabled {
-            return "Local sessions started from pi-app load a bundled Pi notification helper. Your existing Pi agent settings are not changed."
-        } else {
-            return "The bundled Pi notification helper will not be loaded for new local sessions while notifications are off."
-        }
+        "Remote sessions need a Pi notification helper installed on the remote host. The bundled helper is not used by the remote-only Mac app."
     }
 
     private func notificationStatusText(for result: TerminalNotificationDeliveryResult) -> String {

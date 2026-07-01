@@ -1,22 +1,13 @@
 import Foundation
 
 public enum PiHostMode: String, CaseIterable, Identifiable, Sendable {
-    /// Legacy value kept only so old preferences/tests can still decode. New UI
-    /// exposes Remote API exclusively; local Pi execution is no longer a product
-    /// mode and must not be selected by default.
-    case local
     case remoteAPI
 
     public static var allCases: [PiHostMode] { [.remoteAPI] }
 
     public var id: String { rawValue }
 
-    public var title: String {
-        switch self {
-        case .local: "Local Mac (legacy)"
-        case .remoteAPI: "Remote API"
-        }
-    }
+    public var title: String { "Remote API" }
 }
 
 extension PiHostMode: Codable {

@@ -2,15 +2,14 @@ import Foundation
 import ApplePiCore
 import ApplePiRemote
 
-/// One open tab captured for persistence. Only file-backed or remote
-/// sessions are saved — `new:<UUID>` and `fork:<path>:<UUID>` ephemeral
-/// keys are filtered out at save time so a fresh launch never tries to
-/// resume a tab that has no on-disk or remote backing.
+/// One open tab captured for persistence. Only remote daemon-backed sessions
+/// are saved — `new:<UUID>`, `fork:<path>:<UUID>`, and legacy file-backed tabs
+/// are filtered out so a fresh launch never needs local session files.
 struct PersistedChatTab: Codable, Equatable, Sendable {
     var key: String
     var title: String
-    /// The remote daemon's session ID, if known. `nil` for purely
-    /// local file-backed tabs.
+    /// The remote daemon's session ID. Legacy snapshots may have `nil`; restore
+    /// ignores those tabs in the remote-only app.
     var sessionID: String?
 }
 

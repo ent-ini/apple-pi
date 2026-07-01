@@ -115,8 +115,8 @@ script/package_release.sh
 codesign --verify --deep --strict --verbose=2 "dist/pi-app.app"
 ```
 
-The test suite currently covers shell quoting, local Pi command construction, the `PiProcessEnvironment` environment-variable allowlist that is shared by local and remote turn runners, session-root resolution, invalid settings handling, trust behavior, remote delete safety, remote configuration summaries, configuration summary counting, the secure 0600 secret-file writer, the turn-lifecycle / SSE-stream cancellation plumbing, the multipart filename whitelist used by `RemoteDaemonClient` and `GroqTranscriptionClient`, the redaction of bearer tokens in the Remote API section of `SettingsView`, and the non-crashing URL initialisation of the `UpdateCheckService` and Groq endpoints.
-It also covers OSC 777 notification payload parsing and local notification-extension launch gating.
+The test suite currently covers shell quoting, remote-only catalog/send/tab restore behavior, remote API URL/host parsing, session-root resolution, invalid settings handling, trust behavior, remote delete safety, remote configuration summaries, configuration summary counting, the secure 0600 secret-file writer, the turn-lifecycle / SSE-stream cancellation plumbing, the multipart filename whitelist used by `RemoteDaemonClient` and `GroqTranscriptionClient`, the redaction of bearer tokens in the Remote API section of `SettingsView`, and the non-crashing URL initialisation of the `UpdateCheckService` and Groq endpoints.
+It also covers OSC 777 notification payload parsing and notification-extension launch gating.
 
 ## Reporting Vulnerabilities
 
@@ -126,7 +126,7 @@ Please include:
 
 - affected version or commit
 - macOS version
-- whether the issue is local mode, remote API mode, packaging, or documentation
+- whether the issue is remote API mode, packaging, or documentation
 - reproduction steps
 - expected behavior
 - actual behavior

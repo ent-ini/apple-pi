@@ -394,47 +394,6 @@ import Testing
 }
 
 @MainActor
-@Test(.disabled("Host mode switching is legacy-disabled in remote-only mode")) func appStateHostModeChangeRefreshesWithoutStaleProjectContext() async throws {
-    let defaults = isolatedDefaults()
-    defaults.set(Date(), forKey: "ApplePi.updateCheck.lastCheckedAt")
-    let probe = CatalogLoaderProbe()
-    let localSnapshot = PiCatalogSnapshot(
-        projects: [
-            PiProject(
-                id: "local-project",
-                title: "Local Project",
-                workingDirectory: "/Users/example/project",
-                sessionDirectory: "local-project",
-                sessionCount: 0,
-                lastActivity: nil
-            )
-        ],
-        sessions: []
-    )
-    let emptySnapshot = PiCatalogSnapshot(projects: [], sessions: [])
-    let state = PiAppState(
-        defaults: defaults,
-        configurationService: PiConfigurationService(environment: [:]),
-        catalogLoader: { host, activeProjectDirectory in
-            await probe.load(
-                host: host,
-                activeProjectDirectory: activeProjectDirectory,
-                snapshot: host.mode == .local ? localSnapshot : emptySnapshot
-            )
-        }
-    )
-    try await Task.sleep(for: .milliseconds(100))
-    #expect(state.activeProject?.workingDirectory == "/Users/example/project")
-
-    state.host.mode = .remoteAPI
-    try await Task.sleep(for: .milliseconds(100))
-
-    #expect(await probe.loadedProjectDirectories == [nil, nil])
-    #expect(state.projects.isEmpty)
-    #expect(state.selection == nil)
-}
-
-@MainActor
 @Test func catalogRefreshPreservesOpenPendingSessionInSidebar() async throws {
     let defaults = isolatedDefaults()
     defaults.set(Date(), forKey: "ApplePi.updateCheck.lastCheckedAt")
@@ -710,8 +669,6 @@ import Testing
         catalogLoader: { _, _ in PiCatalogSnapshot(projects: [], sessions: []) },
         startsBackgroundWork: false
     )
-    state.host.mode = .remoteAPI
-
     state.delete(session)
 
     #expect(Foundation.FileManager().fileExists(atPath: sessionFile.path))
