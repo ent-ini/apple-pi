@@ -26,7 +26,7 @@ struct MessageListView: View {
         GeometryReader { proxy in
             ScrollViewReader { scrollProxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 14) {
+                    LazyVStack(alignment: .leading, spacing: 10) {
                         if session.hasEarlierHistory || session.isLoadingEarlierHistory {
                             historyLoadRow
                         }
@@ -530,8 +530,8 @@ struct ToolInteractionRow: View {
                     }
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .padding(.horizontal, isExpanded ? 10 : 0)
+            .padding(.vertical, isExpanded ? 8 : 0)
             .frame(maxWidth: 620, alignment: .leading)
             .background {
                 if isExpanded {
@@ -819,8 +819,8 @@ struct ToolEventRow: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.horizontal, isExpanded ? 10 : 0)
+        .padding(.vertical, isExpanded ? 6 : 0)
         .background {
             if isExpanded {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
