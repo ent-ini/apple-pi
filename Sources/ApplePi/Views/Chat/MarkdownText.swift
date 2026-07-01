@@ -109,10 +109,7 @@ struct MarkdownText: View {
     }
 
     private func inlineMarkdownText(_ text: String) -> Text {
-        let options = AttributedString.MarkdownParsingOptions(
-            interpretedSyntax: .inlineOnlyPreservingWhitespace
-        )
-        if let attributed = try? AttributedString(markdown: text, options: options) {
+        if let attributed = MarkdownInlineCache.shared.attributedString(for: text) {
             return Text(attributed)
         }
         return Text(text)
@@ -295,6 +292,40 @@ struct MarkdownText: View {
         return withoutSpaces.allSatisfy { $0 == "-" }
             || withoutSpaces.allSatisfy { $0 == "*" }
             || withoutSpaces.allSatisfy { $0 == "_" }
+    }
+}
+
+private final class MarkdownInlineCache: @unchecked Sendable {
+    static let shared = MarkdownInlineCache()
+
+    private final class Box {
+        let attributed: AttributedString
+
+        init(_ attributed: AttributedString) {
+            self.attributed = attributed
+        }
+    }
+
+    private let cache = NSCache<NSString, Box>()
+
+    private init() {
+        cache.countLimit = 2_000
+        cache.totalCostLimit = 64 * 1024 * 1024
+    }
+
+    func attributedString(for markdown: String) -> AttributedString? {
+        let key = markdown as NSString
+        if let box = cache.object(forKey: key) {
+            return box.attributed
+        }
+        let options = AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace
+        )
+        guard let attributed = try? AttributedString(markdown: markdown, options: options) else {
+            return nil
+        }
+        cache.setObject(Box(attributed), forKey: key, cost: max(1, markdown.utf8.count))
+        return attributed
     }
 }
 

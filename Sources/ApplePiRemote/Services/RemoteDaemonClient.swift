@@ -225,19 +225,38 @@ public struct RemoteDaemonClient: Sendable {
             queryItems.append(URLQueryItem(name: "before", value: String(before)))
         }
 
+        let cacheKey = Self.sessionEventPageCacheKey(
+            host: host,
+            sessionID: sessionID,
+            limit: limit,
+            before: before
+        )
+        // Older history pages (`before`) are immutable for append-only JSONL
+        // sessions, so keep them in a large in-process Mac cache. Do not cache
+        // the latest page: force reloads after a send must always hit the daemon.
+        let canUseEventPageCache = after == nil && before != nil && tokenOverride == nil
+        if canUseEventPageCache,
+           let cached = await Self.sessionEventPageCache.page(for: cacheKey) {
+            return cached
+        }
+
         let response: EventPageResponse = try await send(
             host: host,
             path: "/sessions/\(encodedPathComponent(sessionID))/events",
             queryItems: queryItems,
             tokenOverride: tokenOverride
         )
-        return SessionEventsPage(
+        let page = SessionEventsPage(
             events: response.events.flatMap { SessionEventParser.decodeAll(line: $0.raw, at: $0.line) },
             firstLine: response.page?.firstLine,
             lastLine: response.page?.lastLine,
             hasMoreBefore: response.page?.hasMoreBefore ?? false,
             hasMoreAfter: response.page?.hasMoreAfter ?? false
         )
+        if canUseEventPageCache {
+            await Self.sessionEventPageCache.store(page, for: cacheKey)
+        }
+        return page
     }
 
     public func loadSessionEvents(
@@ -804,6 +823,22 @@ public struct RemoteDaemonClient: Sendable {
         )
     }
 
+    private static func sessionEventPageCacheKey(
+        host: PiHostConfiguration,
+        sessionID: String,
+        limit: Int?,
+        before: Int?
+    ) -> String {
+        [
+            host.remoteDaemonBaseURL?.absoluteString ?? "",
+            sessionID,
+            limit.map(String.init) ?? "nil",
+            before.map(String.init) ?? "nil"
+        ].joined(separator: "\u{1f}")
+    }
+
+    private static let sessionEventPageCache = RemoteSessionEventPageMemoryCache()
+
     private static let liveSession: URLSession = {
         let configuration = URLSessionConfiguration.default
         configuration.waitsForConnectivity = true
@@ -812,6 +847,27 @@ public struct RemoteDaemonClient: Sendable {
         configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         return URLSession(configuration: configuration)
     }()
+}
+
+private actor RemoteSessionEventPageMemoryCache {
+    private let maxEntries = 500
+    private var entries: [String: SessionEventsPage] = [:]
+    private var order: [String] = []
+
+    func page(for key: String) -> SessionEventsPage? {
+        entries[key]
+    }
+
+    func store(_ page: SessionEventsPage, for key: String) {
+        if entries[key] == nil {
+            order.append(key)
+        }
+        entries[key] = page
+        while order.count > maxEntries, let oldest = order.first {
+            order.removeFirst()
+            entries.removeValue(forKey: oldest)
+        }
+    }
 }
 
 private func joinedPath(basePath: String, requestPath: String) -> String {

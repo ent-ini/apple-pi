@@ -20,6 +20,7 @@ struct MessageListView: View {
     @State private var bottomScrollGeneration = 0
     @State private var ensureVisibleGeneration = 0
     @State private var displayedRowsCache: [DisplayedSessionRow] = []
+    @State private var fileReferenceBaseDirectoryCache: String?
 
     var body: some View {
         GeometryReader { proxy in
@@ -30,8 +31,12 @@ struct MessageListView: View {
                             historyLoadRow
                         }
                         ForEach(displayedRowsCache) { row in
-                            eventRow(for: row)
-                                .id(row.id)
+                            DisplayedSessionRowView(
+                                row: row,
+                                fileReferenceBaseDirectory: fileReferenceBaseDirectoryCache
+                            )
+                            .equatable()
+                            .id(row.id)
                         }
                         Color.clear
                             .frame(height: 1)
@@ -104,52 +109,6 @@ struct MessageListView: View {
         }
     }
 
-    @ViewBuilder
-    private func eventRow(for row: DisplayedSessionRow) -> some View {
-        switch row {
-        case .event(let event):
-            switch event {
-            case .message(let message, _):
-                MessageBubble(message: message, fileReferenceBaseDirectory: fileReferenceBaseDirectory)
-            case .toolCall(let call, _):
-                ToolInteractionRow(
-                    name: call.name,
-                    arguments: call.arguments,
-                    result: nil,
-                    visibilityID: "visibility:\(event.id)"
-                )
-            case .toolResult(let result, _):
-                ToolEventRow(
-                    kind: .toolResult(
-                        name: result.toolName,
-                        callId: result.callId,
-                        output: result.output,
-                        isError: result.isError
-                    ),
-                    visibilityID: "visibility:\(event.id)"
-                )
-            case .meta(let meta, _):
-                ToolEventRow(
-                    kind: .meta(
-                        displayName: meta.displayName,
-                        workingDirectory: meta.workingDirectory,
-                        parentSession: meta.parentSession
-                    ),
-                    visibilityID: "visibility:\(event.id)"
-                )
-            case .other(let type, _):
-                ToolEventRow(kind: .other(type: type), visibilityID: "visibility:\(event.id)")
-            }
-        case .toolInteraction(let call, let result, _):
-            ToolInteractionRow(
-                name: call.name,
-                arguments: call.arguments,
-                result: result,
-                visibilityID: "visibility:\(row.id)"
-            )
-        }
-    }
-
     private static let bottomAnchorID = "chat.list.bottom"
     static let scrollCoordinateSpaceName = "chat.list.scroll"
     private static let bottomStickinessBuffer: CGFloat = 180
@@ -164,14 +123,16 @@ struct MessageListView: View {
     private static let ensureVisibleSettleDelays: [TimeInterval] = [0.04, 0.16, 0.34, 0.65]
 
     private func refreshDisplayedRowsCache() {
-        displayedRowsCache = DisplayedSessionRow.groupingToolResults(in: session.events.filter(\.isVisibleInTranscript))
+        let allEvents = session.events
+        displayedRowsCache = DisplayedSessionRow.groupingToolResults(in: allEvents.filter(\.isVisibleInTranscript))
+        fileReferenceBaseDirectoryCache = resolveFileReferenceBaseDirectory(from: allEvents)
     }
 
-    private var fileReferenceBaseDirectory: String? {
+    private func resolveFileReferenceBaseDirectory(from events: [SessionEvent]) -> String? {
         if let workingDirectory = session.launchRequest?.workingDirectory?.nilIfBlank {
             return workingDirectory
         }
-        if let workingDirectory = session.events.compactMap({ event -> String? in
+        if let workingDirectory = events.compactMap({ event -> String? in
             if case .meta(let meta, _) = event {
                 return meta.workingDirectory?.nilIfBlank
             }
@@ -392,7 +353,61 @@ extension View {
     }
 }
 
-private enum DisplayedSessionRow: Identifiable {
+private struct DisplayedSessionRowView: View, Equatable {
+    let row: DisplayedSessionRow
+    let fileReferenceBaseDirectory: String?
+
+    nonisolated static func == (lhs: DisplayedSessionRowView, rhs: DisplayedSessionRowView) -> Bool {
+        lhs.row == rhs.row && lhs.fileReferenceBaseDirectory == rhs.fileReferenceBaseDirectory
+    }
+
+    var body: some View {
+        switch row {
+        case .event(let event):
+            switch event {
+            case .message(let message, _):
+                MessageBubble(message: message, fileReferenceBaseDirectory: fileReferenceBaseDirectory)
+            case .toolCall(let call, _):
+                ToolInteractionRow(
+                    name: call.name,
+                    arguments: call.arguments,
+                    result: nil,
+                    visibilityID: "visibility:\(event.id)"
+                )
+            case .toolResult(let result, _):
+                ToolEventRow(
+                    kind: .toolResult(
+                        name: result.toolName,
+                        callId: result.callId,
+                        output: result.output,
+                        isError: result.isError
+                    ),
+                    visibilityID: "visibility:\(event.id)"
+                )
+            case .meta(let meta, _):
+                ToolEventRow(
+                    kind: .meta(
+                        displayName: meta.displayName,
+                        workingDirectory: meta.workingDirectory,
+                        parentSession: meta.parentSession
+                    ),
+                    visibilityID: "visibility:\(event.id)"
+                )
+            case .other(let type, _):
+                ToolEventRow(kind: .other(type: type), visibilityID: "visibility:\(event.id)")
+            }
+        case .toolInteraction(let call, let result, _):
+            ToolInteractionRow(
+                name: call.name,
+                arguments: call.arguments,
+                result: result,
+                visibilityID: "visibility:\(row.id)"
+            )
+        }
+    }
+}
+
+private enum DisplayedSessionRow: Identifiable, Hashable {
     case event(SessionEvent)
     case toolInteraction(call: ToolCall, result: ToolResult?, lineIndex: Int)
 

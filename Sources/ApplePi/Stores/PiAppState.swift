@@ -109,6 +109,10 @@ final class PiAppState: ObservableObject {
     private var selectedSessionPollingTask: Task<Void, Never>?
     private var selectedSessionStreamTask: Task<Void, Never>?
     private var selectedSessionCatchUpTask: Task<Void, Never>?
+    private var selectedSessionStreamFlushTask: Task<Void, Never>?
+    private var pendingSelectedSessionStreamPage: SessionEventsPage?
+    private var pendingSelectedSessionStreamTabID: ChatSession.ID?
+    private var pendingSelectedSessionStreamSessionID: String?
     private var isSelectedSessionStreamConnected = false
     private var activityObservers: [NSObjectProtocol] = []
     private var isApplicationActive = true
@@ -127,6 +131,9 @@ final class PiAppState: ObservableObject {
     private var pendingThinkingLevelBySessionKey: [String: String] = [:]
     private var thinkingLevelMutationVersionBySessionKey: [String: Int] = [:]
     private var modelMutationVersionBySessionKey: [String: Int] = [:]
+    private static let selectedSessionStreamRetryDelay: Duration = .milliseconds(250)
+    private static let selectedSessionStreamCoalesceDelay: Duration = .milliseconds(80)
+    private static let selectedSessionStreamImmediateFlushEventCount = 80
 
     init(
         defaults: UserDefaults = Foundation.UserDefaults.standard,
@@ -1938,6 +1945,20 @@ final class PiAppState: ObservableObject {
               !sessionID.hasPrefix("new:"),
               !sessionID.hasPrefix("fork:") else { return }
 
+        // Wait until the initial page has loaded before opening the SSE tail.
+        // Otherwise `lastPersistedLineIndex` is still -1 and the daemon has to
+        // replay the whole JSONL history for large sessions, only for the UI to
+        // drop most of it while `isLoading` is true.
+        guard !session.isLoading, session.lastPersistedLineIndex >= 0 else {
+            let selectedTabID = session.id
+            selectedSessionStreamTask = Task { [weak self] in
+                try? await Task.sleep(for: Self.selectedSessionStreamRetryDelay)
+                guard !Task.isCancelled else { return }
+                self?.restartSelectedSessionEventStreamIfStillSelected(selectedTabID: selectedTabID)
+            }
+            return
+        }
+
         // Skeleton: show the runtime immediately from the cached JSONL
         // parse (handled inside the fast runtime endpoint) so the
         // model/thinking chip is never blank while the stream warms up.
@@ -1959,7 +1980,13 @@ final class PiAppState: ObservableObject {
         selectedSessionStreamTask = nil
         selectedSessionCatchUpTask?.cancel()
         selectedSessionCatchUpTask = nil
+        cancelSelectedSessionStreamFlush(discardPending: true)
         isSelectedSessionStreamConnected = false
+    }
+
+    private func restartSelectedSessionEventStreamIfStillSelected(selectedTabID: ChatSession.ID) {
+        guard chatWorkspace.selectedTab?.id == selectedTabID else { return }
+        restartSelectedSessionEventStream()
     }
 
     private func runSelectedSessionEventStream(
@@ -1997,7 +2024,7 @@ final class PiAppState: ObservableObject {
                           currentSession.sessionID?.nilIfBlank == sessionID else {
                         return
                     }
-                    applySessionStreamPage(page, to: currentSession)
+                    enqueueSessionStreamPage(page, to: currentSession, sessionID: sessionID)
                 }
                 isSelectedSessionStreamConnected = false
                 if Task.isCancelled { return }
@@ -2021,20 +2048,91 @@ final class PiAppState: ObservableObject {
         }
     }
 
-    private func applySessionStreamPage(_ page: SessionEventsPage, to session: ChatSession) {
+    private func enqueueSessionStreamPage(_ page: SessionEventsPage, to session: ChatSession, sessionID: String) {
         if session.isLoading || session.isSending {
             scheduleSelectedSessionCatchUp(after: .milliseconds(250))
             return
         }
-        let after = session.lastPersistedLineIndex
-        if let firstLine = page.firstLine,
-           !page.events.isEmpty,
-           firstLine <= after {
+        if let lastLine = page.lastLine,
+           lastLine <= session.lastPersistedLineIndex {
             return
         }
+
+        if pendingSelectedSessionStreamTabID != session.id || pendingSelectedSessionStreamSessionID != sessionID {
+            cancelSelectedSessionStreamFlush(discardPending: true)
+            pendingSelectedSessionStreamTabID = session.id
+            pendingSelectedSessionStreamSessionID = sessionID
+        }
+        pendingSelectedSessionStreamPage = mergedSessionEventPage(pendingSelectedSessionStreamPage, appending: page)
+
+        if (pendingSelectedSessionStreamPage?.events.count ?? 0) >= Self.selectedSessionStreamImmediateFlushEventCount {
+            flushSelectedSessionStreamPage()
+            return
+        }
+
+        guard selectedSessionStreamFlushTask == nil else { return }
+        selectedSessionStreamFlushTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.selectedSessionStreamCoalesceDelay)
+            guard !Task.isCancelled else { return }
+            self?.flushSelectedSessionStreamPage()
+        }
+    }
+
+    private func flushSelectedSessionStreamPage() {
+        selectedSessionStreamFlushTask?.cancel()
+        selectedSessionStreamFlushTask = nil
+
+        guard let page = pendingSelectedSessionStreamPage,
+              let selectedTabID = pendingSelectedSessionStreamTabID,
+              let sessionID = pendingSelectedSessionStreamSessionID else {
+            pendingSelectedSessionStreamPage = nil
+            pendingSelectedSessionStreamTabID = nil
+            pendingSelectedSessionStreamSessionID = nil
+            return
+        }
+        pendingSelectedSessionStreamPage = nil
+        pendingSelectedSessionStreamTabID = nil
+        pendingSelectedSessionStreamSessionID = nil
+
+        guard let session = chatWorkspace.selectedTab,
+              session.id == selectedTabID,
+              session.sessionID?.nilIfBlank == sessionID else {
+            return
+        }
+        if session.isLoading || session.isSending {
+            scheduleSelectedSessionCatchUp(after: .milliseconds(250))
+            return
+        }
+
+        let after = session.lastPersistedLineIndex
+        let freshEvents = page.events.filter { $0.lineIndex > after }
+        guard !freshEvents.isEmpty else { return }
+
         let previousTitle = session.title
-        session.appendPersistedPage(page)
+        session.appendPersistedPage(SessionEventsPage.fromEvents(freshEvents))
         syncSidebarTitleIfNeeded(for: session, previousTitle: previousTitle)
+    }
+
+    private func cancelSelectedSessionStreamFlush(discardPending: Bool) {
+        selectedSessionStreamFlushTask?.cancel()
+        selectedSessionStreamFlushTask = nil
+        guard discardPending else { return }
+        pendingSelectedSessionStreamPage = nil
+        pendingSelectedSessionStreamTabID = nil
+        pendingSelectedSessionStreamSessionID = nil
+    }
+
+    private func mergedSessionEventPage(_ current: SessionEventsPage?, appending page: SessionEventsPage) -> SessionEventsPage {
+        guard let current else { return page }
+        let firstLine = [current.firstLine, page.firstLine].compactMap { $0 }.min()
+        let lastLine = [current.lastLine, page.lastLine].compactMap { $0 }.max()
+        return SessionEventsPage(
+            events: current.events + page.events,
+            firstLine: firstLine,
+            lastLine: lastLine,
+            hasMoreBefore: current.hasMoreBefore || page.hasMoreBefore,
+            hasMoreAfter: current.hasMoreAfter || page.hasMoreAfter
+        )
     }
 
     private func startSelectedSessionEventPolling() {

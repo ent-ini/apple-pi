@@ -85,6 +85,41 @@ func TestSplitJSONLLinesDropsOnlyTrailingEmptyLine(t *testing.T) {
 	}
 }
 
+func TestJSONLLineIndexReadsRangesAndSkipsPartialTail(t *testing.T) {
+	path := writeTempSessionFile(t, "{\"type\":\"session\"}\n{\"type\":\"message\",\"id\":\"b\"}\n{\"type\":\"message\"")
+	cache := newJSONLLineIndexCache()
+	index, err := cache.load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := index.lineCount(), 2; got != want {
+		t.Fatalf("lineCount = %d, want %d", got, want)
+	}
+	lines, err := index.readRange(1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(lines, []string{"{\"type\":\"message\",\"id\":\"b\"}"}) {
+		t.Fatalf("lines = %#v", lines)
+	}
+}
+
+func TestJSONLLineIndexKeepsValidTrailingLineWithoutNewline(t *testing.T) {
+	path := writeTempSessionFile(t, "{\"type\":\"session\"}\n{\"type\":\"message\",\"id\":\"b\"}")
+	index, err := newJSONLLineIndexCache().load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines, err := index.readRange(0, index.lineCount())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"{\"type\":\"session\"}", "{\"type\":\"message\",\"id\":\"b\"}"}
+	if !reflect.DeepEqual(lines, want) {
+		t.Fatalf("lines = %#v, want %#v", lines, want)
+	}
+}
+
 func TestReadEventRecordsAfterReturnsCatchUpRecords(t *testing.T) {
 	path := writeTempSessionFile(t, "{\"type\":\"session\"}\n{\"type\":\"message\",\"id\":\"b\"}\n{\"type\":\"message\",\"id\":\"c\"}\n")
 

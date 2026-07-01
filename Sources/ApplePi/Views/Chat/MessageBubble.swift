@@ -54,6 +54,13 @@ private struct UserMessagePresentation {
         isAttachmentOnly && attachments.count == 1
     }
 
+    static func cachedBuild(from blocks: [ContentBlock]) -> UserMessagePresentation {
+        let key = cacheKey(for: blocks)
+        return UserMessagePresentationCache.shared.presentation(for: key) {
+            build(from: blocks)
+        }
+    }
+
     static func build(from blocks: [ContentBlock]) -> UserMessagePresentation {
         let hasRenderedImageBlock = blocks.contains {
             if case .image = $0 { return true }
@@ -221,12 +228,55 @@ private struct UserMessagePresentation {
         return String(text[range])
     }
 
+    private static func cacheKey(for blocks: [ContentBlock]) -> String {
+        blocks.map { block in
+            switch block {
+            case .text(let text):
+                return "text:\(text)"
+            case .thinking(let text, let signature):
+                return "thinking:\(text):\(signature ?? "")"
+            case .image(let path, let mime):
+                return "image:\(path):\(mime ?? "")"
+            }
+        }
+        .joined(separator: "\u{1f}")
+    }
+
     private static func xmlUnescape(_ text: String) -> String {
         text
             .replacingOccurrences(of: "&quot;", with: "\"")
             .replacingOccurrences(of: "&gt;", with: ">")
             .replacingOccurrences(of: "&lt;", with: "<")
             .replacingOccurrences(of: "&amp;", with: "&")
+    }
+}
+
+private final class UserMessagePresentationCache: @unchecked Sendable {
+    static let shared = UserMessagePresentationCache()
+
+    private final class Box {
+        let presentation: UserMessagePresentation
+
+        init(_ presentation: UserMessagePresentation) {
+            self.presentation = presentation
+        }
+    }
+
+    private let cache = NSCache<NSString, Box>()
+
+    private init() {
+        cache.countLimit = 2_000
+        cache.totalCostLimit = 64 * 1024 * 1024
+    }
+
+    func presentation(for key: String, build: () -> UserMessagePresentation) -> UserMessagePresentation {
+        let cacheKey = key as NSString
+        if let box = cache.object(forKey: cacheKey) {
+            return box.presentation
+        }
+        let presentation = build()
+        cache.setObject(Box(presentation), forKey: cacheKey, cost: max(1, key.utf8.count))
+        return presentation
     }
 }
 
@@ -446,7 +496,7 @@ struct MessageBubble: View {
 
     private var userPresentation: UserMessagePresentation? {
         guard message.role == .user else { return nil }
-        let presentation = UserMessagePresentation.build(from: message.content)
+        let presentation = UserMessagePresentation.cachedBuild(from: message.content)
         return presentation.hasAttachments ? presentation : nil
     }
 

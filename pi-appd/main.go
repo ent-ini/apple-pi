@@ -26,6 +26,8 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+var sharedJSONLLineIndexes = newJSONLLineIndexCache()
+
 const (
 	maxUploadBodyBytes        int64 = 64 << 20
 	maxUploadFileBytes        int64 = 32 << 20
@@ -62,7 +64,8 @@ type server struct {
 	modelsCacheSignature string
 	modelsInflight       chan struct{}
 
-	broker *catalogBroker
+	broker      *catalogBroker
+	lineIndexes *jsonlLineIndexCache
 
 	generatingMu   sync.Mutex
 	generatingByID map[string]bool
@@ -446,6 +449,7 @@ func main() {
 		piExecutable: piExecutable,
 		sessionsByID: map[string]sessionRecord{},
 		broker:       newCatalogBroker(),
+		lineIndexes:  sharedJSONLLineIndexes,
 	}
 
 	mux := http.NewServeMux()
@@ -835,53 +839,35 @@ func (s *server) handleSessionEvents(w http.ResponseWriter, r *http.Request, rec
 		}
 	}
 
-	if !hasBefore && !hasAfter {
-		lines, totalLines, err := readLastLines(record.FilePath, limit)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		startLine := totalLines - len(lines)
-		if startLine < 0 {
-			startLine = 0
-		}
-		events := make([]rawEventRecord, 0, len(lines))
-		for i, line := range lines {
-			events = append(events, rawEventRecord{Line: startLine + i, Raw: line})
-		}
-		page := pageRecord{HasMoreBefore: startLine > 0, HasMoreAfter: false}
-		if len(events) > 0 {
-			page.FirstLine = events[0].Line
-			page.LastLine = events[len(events)-1].Line
-		}
-		writeJSON(w, http.StatusOK, eventsResponse{Events: events, Page: page})
-		return
-	}
-
-	lines, err := readAllLines(record.FilePath)
+	lineIndex, err := s.loadJSONLLineIndex(record.FilePath)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	totalLines := lineIndex.lineCount()
 
-	start, end := 0, len(lines)
+	start, end := 0, totalLines
 	hasMoreBefore, hasMoreAfter := false, false
-	if hasBefore {
+	if !hasBefore && !hasAfter {
+		if limit > 0 && totalLines > limit {
+			start = totalLines - limit
+		}
+		hasMoreBefore = start > 0
+	} else if hasBefore {
 		if before < 0 {
 			before = 0
 		}
-		if before > len(lines) {
-			before = len(lines)
+		if before > totalLines {
+			before = totalLines
 		}
 		end = before
 		if limit > 0 && end-limit > 0 {
 			start = end - limit
-			hasMoreBefore = start > 0
 		} else {
 			start = 0
-			hasMoreBefore = false
 		}
-		hasMoreAfter = end < len(lines)
+		hasMoreBefore = start > 0
+		hasMoreAfter = end < totalLines
 	} else if hasAfter {
 		if after < -1 {
 			after = -1
@@ -890,25 +876,28 @@ func (s *server) handleSessionEvents(w http.ResponseWriter, r *http.Request, rec
 		if start < 0 {
 			start = 0
 		}
-		if start > len(lines) {
-			start = len(lines)
+		if start > totalLines {
+			start = totalLines
 		}
-		end = len(lines)
+		end = totalLines
 		if limit > 0 && start+limit < end {
 			end = start + limit
 			hasMoreAfter = true
-		} else {
-			hasMoreAfter = false
 		}
 		hasMoreBefore = start > 0
-	} else if limit > 0 && limit < len(lines) {
-		start = len(lines) - limit
+	} else if limit > 0 && limit < totalLines {
+		start = totalLines - limit
 		hasMoreBefore = start > 0
 	}
 
-	events := make([]rawEventRecord, 0, end-start)
-	for i := start; i < end; i++ {
-		events = append(events, rawEventRecord{Line: i, Raw: lines[i]})
+	lines, err := lineIndex.readRange(start, end)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	events := make([]rawEventRecord, 0, len(lines))
+	for i, line := range lines {
+		events = append(events, rawEventRecord{Line: start + i, Raw: line})
 	}
 	page := pageRecord{HasMoreBefore: hasMoreBefore, HasMoreAfter: hasMoreAfter}
 	if len(events) > 0 {
@@ -1045,25 +1034,27 @@ type sessionEventTailer struct {
 }
 
 func newSessionEventTailer(path string, after int) (*sessionEventTailer, error) {
-	data, err := os.ReadFile(path)
+	index, err := sharedJSONLLineIndexes.load(path)
 	if err != nil {
 		return nil, err
 	}
-	lines, offset := splitCompleteJSONLLinesWithOffset(data)
-	tailer := &sessionEventTailer{path: path, cursor: after, offset: offset}
+	lineCount := index.lineCount()
+	tailer := &sessionEventTailer{path: path, cursor: after, offset: index.tailOffset}
 	start := after + 1
 	if start < 0 {
 		start = 0
 	}
-	if start > len(lines) {
-		start = len(lines)
+	if start > lineCount {
+		start = lineCount
 	}
 	// Rewind offset to the start of the first unsent complete line so the
 	// initial readNewRecords call can emit catch-up records through the same
 	// append-tail path used for live updates.
-	if start < len(lines) {
-		tailer.offset = offsetForLineStart(data, start)
+	if start < lineCount {
+		tailer.offset = index.starts[start]
 		tailer.cursor = start - 1
+	} else {
+		tailer.cursor = lineCount - 1
 	}
 	return tailer, nil
 }
@@ -1134,23 +1125,6 @@ func recordsAfterLines(lines []string, after int) []rawEventRecord {
 		records = append(records, rawEventRecord{Line: i, Raw: lines[i]})
 	}
 	return records
-}
-
-func offsetForLineStart(data []byte, lineIndex int) int64 {
-	if lineIndex <= 0 {
-		return 0
-	}
-	line := 0
-	for index, b := range data {
-		if b != '\n' {
-			continue
-		}
-		line++
-		if line == lineIndex {
-			return int64(index + 1)
-		}
-	}
-	return int64(len(data))
 }
 
 func (s *server) handleInput(w http.ResponseWriter, r *http.Request) {
@@ -3037,6 +3011,162 @@ func countMessageLines(path string) (int, error) {
 	return count, nil
 }
 
+func (s *server) loadJSONLLineIndex(path string) (*jsonlLineIndex, error) {
+	if s.lineIndexes == nil {
+		s.lineIndexes = sharedJSONLLineIndexes
+	}
+	return s.lineIndexes.load(path)
+}
+
+type jsonlLineIndexCache struct {
+	mu      sync.Mutex
+	entries map[string]*jsonlLineIndex
+}
+
+type jsonlLineIndex struct {
+	path       string
+	size       int64
+	modTime    time.Time
+	starts     []int64
+	ends       []int64
+	tailOffset int64
+}
+
+func newJSONLLineIndexCache() *jsonlLineIndexCache {
+	return &jsonlLineIndexCache{entries: map[string]*jsonlLineIndex{}}
+}
+
+func (c *jsonlLineIndexCache) load(path string) (*jsonlLineIndex, error) {
+	stat, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if cached := c.entries[path]; cached != nil && cached.size == stat.Size() && cached.modTime.Equal(stat.ModTime()) {
+		return cached, nil
+	}
+	index, err := buildJSONLLineIndex(path, stat)
+	if err != nil {
+		return nil, err
+	}
+	c.entries[path] = index
+	return index, nil
+}
+
+func buildJSONLLineIndex(path string, stat os.FileInfo) (*jsonlLineIndex, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	const chunkSize = 256 * 1024
+	buffer := make([]byte, chunkSize)
+	starts := make([]int64, 0, 1024)
+	ends := make([]int64, 0, 1024)
+	var absolute int64
+	var currentLineStart int64
+	for {
+		n, readErr := file.Read(buffer)
+		if n > 0 {
+			chunk := buffer[:n]
+			for i, b := range chunk {
+				if b != '\n' {
+					continue
+				}
+				lineEnd := absolute + int64(i)
+				starts = append(starts, currentLineStart)
+				ends = append(ends, lineEnd)
+				currentLineStart = lineEnd + 1
+			}
+			absolute += int64(n)
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			return nil, readErr
+		}
+	}
+
+	// A trailing line without a newline is only visible once it is complete JSON.
+	// This matches splitCompleteJSONLLinesWithOffset, which lets freshly written
+	// but not-yet-newline-terminated JSONL records show up without exposing a
+	// partial write. tailOffset points to where live tailing should resume: EOF
+	// for a complete file, or the beginning of the still-partial trailing record.
+	tailOffset := stat.Size()
+	if currentLineStart < stat.Size() {
+		tailLength := stat.Size() - currentLineStart
+		tail := make([]byte, tailLength)
+		if _, err := file.ReadAt(tail, currentLineStart); err != nil && err != io.EOF {
+			return nil, err
+		}
+		candidate := bytes.TrimSpace(tail)
+		if len(candidate) > 0 && json.Valid(candidate) {
+			starts = append(starts, currentLineStart)
+			ends = append(ends, stat.Size())
+		} else {
+			tailOffset = currentLineStart
+		}
+	}
+
+	return &jsonlLineIndex{
+		path:       path,
+		size:       stat.Size(),
+		modTime:    stat.ModTime(),
+		starts:     starts,
+		ends:       ends,
+		tailOffset: tailOffset,
+	}, nil
+}
+
+func (i *jsonlLineIndex) lineCount() int {
+	if i == nil {
+		return 0
+	}
+	return len(i.starts)
+}
+
+func (i *jsonlLineIndex) readRange(start, end int) ([]string, error) {
+	if i == nil || start >= end {
+		return []string{}, nil
+	}
+	if start < 0 {
+		start = 0
+	}
+	if end > len(i.starts) {
+		end = len(i.starts)
+	}
+	if start >= end {
+		return []string{}, nil
+	}
+
+	file, err := os.Open(i.path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	lines := make([]string, 0, end-start)
+	for lineIndex := start; lineIndex < end; lineIndex++ {
+		lineStart := i.starts[lineIndex]
+		lineEnd := i.ends[lineIndex]
+		if lineEnd < lineStart {
+			lineEnd = lineStart
+		}
+		data := make([]byte, lineEnd-lineStart)
+		if len(data) > 0 {
+			if _, err := file.ReadAt(data, lineStart); err != nil && err != io.EOF {
+				return nil, err
+			}
+		}
+		lines = append(lines, string(data))
+	}
+	return lines, nil
+}
+
 func readAllLines(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -3124,14 +3254,18 @@ func readPreviewLines(path string, limit int) ([]string, error) {
 }
 
 func readLastLines(path string, limit int) ([]string, int, error) {
-	data, err := os.ReadFile(path)
+	index, err := sharedJSONLLineIndexes.load(path)
 	if err != nil {
 		return nil, 0, err
 	}
-	lines := splitCompleteJSONLLines(data)
-	totalLines := len(lines)
-	if limit > 0 && len(lines) > limit {
-		lines = lines[len(lines)-limit:]
+	totalLines := index.lineCount()
+	start := 0
+	if limit > 0 && totalLines > limit {
+		start = totalLines - limit
+	}
+	lines, err := index.readRange(start, totalLines)
+	if err != nil {
+		return nil, 0, err
 	}
 	return lines, totalLines, nil
 }

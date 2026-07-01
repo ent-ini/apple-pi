@@ -38,9 +38,16 @@ struct FileReferenceExtraction: Sendable {
 }
 
 enum ChatFileReferenceExtractor {
+    private static let referenceRegex = try? NSRegularExpression(pattern: #"@([^\s<>()\[\]{}\"'`]+)"#)
+
     static func extract(from rawText: String) -> FileReferenceExtraction {
-        let pattern = #"@([^\s<>()\[\]{}\"'`]+)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+        FileReferenceExtractionCache.shared.extraction(for: rawText) {
+            extractUncached(from: rawText)
+        }
+    }
+
+    private static func extractUncached(from rawText: String) -> FileReferenceExtraction {
+        guard let regex = referenceRegex else {
             return FileReferenceExtraction(text: rawText, references: [])
         }
 
@@ -101,6 +108,35 @@ enum ChatFileReferenceExtractor {
             unique.append(reference)
         }
         return unique
+    }
+}
+
+private final class FileReferenceExtractionCache: @unchecked Sendable {
+    static let shared = FileReferenceExtractionCache()
+
+    private final class Box {
+        let extraction: FileReferenceExtraction
+
+        init(_ extraction: FileReferenceExtraction) {
+            self.extraction = extraction
+        }
+    }
+
+    private let cache = NSCache<NSString, Box>()
+
+    private init() {
+        cache.countLimit = 2_000
+        cache.totalCostLimit = 64 * 1024 * 1024
+    }
+
+    func extraction(for key: String, build: () -> FileReferenceExtraction) -> FileReferenceExtraction {
+        let cacheKey = key as NSString
+        if let box = cache.object(forKey: cacheKey) {
+            return box.extraction
+        }
+        let extraction = build()
+        cache.setObject(Box(extraction), forKey: cacheKey, cost: max(1, key.utf8.count))
+        return extraction
     }
 }
 

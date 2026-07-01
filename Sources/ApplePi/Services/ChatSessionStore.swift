@@ -569,18 +569,37 @@ final class ChatSession: ObservableObject, Identifiable {
         // Remote reloads usually fetch only the latest page. If older rows were
         // already visible, replacing the transcript with just that page makes
         // them appear to vanish. Keep the loaded window and merge in the fresh
-        // page; a full/non-paged reload still replaces the transcript above.
-        let incomingIDs = Set(page.events.map(\.id))
-        let retainedEvents = persistedEvents.filter { !incomingIDs.contains($0.id) }
-        return (retainedEvents + page.events)
-            .enumerated()
-            .sorted { lhs, rhs in
-                let lhsLine = lhs.element.lineIndex
-                let rhsLine = rhs.element.lineIndex
-                if lhsLine != rhsLine { return lhsLine < rhsLine }
-                return lhs.offset < rhs.offset
+        // page. Both sides are already ordered by JSONL line, so a linear merge
+        // avoids sorting the whole transcript on every reload.
+        return mergePersistedEvents(persistedEvents, withFreshPage: page.events)
+    }
+
+    private func mergePersistedEvents(_ existing: [SessionEvent], withFreshPage fresh: [SessionEvent]) -> [SessionEvent] {
+        guard !existing.isEmpty else { return fresh }
+        guard !fresh.isEmpty else { return existing }
+
+        let freshIDs = Set(fresh.map(\.id))
+        let retained = existing.filter { !freshIDs.contains($0.id) }
+        var merged: [SessionEvent] = []
+        merged.reserveCapacity(retained.count + fresh.count)
+        var left = 0
+        var right = 0
+        while left < retained.count || right < fresh.count {
+            if right >= fresh.count {
+                merged.append(retained[left])
+                left += 1
+            } else if left >= retained.count {
+                merged.append(fresh[right])
+                right += 1
+            } else if retained[left].lineIndex <= fresh[right].lineIndex {
+                merged.append(retained[left])
+                left += 1
+            } else {
+                merged.append(fresh[right])
+                right += 1
             }
-            .map(\.element)
+        }
+        return merged
     }
 
     private func hasEarlierHistoryAvailable(afterReloading page: SessionEventsPage) -> Bool {
@@ -628,15 +647,14 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     private func prependPersistedPage(_ page: SessionEventsPage, anchorEventID: String?) {
-        let filtered = page.events.filter { candidate in
-            !persistedEvents.contains { $0.id == candidate.id || $0.lineIndex == candidate.lineIndex }
-        }
+        let existingIDs = Set(persistedEvents.map(\.id))
+        let filtered = page.events.filter { !existingIDs.contains($0.id) }
         guard !filtered.isEmpty else {
             hasEarlierHistory = page.hasMoreBefore
             return
         }
         pendingHistoryAnchorEventID = anchorEventID
-        persistedEvents.insert(contentsOf: filtered, at: 0)
+        persistedEvents = mergePersistedEvents(persistedEvents, withFreshPage: filtered)
         hasEarlierHistory = page.hasMoreBefore
         reconcileTransientEvents(with: persistedEvents)
         rebuildEvents()
