@@ -533,10 +533,12 @@ struct ToolInteractionRow: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
             .frame(maxWidth: 620, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.primary.opacity(0.04))
-            )
+            .background {
+                if isExpanded {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.primary.opacity(0.04))
+                }
+            }
             Spacer(minLength: 60)
         }
         .chatVisibilityTarget(visibilityID)
@@ -819,10 +821,12 @@ struct ToolEventRow: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.primary.opacity(0.04))
-        )
+        .background {
+            if isExpanded {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.primary.opacity(0.04))
+            }
+        }
         .chatVisibilityTarget(visibilityID)
     }
 }
