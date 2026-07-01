@@ -118,21 +118,21 @@ struct ChatSessionView: View {
 
     private var composerReservedHeight: CGFloat {
         max(session.draftHeight, 30)
-            + 96
-            + (draftAttachments.isEmpty ? 0 : 76)
-            + (showsSlashCommandSuggestions ? 76 : 0)
+            + 74
+            + (draftAttachments.isEmpty ? 0 : 66)
+            + (showsSlashCommandSuggestions ? 70 : 0)
     }
 
     private var composerArea: some View {
         let controlHeight = max(session.draftHeight, 30)
 
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: 6) {
             if showsSlashCommandSuggestions {
                 slashCommandSuggestions
                     .padding(.horizontal, 4)
             }
 
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 6) {
                 if !draftAttachments.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(alignment: .top, spacing: 10) {
@@ -151,29 +151,29 @@ struct ChatSessionView: View {
 
                 composerControlsRow
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 12)
-            .padding(.bottom, 12)
+            .padding(.horizontal, 12)
+            .padding(.top, 9)
+            .padding(.bottom, 9)
             .background(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .fill(composerAreaBackgroundColor)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .stroke(Color.primary.opacity(0.12), lineWidth: 1)
             )
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 12)
+        .padding(.horizontal, 14)
+        .padding(.top, 6)
+        .padding(.bottom, 8)
     }
 
     @ViewBuilder
     private var composerControlsRow: some View {
         let runtime = session.runtimeState
 
-        HStack(alignment: .center, spacing: 14) {
+        HStack(alignment: .center, spacing: 10) {
             composerIconButton(
                 systemName: "plus",
                 enabled: !audioRecorder.isRecording,
@@ -182,11 +182,11 @@ struct ChatSessionView: View {
             .help("Attach files")
 
             Text(statusMetricsText)
-                .font(.caption.monospacedDigit().weight(.semibold))
+                .font(.caption2.monospacedDigit().weight(.semibold))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .frame(minWidth: 104, alignment: .leading)
-                .help("Output / input tokens and used context window")
+                .frame(minWidth: 72, alignment: .leading)
+                .help("Used context window")
 
             Button {
                 if session.availableModels.isEmpty {
@@ -196,7 +196,7 @@ struct ChatSessionView: View {
                     showsModelPicker.toggle()
                 }
             } label: {
-                inlineStatusButton(title: runtime?.modelDisplayName ?? "model", systemName: "cpu", showsChevron: true, chevronExpanded: showsModelPicker)
+                inlineStatusButton(title: runtime?.modelDisplayName ?? "model", showsChevron: true, chevronExpanded: showsModelPicker)
             }
             .buttonStyle(.plain)
             .disabled(!canAdjustSessionOptions)
@@ -207,7 +207,7 @@ struct ChatSessionView: View {
                 showsModelPicker = false
                 appState.cycleThinkingLevel(in: session)
             } label: {
-                inlineStatusButton(title: thinkingControlTitle, systemName: "sparkles")
+                inlineStatusButton(title: thinkingControlTitle)
             }
             .buttonStyle(.plain)
             .disabled(!canAdjustSessionOptions)
@@ -228,12 +228,10 @@ struct ChatSessionView: View {
     }
 
     private var statusMetricsText: String {
-        let runtime = session.runtimeState
-        let tokens = runtime?.tokens ?? .zero
-        let context = runtime?.contextUsage
+        let context = session.runtimeState?.contextUsage
         let used = formatCompactTokenCount(context?.tokens)
         let window = formatCompactTokenCount(context?.contextWindow)
-        return "↓\(formatCompactTokenCount(tokens.output)) ↑\(formatCompactTokenCount(tokens.input)) \(used)/\(window)"
+        return "\(used)/\(window)"
     }
 
     private var displayedThinkingLevel: String {
@@ -320,15 +318,10 @@ struct ChatSessionView: View {
         )
     }
 
-    private func inlineStatusButton(title: String, systemName: String? = nil, showsChevron: Bool = false, chevronExpanded: Bool = false) -> some View {
-        HStack(spacing: 6) {
-            if let systemName {
-                Image(systemName: systemName)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(appState.appearance.accentColor)
-            }
+    private func inlineStatusButton(title: String, showsChevron: Bool = false, chevronExpanded: Bool = false) -> some View {
+        HStack(spacing: 4) {
             Text(title)
-                .font(.caption.weight(.semibold))
+                .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             if showsChevron {
@@ -430,9 +423,9 @@ struct ChatSessionView: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 21, weight: .semibold))
+                .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle((foreground ?? appState.appearance.accentColor).opacity(enabled ? 1 : 0.28))
-                .frame(width: 22, height: 22)
+                .frame(width: 20, height: 20)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -442,14 +435,10 @@ struct ChatSessionView: View {
     private var composerSendButton: some View {
         Button(action: handleComposerSubmit) {
             Image(systemName: "arrow.up")
-                .font(.system(size: 18, weight: .bold))
-                .foregroundStyle(canSend ? Color.white : Color.white.opacity(0.45))
-                .frame(width: 34, height: 34)
-                .background(
-                    Circle()
-                        .fill(appState.appearance.accentColor.opacity(canSend ? 1 : 0.28))
-                )
-                .contentShape(Circle())
+                .font(.system(size: 19, weight: .bold))
+                .foregroundStyle(appState.appearance.accentColor.opacity(canSend ? 1 : 0.28))
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!canSend)
