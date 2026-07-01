@@ -239,8 +239,7 @@ struct ChatSessionView: View {
     }
 
     private var thinkingControlTitle: String {
-        let value = displayedThinkingLevel
-        return value == "off" ? "Thinking off" : "Thinking \(value)"
+        displayedThinkingLevel
     }
 
     private var groupedModels: [ModelGroup] {
