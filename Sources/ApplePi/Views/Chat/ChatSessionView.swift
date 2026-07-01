@@ -117,85 +117,76 @@ struct ChatSessionView: View {
     }
 
     private var composerReservedHeight: CGFloat {
-        max(session.draftHeight, 30) + 72
+        max(session.draftHeight, 30)
+            + 96
+            + (draftAttachments.isEmpty ? 0 : 76)
+            + (showsSlashCommandSuggestions ? 76 : 0)
     }
 
     private var composerArea: some View {
         let controlHeight = max(session.draftHeight, 30)
 
-        return VStack(alignment: .leading, spacing: 10) {
-            if !draftAttachments.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .top, spacing: 10) {
-                        ForEach(draftAttachments) { attachment in
-                            ComposerAttachmentPreview(
-                                attachment: attachment,
-                                onRemove: { removeAttachment(attachment) }
-                            )
-                        }
-                    }
-                    .padding(.horizontal, 1)
-                }
-            }
-
+        return VStack(alignment: .leading, spacing: 8) {
             if showsSlashCommandSuggestions {
                 slashCommandSuggestions
+                    .padding(.horizontal, 4)
             }
 
-            HStack(alignment: .bottom, spacing: 10) {
-                composerIconButton(
-                    systemName: "plus",
-                    enabled: !audioRecorder.isRecording,
-                    action: pickAttachments
-                )
-                .help("Attach files")
+            VStack(alignment: .leading, spacing: 10) {
+                if !draftAttachments.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(alignment: .top, spacing: 10) {
+                            ForEach(draftAttachments) { attachment in
+                                ComposerAttachmentPreview(
+                                    attachment: attachment,
+                                    onRemove: { removeAttachment(attachment) }
+                                )
+                            }
+                        }
+                        .padding(.horizontal, 1)
+                    }
+                }
 
                 composerInputSurface(controlHeight: controlHeight)
 
-                composerIconButton(
-                    systemName: audioRecorder.isRecording ? "stop.fill" : "mic.fill",
-                    enabled: true,
-                    foreground: audioRecorder.isRecording ? .red : appState.appearance.accentColor,
-                    action: handleMicrophoneTapped
-                )
-                .help(audioRecorder.isRecording ? "Stop recording" : "Record voice note")
-
-                composerIconButton(
-                    systemName: "arrow.up",
-                    enabled: canSend,
-                    action: handleComposerSubmit
-                )
-                .help(session.hasActiveSend && session.canAcceptSteering ? "Send steering message (/abort to stop)" : "Send")
+                composerControlsRow
             }
-
-            sessionStatusStrip
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(composerAreaBackgroundColor)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+            )
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(
-            Rectangle()
-                .fill(composerAreaBackgroundColor)
-        )
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(Color.primary.opacity(0.10))
-                .frame(height: 1)
-        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 12)
     }
 
     @ViewBuilder
-    private var sessionStatusStrip: some View {
+    private var composerControlsRow: some View {
         let runtime = session.runtimeState
 
-        HStack(alignment: .center, spacing: 8) {
-            Text(statusMetricsText)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .frame(minWidth: 92, alignment: .leading)
+        HStack(alignment: .center, spacing: 14) {
+            composerIconButton(
+                systemName: "plus",
+                enabled: !audioRecorder.isRecording,
+                action: pickAttachments
+            )
+            .help("Attach files")
 
-            Spacer(minLength: 0)
+            Text(statusMetricsText)
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(minWidth: 104, alignment: .leading)
+                .help("Output / input tokens and used context window")
 
             Button {
                 if session.availableModels.isEmpty {
@@ -205,7 +196,7 @@ struct ChatSessionView: View {
                     showsModelPicker.toggle()
                 }
             } label: {
-                statusPill(title: runtime?.modelDisplayName ?? "model", showsChevron: true, chevronExpanded: showsModelPicker)
+                inlineStatusButton(title: runtime?.modelDisplayName ?? "model", systemName: "cpu", showsChevron: true, chevronExpanded: showsModelPicker)
             }
             .buttonStyle(.plain)
             .disabled(!canAdjustSessionOptions)
@@ -216,10 +207,23 @@ struct ChatSessionView: View {
                 showsModelPicker = false
                 appState.cycleThinkingLevel(in: session)
             } label: {
-                statusPill(title: displayedThinkingLevel)
+                inlineStatusButton(title: thinkingControlTitle, systemName: "sparkles")
             }
             .buttonStyle(.plain)
             .disabled(!canAdjustSessionOptions)
+
+            Spacer(minLength: 0)
+
+            composerIconButton(
+                systemName: audioRecorder.isRecording ? "stop.fill" : "mic.fill",
+                enabled: true,
+                foreground: audioRecorder.isRecording ? .red : appState.appearance.accentColor,
+                action: handleMicrophoneTapped
+            )
+            .help(audioRecorder.isRecording ? "Stop recording" : "Record voice note")
+
+            composerSendButton
+                .help(session.hasActiveSend && session.canAcceptSteering ? "Send steering message (/abort to stop)" : "Send")
         }
     }
 
@@ -234,6 +238,11 @@ struct ChatSessionView: View {
 
     private var displayedThinkingLevel: String {
         session.runtimeState?.thinkingLevel ?? "off"
+    }
+
+    private var thinkingControlTitle: String {
+        let value = displayedThinkingLevel
+        return value == "off" ? "Thinking off" : "Thinking \(value)"
     }
 
     private var groupedModels: [ModelGroup] {
@@ -311,11 +320,16 @@ struct ChatSessionView: View {
         )
     }
 
-    private func statusPill(title: String, showsChevron: Bool = false, chevronExpanded: Bool = false) -> some View {
+    private func inlineStatusButton(title: String, systemName: String? = nil, showsChevron: Bool = false, chevronExpanded: Bool = false) -> some View {
         HStack(spacing: 6) {
+            if let systemName {
+                Image(systemName: systemName)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(appState.appearance.accentColor)
+            }
             Text(title)
-                .font(.caption.monospaced())
-                .foregroundStyle(.primary)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
             if showsChevron {
                 Image(systemName: "chevron.down")
@@ -324,16 +338,7 @@ struct ChatSessionView: View {
                     .rotationEffect(.degrees(chevronExpanded ? 180 : 0))
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(
-            Capsule(style: .continuous)
-                .fill(Color.primary.opacity(0.06))
-        )
-        .overlay(
-            Capsule(style: .continuous)
-                .stroke(Color.primary.opacity(0.1), lineWidth: 1)
-        )
+        .contentShape(Rectangle())
     }
 
     private func formatCompactTokenCount(_ value: Int?) -> String {
@@ -382,10 +387,6 @@ struct ChatSessionView: View {
         appState.appearance.composerAreaBackgroundColor(for: appState.appearance.resolvedColorScheme(current: colorScheme))
     }
 
-    private var composerFieldBackgroundColor: Color {
-        appState.appearance.sidebarBackgroundColor(for: appState.appearance.resolvedColorScheme(current: colorScheme))
-    }
-
     @ViewBuilder
     private func composerInputSurface(controlHeight: CGFloat) -> some View {
         if audioRecorder.isRecording || isTranscribingAudio {
@@ -406,18 +407,8 @@ struct ChatSessionView: View {
                     Spacer(minLength: 0)
                 }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 2)
             .frame(maxWidth: .infinity, minHeight: controlHeight, maxHeight: controlHeight)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(composerFieldBackgroundColor)
-                    .allowsHitTesting(false)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color.primary.opacity(0.12), lineWidth: 1)
-                    .allowsHitTesting(false)
-            )
         } else {
             ComposerTextView(
                 text: draftTextBinding,
@@ -427,16 +418,6 @@ struct ChatSessionView: View {
                 onPasteAttachments: handlePasteAttachments
             )
             .frame(maxWidth: .infinity, minHeight: controlHeight, maxHeight: controlHeight)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(composerFieldBackgroundColor)
-                    .allowsHitTesting(false)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color.primary.opacity(0.12), lineWidth: 1)
-                    .allowsHitTesting(false)
-            )
         }
     }
 
@@ -451,12 +432,27 @@ struct ChatSessionView: View {
             Image(systemName: systemName)
                 .font(.system(size: 21, weight: .semibold))
                 .foregroundStyle((foreground ?? appState.appearance.accentColor).opacity(enabled ? 1 : 0.28))
-                .frame(width: 20, height: 20)
+                .frame(width: 22, height: 22)
                 .contentShape(Rectangle())
-                .padding(2)
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+    }
+
+    private var composerSendButton: some View {
+        Button(action: handleComposerSubmit) {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundStyle(canSend ? Color.white : Color.white.opacity(0.45))
+                .frame(width: 34, height: 34)
+                .background(
+                    Circle()
+                        .fill(appState.appearance.accentColor.opacity(canSend ? 1 : 0.28))
+                )
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!canSend)
     }
 
     private func handleComposerSubmit() {
