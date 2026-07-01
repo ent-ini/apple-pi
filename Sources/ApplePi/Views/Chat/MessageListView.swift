@@ -112,14 +112,15 @@ struct MessageListView: View {
     private static let bottomAnchorID = "chat.list.bottom"
     static let scrollCoordinateSpaceName = "chat.list.scroll"
     private static let bottomStickinessBuffer: CGFloat = 180
-    // Keep this small so a normal two-finger trackpad scroll immediately
-    // breaks the streaming auto-scroll lock. A large value made touchpad
-    // scrolling feel ignored unless the user dragged the scrollbar thumb.
-    private static let stickyBreakawayDistance: CGFloat = 32
+    // Streaming can grow the transcript by more than a few pixels before the
+    // next scroll-to-bottom pass runs. Keep enough slack to stay pinned when the
+    // user was already at the bottom, while still letting an intentional scroll
+    // up break away from the live tail.
+    private static let stickyBreakawayDistance: CGFloat = 260
     private static let bottomReachedEpsilon: CGFloat = 3
     private static let stickyAutoScrollDuration: TimeInterval = 30
     private static let historyPageSize = 40
-    private static let scrollSettleDelays: [TimeInterval] = [0.04, 0.16, 0.34]
+    private static let scrollSettleDelays: [TimeInterval] = [0.0, 0.08, 0.22]
     private static let ensureVisibleSettleDelays: [TimeInterval] = [0.04, 0.16, 0.34, 0.65]
 
     private func refreshDisplayedRowsCache() {

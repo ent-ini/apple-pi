@@ -113,6 +113,11 @@ final class PiAppState: ObservableObject {
     private var pendingSelectedSessionStreamPage: SessionEventsPage?
     private var pendingSelectedSessionStreamTabID: ChatSession.ID?
     private var pendingSelectedSessionStreamSessionID: String?
+    private var turnStreamFlushTask: Task<Void, Never>?
+    private var pendingTurnStreamEvents: [SessionEvent] = []
+    private var pendingTurnStreamIsFinal = false
+    private var pendingTurnStreamTabID: ChatSession.ID?
+    private var pendingTurnStreamGeneration: Int?
     private var isSelectedSessionStreamConnected = false
     private var activityObservers: [NSObjectProtocol] = []
     private var isApplicationActive = true
@@ -134,6 +139,8 @@ final class PiAppState: ObservableObject {
     private static let selectedSessionStreamRetryDelay: Duration = .milliseconds(250)
     private static let selectedSessionStreamCoalesceDelay: Duration = .milliseconds(80)
     private static let selectedSessionStreamImmediateFlushEventCount = 80
+    private static let turnStreamCoalesceDelay: Duration = .milliseconds(120)
+    private static let turnStreamImmediateFlushEventCount = 80
 
     init(
         defaults: UserDefaults = Foundation.UserDefaults.standard,
@@ -233,6 +240,9 @@ final class PiAppState: ObservableObject {
         selectedSessionCatchUpTask?.cancel()
         selectedSessionCatchUpTask = nil
         stopSelectedSessionEventStream()
+        turnStreamFlushTask?.cancel()
+        turnStreamFlushTask = nil
+        clearPendingTurnStreamEvents()
         savePersistedChatTabs()
         for tab in chatWorkspace.tabs {
             tab.cancelSend()
@@ -1031,6 +1041,7 @@ final class PiAppState: ObservableObject {
         }
         guard let session,
               session.currentSendGeneration == sendGeneration else { return }
+        appState?.flushPendingTurnStreamEvents(for: session, generation: sendGeneration)
         switch outcome {
         case .success:
             session.finishSendingAndReload()
@@ -1154,6 +1165,85 @@ final class PiAppState: ObservableObject {
         return request
     }
 
+    private func enqueueTurnStreamEvents(_ events: [SessionEvent], isFinal: Bool, to session: ChatSession) {
+        guard !events.isEmpty || isFinal else { return }
+
+        let generation = session.currentSendGeneration
+        if pendingTurnStreamTabID != session.id || pendingTurnStreamGeneration != generation {
+            flushPendingTurnStreamEvents()
+            pendingTurnStreamTabID = session.id
+            pendingTurnStreamGeneration = generation
+        }
+
+        pendingTurnStreamEvents = compactTurnStreamEvents(pendingTurnStreamEvents + events)
+        pendingTurnStreamIsFinal = pendingTurnStreamIsFinal || isFinal
+
+        if isFinal || pendingTurnStreamEvents.count >= Self.turnStreamImmediateFlushEventCount {
+            flushPendingTurnStreamEvents(for: session, generation: generation)
+            return
+        }
+
+        guard turnStreamFlushTask == nil else { return }
+        turnStreamFlushTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.turnStreamCoalesceDelay)
+            guard !Task.isCancelled else { return }
+            self?.flushPendingTurnStreamEvents()
+        }
+    }
+
+    private func flushPendingTurnStreamEvents(for expectedSession: ChatSession? = nil, generation expectedGeneration: Int? = nil) {
+        turnStreamFlushTask?.cancel()
+        turnStreamFlushTask = nil
+
+        guard let tabID = pendingTurnStreamTabID,
+              let generation = pendingTurnStreamGeneration else {
+            clearPendingTurnStreamEvents()
+            return
+        }
+        if let expectedSession, expectedSession.id != tabID {
+            return
+        }
+        if let expectedGeneration, expectedGeneration != generation {
+            return
+        }
+
+        let events = pendingTurnStreamEvents
+        let isFinal = pendingTurnStreamIsFinal
+        clearPendingTurnStreamEvents()
+
+        let session = expectedSession ?? chatWorkspace.tabs.first(where: { $0.id == tabID })
+        guard let session,
+              session.currentSendGeneration == generation,
+              !events.isEmpty || isFinal else {
+            return
+        }
+
+        let previousTitle = session.title
+        session.applyStreamingEvents(events, isFinal: isFinal)
+        syncSidebarTitleIfNeeded(for: session, previousTitle: previousTitle)
+    }
+
+    private func clearPendingTurnStreamEvents() {
+        pendingTurnStreamEvents = []
+        pendingTurnStreamIsFinal = false
+        pendingTurnStreamTabID = nil
+        pendingTurnStreamGeneration = nil
+    }
+
+    private func compactTurnStreamEvents(_ events: [SessionEvent]) -> [SessionEvent] {
+        var order: [String] = []
+        var latestByID: [String: SessionEvent] = [:]
+        order.reserveCapacity(events.count)
+        for event in events {
+            let id = event.id
+            if latestByID[id] == nil {
+                order.append(id)
+            }
+            latestByID[id] = event
+        }
+        return order.compactMap { latestByID[$0] }
+    }
+
     private func applyTurnStreamEvent(_ event: PiTurnStreamEvent, to session: ChatSession) {
         switch event {
         case .sessionBound(let binding):
@@ -1206,23 +1296,24 @@ final class PiAppState: ObservableObject {
                 applyCachedAvailableModels(to: session)
             }
         case .sessionEvents(let events, let isFinal):
-            let previousTitle = session.title
-            session.applyStreamingEvents(events, isFinal: isFinal)
-            syncSidebarTitleIfNeeded(for: session, previousTitle: previousTitle)
+            enqueueTurnStreamEvents(events, isFinal: isFinal, to: session)
         case .turnEnd:
             // A turn boundary is not necessarily the end of the live agent run:
             // queued steering can be consumed after the current turn finishes.
             // Keep the session steerable until agent_end/output_complete.
             break
         case .agentEnd:
+            flushPendingTurnStreamEvents(for: session, generation: session.currentSendGeneration)
             session.markTurnOutputComplete()
         case .abort:
             // Abort is an event inside the current live run, not the end of the
             // client stream. Keep sendTask/isSending intact until output_complete
             // so any follow-up typed before stream close is routed as steer.
+            flushPendingTurnStreamEvents(for: session, generation: session.currentSendGeneration)
             session.recordAbortAcknowledged()
             setSessionSending(false, aliases: sessionAliases(for: session))
         case .outputComplete:
+            flushPendingTurnStreamEvents(for: session, generation: session.currentSendGeneration)
             if !session.hasAbortedCurrentSend {
                 session.finishSendingAndReload()
                 setSessionSending(false, aliases: sessionAliases(for: session))
