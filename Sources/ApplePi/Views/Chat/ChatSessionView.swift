@@ -170,8 +170,18 @@ struct ChatSessionView: View {
 
             sessionStatusStrip
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+        .background(
+            Rectangle()
+                .fill(composerAreaBackgroundColor)
+        )
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.10))
+                .frame(height: 1)
+        }
     }
 
     @ViewBuilder
@@ -366,6 +376,10 @@ struct ChatSessionView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(Color.primary.opacity(0.10), lineWidth: 1)
         )
+    }
+
+    private var composerAreaBackgroundColor: Color {
+        appState.appearance.composerAreaBackgroundColor(for: appState.appearance.resolvedColorScheme(current: colorScheme))
     }
 
     private var composerFieldBackgroundColor: Color {

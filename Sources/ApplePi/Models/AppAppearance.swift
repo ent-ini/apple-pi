@@ -7,7 +7,9 @@ import ApplePiRemote
 struct AppAppearance: Codable, Equatable {
     var accentColorValue: CodableAccentColor = .yellow
     var mainBackgroundColorValue: CodableAccentColor?
+    var topBarBackgroundColorValue: CodableAccentColor?
     var sidebarBackgroundColorValue: CodableAccentColor?
+    var composerAreaBackgroundColorValue: CodableAccentColor?
     var textColorValue: CodableAccentColor?
     var userMessageBackgroundColorValue: CodableAccentColor?
     var userMessageTextColorValue: CodableAccentColor?
@@ -34,7 +36,9 @@ struct AppAppearance: Codable, Equatable {
         case accentColorValue
         case accentColorName
         case mainBackgroundColorValue
+        case topBarBackgroundColorValue
         case sidebarBackgroundColorValue
+        case composerAreaBackgroundColorValue
         case textColorValue
         case userMessageBackgroundColorValue
         case userMessageTextColorValue
@@ -53,7 +57,9 @@ struct AppAppearance: Codable, Equatable {
             ?? (try container.decodeIfPresent(AccentColorName.self, forKey: .accentColorName).map(CodableAccentColor.init))
             ?? .yellow
         mainBackgroundColorValue = try container.decodeIfPresent(CodableAccentColor.self, forKey: .mainBackgroundColorValue)
+        topBarBackgroundColorValue = try container.decodeIfPresent(CodableAccentColor.self, forKey: .topBarBackgroundColorValue)
         sidebarBackgroundColorValue = try container.decodeIfPresent(CodableAccentColor.self, forKey: .sidebarBackgroundColorValue)
+        composerAreaBackgroundColorValue = try container.decodeIfPresent(CodableAccentColor.self, forKey: .composerAreaBackgroundColorValue)
         textColorValue = try container.decodeIfPresent(CodableAccentColor.self, forKey: .textColorValue)
         userMessageBackgroundColorValue = try container.decodeIfPresent(CodableAccentColor.self, forKey: .userMessageBackgroundColorValue)
         userMessageTextColorValue = try container.decodeIfPresent(CodableAccentColor.self, forKey: .userMessageTextColorValue)
@@ -71,7 +77,9 @@ struct AppAppearance: Codable, Equatable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(accentColorValue, forKey: .accentColorValue)
         try container.encodeIfPresent(mainBackgroundColorValue, forKey: .mainBackgroundColorValue)
+        try container.encodeIfPresent(topBarBackgroundColorValue, forKey: .topBarBackgroundColorValue)
         try container.encodeIfPresent(sidebarBackgroundColorValue, forKey: .sidebarBackgroundColorValue)
+        try container.encodeIfPresent(composerAreaBackgroundColorValue, forKey: .composerAreaBackgroundColorValue)
         try container.encodeIfPresent(textColorValue, forKey: .textColorValue)
         try container.encodeIfPresent(userMessageBackgroundColorValue, forKey: .userMessageBackgroundColorValue)
         try container.encodeIfPresent(userMessageTextColorValue, forKey: .userMessageTextColorValue)
@@ -107,8 +115,16 @@ struct AppAppearance: Codable, Equatable {
         mainBackgroundColorValue = CodableAccentColor(color)
     }
 
+    mutating func setTopBarBackgroundColor(_ color: Color) {
+        topBarBackgroundColorValue = CodableAccentColor(color)
+    }
+
     mutating func setSidebarBackgroundColor(_ color: Color) {
         sidebarBackgroundColorValue = CodableAccentColor(color)
+    }
+
+    mutating func setComposerAreaBackgroundColor(_ color: Color) {
+        composerAreaBackgroundColorValue = CodableAccentColor(color)
     }
 
     mutating func setTextColor(_ color: Color) {
@@ -133,7 +149,9 @@ struct AppAppearance: Codable, Equatable {
 
     mutating func resetCustomColors() {
         mainBackgroundColorValue = nil
+        topBarBackgroundColorValue = nil
         sidebarBackgroundColorValue = nil
+        composerAreaBackgroundColorValue = nil
         textColorValue = nil
         userMessageBackgroundColorValue = nil
         userMessageTextColorValue = nil
@@ -149,8 +167,16 @@ struct AppAppearance: Codable, Equatable {
         mainBackgroundColorValue?.color ?? adaptiveSurfaceColor(for: colorScheme)
     }
 
+    func topBarBackgroundColor(for colorScheme: ColorScheme) -> Color {
+        topBarBackgroundColorValue?.color ?? adaptiveTopBarColor(for: colorScheme)
+    }
+
     func sidebarBackgroundColor(for colorScheme: ColorScheme) -> Color {
         sidebarBackgroundColorValue?.color ?? adaptiveSidebarColor(for: colorScheme)
+    }
+
+    func composerAreaBackgroundColor(for colorScheme: ColorScheme) -> Color {
+        composerAreaBackgroundColorValue?.color ?? adaptiveComposerAreaColor(for: colorScheme)
     }
 
     func textColor(for colorScheme: ColorScheme) -> Color {
@@ -178,8 +204,16 @@ struct AppAppearance: Codable, Equatable {
         colorScheme == .dark ? Color(red: 0.055, green: 0.058, blue: 0.065) : Color(red: 0.965, green: 0.965, blue: 0.955)
     }
 
+    private func adaptiveTopBarColor(for colorScheme: ColorScheme) -> Color {
+        adaptiveSurfaceColor(for: colorScheme)
+    }
+
     private func adaptiveSidebarColor(for colorScheme: ColorScheme) -> Color {
         colorScheme == .dark ? Color(red: 0.078, green: 0.082, blue: 0.092) : Color(red: 0.91, green: 0.91, blue: 0.895)
+    }
+
+    private func adaptiveComposerAreaColor(for colorScheme: ColorScheme) -> Color {
+        colorScheme == .dark ? Color(red: 0.074, green: 0.078, blue: 0.088) : Color(red: 0.93, green: 0.93, blue: 0.92)
     }
 
     private func adaptiveTextColor(for colorScheme: ColorScheme) -> Color {

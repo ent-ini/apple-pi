@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 @testable import ApplePi
 @testable import ApplePiCore
@@ -19,6 +20,18 @@ import Testing
     #expect(appearance.notifications.isEnabled)
     #expect(appearance.notifications.presentation == .bannerAndSound)
     #expect(appearance.notifications.allowsForegroundNotifications)
+}
+
+@Test func appearanceRoundTripsTopBarAndComposerColors() throws {
+    var appearance = AppAppearance()
+    appearance.setTopBarBackgroundColor(Color(red: 0.18, green: 0.24, blue: 0.62))
+    appearance.setComposerAreaBackgroundColor(Color(red: 0.81, green: 0.85, blue: 0.91))
+
+    let data = try JSONEncoder().encode(appearance)
+    let decoded = try JSONDecoder().decode(AppAppearance.self, from: data)
+
+    #expect(decoded.topBarBackgroundColorValue == appearance.topBarBackgroundColorValue)
+    #expect(decoded.composerAreaBackgroundColorValue == appearance.composerAreaBackgroundColorValue)
 }
 
 @Test func updateCheckReportsNewerLatestRelease() async throws {

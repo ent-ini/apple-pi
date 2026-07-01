@@ -40,7 +40,6 @@ enum AppAppearanceWindowApplier {
     static func apply(_ settings: WindowAppearanceSettings, to window: NSWindow) {
         window.alphaValue = settings.alpha
         window.isOpaque = settings.isOpaque
-        window.backgroundColor = .windowBackgroundColor
         window.titlebarAppearsTransparent = settings.titlebarAppearsTransparent
         if settings.usesFullSizeContentView {
             window.styleMask.insert(.fullSizeContentView)
@@ -52,19 +51,34 @@ enum AppAppearanceWindowApplier {
     }
 
     @MainActor
-    static func apply(_ appearance: AppAppearance, to window: NSWindow) {
+    static func apply(_ appearance: AppAppearance, to window: NSWindow, currentColorScheme: ColorScheme? = nil) {
         apply(appearance.windowAppearanceSettings, to: window)
+        let resolvedColorScheme = currentColorScheme ?? resolvedColorScheme(for: window, appearance: appearance)
+        let backgroundColor = NSColor(appearance.topBarBackgroundColor(for: resolvedColorScheme)).usingColorSpace(.sRGB)
+        window.backgroundColor = backgroundColor ?? .windowBackgroundColor
+    }
+
+    @MainActor
+    private static func resolvedColorScheme(for window: NSWindow, appearance: AppAppearance) -> ColorScheme {
+        if let preferredColorScheme = appearance.colorScheme.colorScheme {
+            return preferredColorScheme
+        }
+
+        let effectiveAppearance = window.contentView?.effectiveAppearance ?? window.effectiveAppearance
+        let match = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
+        return match == .darkAqua ? .dark : .light
     }
 }
 
 struct WindowAppearanceConfigurator: NSViewRepresentable {
+    @Environment(\.colorScheme) private var colorScheme
     let appearance: AppAppearance
 
     func makeNSView(context: Context) -> WindowAppearanceHostView {
         let view = WindowAppearanceHostView(frame: .zero)
         view.applyAppearance = { window in
             guard let window else { return }
-            AppAppearanceWindowApplier.apply(appearance, to: window)
+            AppAppearanceWindowApplier.apply(appearance, to: window, currentColorScheme: colorScheme)
         }
         view.applyAppearanceToCurrentWindow()
         return view
@@ -73,7 +87,7 @@ struct WindowAppearanceConfigurator: NSViewRepresentable {
     func updateNSView(_ nsView: WindowAppearanceHostView, context: Context) {
         nsView.applyAppearance = { window in
             guard let window else { return }
-            AppAppearanceWindowApplier.apply(appearance, to: window)
+            AppAppearanceWindowApplier.apply(appearance, to: window, currentColorScheme: colorScheme)
         }
         nsView.applyAppearanceToCurrentWindow()
     }

@@ -326,9 +326,21 @@ private struct AppBackdrop: View {
     let appearance: AppAppearance
 
     var body: some View {
-        ZStack {
-            Rectangle()
-                .fill(appearance.mainBackgroundColor(for: appearance.resolvedColorScheme(current: colorScheme)))
+        GeometryReader { proxy in
+            let resolvedColorScheme = appearance.resolvedColorScheme(current: colorScheme)
+            let topBarHeight = appearance.useTransparentTitlebar ? proxy.safeAreaInsets.top : 0
+
+            VStack(spacing: 0) {
+                if topBarHeight > 0 {
+                    Rectangle()
+                        .fill(appearance.topBarBackgroundColor(for: resolvedColorScheme))
+                        .frame(height: topBarHeight)
+                }
+
+                Rectangle()
+                    .fill(appearance.mainBackgroundColor(for: resolvedColorScheme))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .ignoresSafeArea()
     }

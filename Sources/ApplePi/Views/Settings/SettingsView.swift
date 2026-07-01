@@ -234,10 +234,24 @@ struct SettingsView: View {
                 }
             ), supportsOpacity: false)
 
+            ColorPicker("Top bar", selection: Binding(
+                get: { appState.appearance.topBarBackgroundColor(for: appState.appearance.resolvedColorScheme(current: colorScheme)) },
+                set: { newValue in
+                    appState.updateAppearance { $0.setTopBarBackgroundColor(newValue) }
+                }
+            ), supportsOpacity: false)
+
             ColorPicker("Sidebars background", selection: Binding(
                 get: { appState.appearance.sidebarBackgroundColor(for: appState.appearance.resolvedColorScheme(current: colorScheme)) },
                 set: { newValue in
                     appState.updateAppearance { $0.setSidebarBackgroundColor(newValue) }
+                }
+            ), supportsOpacity: false)
+
+            ColorPicker("Composer area", selection: Binding(
+                get: { appState.appearance.composerAreaBackgroundColor(for: appState.appearance.resolvedColorScheme(current: colorScheme)) },
+                set: { newValue in
+                    appState.updateAppearance { $0.setComposerAreaBackgroundColor(newValue) }
                 }
             ), supportsOpacity: false)
 

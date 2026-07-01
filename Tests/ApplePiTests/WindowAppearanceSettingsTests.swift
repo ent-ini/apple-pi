@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import ApplePi
 @testable import ApplePiCore
@@ -68,4 +69,40 @@ import Testing
     opaqueAppearance.useTransparentTitlebar = false
     AppAppearanceWindowApplier.apply(opaqueAppearance, to: window)
     #expect(window.styleMask.contains(.fullSizeContentView) == false)
+}
+
+@MainActor
+@Test func windowAppearanceSettingsApplyTopBarColorToWindowBackground() {
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 200, height: 200),
+        styleMask: [.titled, .closable],
+        backing: .buffered,
+        defer: false
+    )
+
+    var appearance = AppAppearance()
+    appearance.colorScheme = .light
+    let expectedColor = Color(red: 0.12, green: 0.34, blue: 0.56)
+    appearance.setTopBarBackgroundColor(expectedColor)
+
+    AppAppearanceWindowApplier.apply(appearance, to: window)
+
+    let actualColor = window.backgroundColor.usingColorSpace(.sRGB)
+    let expectedNSColor = NSColor(expectedColor).usingColorSpace(.sRGB)
+    #expect(actualColor?.isApproximatelyEqual(to: expectedNSColor) == true)
+}
+
+private extension NSColor {
+    func isApproximatelyEqual(to other: NSColor?, tolerance: CGFloat = 0.01) -> Bool {
+        guard let other,
+              let lhs = usingColorSpace(.sRGB),
+              let rhs = other.usingColorSpace(.sRGB) else {
+            return false
+        }
+
+        return abs(lhs.redComponent - rhs.redComponent) <= tolerance
+            && abs(lhs.greenComponent - rhs.greenComponent) <= tolerance
+            && abs(lhs.blueComponent - rhs.blueComponent) <= tolerance
+            && abs(lhs.alphaComponent - rhs.alphaComponent) <= tolerance
+    }
 }
